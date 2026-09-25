@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "code-hub",
+  "name": "logbook",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-22",
   // Pinned so CI only needs CLOUDFLARE_API_TOKEN. Not a secret.
@@ -29,13 +29,15 @@
   "d1_databases": [
     {
       "binding": "DB",
+      // The database predates the rename to Logbook. D1 cannot rename a
+      // database, and the ID is what binds, so the old name stays.
       "database_name": "code-hub",
       "database_id": "6d2d6371-265e-41d9-a075-247a7bc68859",
       "migrations_dir": "migrations",
     },
   ],
   "r2_buckets": [
-    { "binding": "RAW", "bucket_name": "code-hub-raw" },
+    { "binding": "RAW", "bucket_name": "logbook-raw" },
     // Shared with activity-hub so one DuckDB session can join rides against
     // pull requests. This project writes under a `github/` prefix.
     { "binding": "LAKE", "bucket_name": "activity-hub-lake" },

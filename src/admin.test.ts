@@ -9,15 +9,15 @@ import { finishRun, startRun } from "./sync/runs";
 const token = "admin-token";
 
 function get(headers: HeadersInit = {}): Promise<Response> {
-  return SELF.fetch("https://code-hub.test/admin/sync", { headers });
+  return SELF.fetch("https://logbook.test/admin/sync", { headers });
 }
 
 function post(query: string, headers: HeadersInit = {}): Promise<Response> {
-  return SELF.fetch(`https://code-hub.test/admin/backfill?${query}`, { method: "POST", headers });
+  return SELF.fetch(`https://logbook.test/admin/backfill?${query}`, { method: "POST", headers });
 }
 
 function postLake(headers: HeadersInit = {}): Promise<Response> {
-  return SELF.fetch("https://code-hub.test/admin/lake", { method: "POST", headers });
+  return SELF.fetch("https://logbook.test/admin/lake", { method: "POST", headers });
 }
 
 const authorization = { Authorization: `Bearer ${token}` };

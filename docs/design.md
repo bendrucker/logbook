@@ -1,6 +1,8 @@
 # Design
 
-Code Hub owns my GitHub contribution history. It extracts events from GitHub's GraphQL API, archives every response page in R2, normalizes them into D1, publishes a feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. The [README](../README.md) is the short version.
+Logbook owns the personal data I pull from APIs on a schedule. GitHub is its first and only source today. Logbook takes sources that are simple polled APIs. Webhook and file-decoding pipelines stay in [Activity Hub](https://github.com/bendrucker/activity-hub).
+
+For GitHub, Logbook owns my contribution history. It extracts events from GitHub's GraphQL API, archives every response page in R2, normalizes them into D1, publishes a feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake Activity Hub already maintains. This document records the architecture and the decisions behind it. The [README](../README.md) is the short version.
 
 ## Goals
 
@@ -33,7 +35,7 @@ flowchart TB
         cron[Hourly cron]
         extract[Extract]
         normalize[Normalize]
-        raw[(R2 code-hub-raw)]
+        raw[(R2 logbook-raw)]
         d1[(D1 events and sync state)]
         feed[Feed publish]
         lakebuild[Nightly lake build]
@@ -207,7 +209,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - The hourly cron runs one `updated:>` search per event type plus one `contributionsCollection` call for the current year.
 - A second cron rebuilds the lake at 09:30 UTC. It sits off the hour so it never shares an instant with a sync invocation, and `scheduled` tells the two apart by the cron expression.
 - `GITHUB_TOKEN` is a Worker secret, set with `wrangler secret put`. It is the only credential the hub holds.
-- Migrations apply by hand with `wrangler d1 migrations apply code-hub --remote`. Moving them into CI on merge to `main` waits on the deploy job, and matches how the site and Activity Hub both work.
+- Migrations apply by hand with `wrangler d1 migrations apply DB --remote`. Moving them into CI on merge to `main` waits on the deploy job, and matches how the site and Activity Hub both work.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
 - The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that a window truncated, and there is no other way to notice a silent 1,000-result cap.
 - The backfill is roughly 500 search requests plus one per contribution year, well inside the 10,000 subrequests a paid Workers invocation gets. Paging it across invocations answers the wall clock rather than a platform ceiling. The free tier's 50 subrequests would bind first.

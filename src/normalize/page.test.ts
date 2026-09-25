@@ -37,7 +37,7 @@ describe("normalizeSearchPage", () => {
       "SELECT repository_id, author FROM pull_requests WHERE id = ?",
       "PR_7",
     );
-    expect(stored).toEqual({ repository_id: "R_code-hub", author: "bendrucker" });
+    expect(stored).toEqual({ repository_id: "R_logbook", author: "bendrucker" });
   });
 
   it("writes one repository for every node in the page that names it", async () => {

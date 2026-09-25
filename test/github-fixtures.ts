@@ -20,7 +20,7 @@ export function rateLimit(overrides: RateLimitOverrides = {}) {
   };
 }
 
-export function repository(name = "code-hub", overrides: Partial<Repository> = {}): Repository {
+export function repository(name = "logbook", overrides: Partial<Repository> = {}): Repository {
   return {
     id: `R_${name}`,
     name,

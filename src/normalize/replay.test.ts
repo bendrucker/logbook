@@ -69,7 +69,7 @@ describe("replaySearchWindow", () => {
     const stored = await readRow<{ fetched_at: string }>(
       env.DB,
       "SELECT fetched_at FROM repositories WHERE id = ?",
-      "R_code-hub",
+      "R_logbook",
     );
     expect(stored?.fetched_at).toBe(LATER);
   });

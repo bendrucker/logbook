@@ -1,10 +1,10 @@
-# Code Hub
+# Logbook
 
-System of record for GitHub contribution data: pull requests, reviews, issues, and commit counts, archived raw in R2 and published as a code feed to [bendrucker.me](https://github.com/bendrucker/bendrucker.me). Sibling of [activity-hub](https://github.com/bendrucker/activity-hub), which does the same for rides and workouts. See the [README](README.md).
+System of record for personal data pulled from simple APIs on a cron. GitHub is the only source so far: pull requests, reviews, issues, and commit counts, archived raw in R2 and published as a code feed to [bendrucker.me](https://github.com/bendrucker/bendrucker.me). Sibling of [activity-hub](https://github.com/bendrucker/activity-hub), which handles rides and workouts through webhooks and file decoding. Only polled API sources belong here. Don't generalize the code for a second source until one lands. See the [README](README.md).
 
 ## Stack
 
-Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`), R2 (`RAW` for API responses, `LAKE` for Parquet output). `LAKE` is activity-hub's bucket, written under a `github/` prefix so one DuckDB session can join rides against pull requests. Two cron triggers drive the Worker: an hourly sync and a nightly lake build. Config lives in `wrangler.jsonc`.
+Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`, named `code-hub` from before the rename), R2 (`RAW` for API responses, `LAKE` for Parquet output). `LAKE` is activity-hub's bucket, written under a `github/` prefix so one DuckDB session can join rides against pull requests. Two cron triggers drive the Worker: an hourly sync and a nightly lake build. Config lives in `wrangler.jsonc`.
 
 `src/index.ts` exports the default handler and nothing else. workerd reads every named export of the entrypoint as a handler and refuses a string. Neither the test suite nor CI catches that, so `bun run dev` is what surfaces it. A constant the handler needs lives in the module it describes.
 
@@ -23,7 +23,7 @@ Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`), R2 (`RAW` fo
 
 CI runs on every PR and on push to `main` (`.github/workflows/ci.yml`): typecheck, test, lint, format check, a check that `worker-configuration.d.ts` is current, and the `.pre-commit-config.yaml` hooks under `prek`. Those hooks also run locally on every commit, and one of them refuses a commit on `main`.
 
-The `deploy` job applies D1 migrations and runs `wrangler deploy` on push to `main`, gated on `check`. It needs a `CLOUDFLARE_API_TOKEN` repository secret, which is not set. While the secret is empty the job's first step writes a `::notice::` and every later step skips. A merge to `main` then does not fail on a credential no commit can supply. Setting the secret is the only change the workflow needs. Until then, migrations in `migrations/` apply by hand with `bun run wrangler d1 migrations apply code-hub --remote`, which writes to the live database.
+The `deploy` job applies D1 migrations and runs `wrangler deploy` on push to `main`, gated on `check`. It needs a `CLOUDFLARE_API_TOKEN` repository secret, which is not set. While the secret is empty the job's first step writes a `::notice::` and every later step skips. A merge to `main` then does not fail on a credential no commit can supply. Setting the secret is the only change the workflow needs. Until then, migrations in `migrations/` apply by hand with `bun run wrangler d1 migrations apply DB --remote`, which writes to the live database.
 
 ## Cloudflare Configuration
 

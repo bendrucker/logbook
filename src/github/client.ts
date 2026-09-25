@@ -2,7 +2,7 @@ import { z } from "zod";
 import { rateLimitResponse, type RateLimit } from "./schema";
 
 const ENDPOINT = "https://api.github.com/graphql";
-const USER_AGENT = "code-hub (+https://github.com/bendrucker/code-hub)";
+const USER_AGENT = "logbook (+https://github.com/bendrucker/logbook)";
 
 // GitHub scores a query on the nodes it asks for, so a page costs more than the
 // one point it reads as. Stopping with headroom leaves a run ending on a
