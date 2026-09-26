@@ -29,10 +29,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      // The database predates the rename to Logbook. D1 cannot rename a
-      // database, and the ID is what binds, so the old name stays.
-      "database_name": "code-hub",
-      "database_id": "6d2d6371-265e-41d9-a075-247a7bc68859",
+      "database_name": "logbook",
+      "database_id": "8239f6c8-e6f9-47b1-86c9-7dffa33aafb9",
       "migrations_dir": "migrations",
     },
   ],
