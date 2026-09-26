@@ -30,7 +30,7 @@ describe("graphql", () => {
     expect(request?.method).toBe("POST");
     expect(request?.url).toBe(ENDPOINT);
     expect(request?.headers.get("Authorization")).toBe("Bearer t0ken");
-    expect(request?.headers.get("User-Agent")).toContain("code-hub");
+    expect(request?.headers.get("User-Agent")).toContain("logbook");
     await expect(requestBody(request!)).resolves.toEqual({
       query: "query Q { x }",
       variables: { first: 100 },

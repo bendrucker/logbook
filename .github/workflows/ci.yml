@@ -62,7 +62,7 @@ jobs:
         run: bun install --frozen-lockfile
       - if: steps.secret.outputs.present == 'true'
         name: Apply D1 migrations
-        run: bun run wrangler d1 migrations apply code-hub --remote
+        run: bun run wrangler d1 migrations apply DB --remote
       - if: steps.secret.outputs.present == 'true'
         name: Deploy worker
         run: bun run wrangler deploy

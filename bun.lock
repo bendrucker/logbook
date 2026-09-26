@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "code-hub",
+      "name": "logbook",
       "dependencies": {
         "hyparquet-writer": "^0.16.9",
         "zod": "^4.5.4",

@@ -8,9 +8,9 @@ export function repository(overrides: Partial<Repository> = {}): Repository {
   return {
     id: "R_repo1",
     owner: "bendrucker",
-    name: "code-hub",
+    name: "logbook",
     description: "System of record for GitHub contribution data",
-    url: "https://github.com/bendrucker/code-hub",
+    url: "https://github.com/bendrucker/logbook",
     stargazerCount: 3,
     primaryLanguage: "TypeScript",
     primaryLanguageColor: "#3178c6",

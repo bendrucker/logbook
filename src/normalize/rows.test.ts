@@ -17,11 +17,11 @@ const FETCHED_AT = "2026-09-09T12:00:00.000Z";
 describe("repositoryRow", () => {
   it("reads back as GitHub described it", () => {
     expect(repositoryRow(repository(), FETCHED_AT)).toEqual({
-      id: "R_code-hub",
+      id: "R_logbook",
       owner: "bendrucker",
-      name: "code-hub",
+      name: "logbook",
       description: "System of record for GitHub contribution data",
-      url: "https://github.com/bendrucker/code-hub",
+      url: "https://github.com/bendrucker/logbook",
       stargazerCount: 3,
       primaryLanguage: "TypeScript",
       primaryLanguageColor: "#3178c6",
@@ -35,17 +35,17 @@ describe("repositoryRow", () => {
   it.each<{ name: string; node: RepositoryNode; expected: Partial<Repository> }>([
     {
       name: "flattens a missing primary language into both of its columns",
-      node: repository("code-hub", { primaryLanguage: null }),
+      node: repository("logbook", { primaryLanguage: null }),
       expected: { primaryLanguage: null, primaryLanguageColor: null },
     },
     {
       name: "carries a language that has no color",
-      node: repository("code-hub", { primaryLanguage: { name: "Nix", color: null } }),
+      node: repository("logbook", { primaryLanguage: { name: "Nix", color: null } }),
       expected: { primaryLanguage: "Nix", primaryLanguageColor: null },
     },
     {
       name: "keeps a null description",
-      node: repository("code-hub", { description: null }),
+      node: repository("logbook", { description: null }),
       expected: { description: null },
     },
   ])("$name", ({ node, expected }) => {
@@ -59,7 +59,7 @@ describe("pullRequestRows", () => {
 
     expect(row).toEqual({
       id: "PR_7",
-      repositoryId: "R_code-hub",
+      repositoryId: "R_logbook",
       number: 7,
       title: "pull request 7",
       author: "bendrucker",
@@ -74,7 +74,7 @@ describe("pullRequestRows", () => {
       reviewCount: 2,
       updatedAt: "2026-08-03T00:00:00Z",
     });
-    expect(parent.id).toBe("R_code-hub");
+    expect(parent.id).toBe("R_logbook");
   });
 
   it("keeps an open pull request undated", () => {
@@ -110,7 +110,7 @@ describe("reviewRows", () => {
     expect(reviews).toEqual([
       {
         id: "PRR_1",
-        repositoryId: "R_code-hub",
+        repositoryId: "R_logbook",
         pullRequestNumber: 7,
         pullRequestAuthor: "someone",
         state: "COMMENTED",
@@ -118,7 +118,7 @@ describe("reviewRows", () => {
       },
       {
         id: "PRR_2",
-        repositoryId: "R_code-hub",
+        repositoryId: "R_logbook",
         pullRequestNumber: 7,
         pullRequestAuthor: "someone",
         state: "APPROVED",
@@ -157,7 +157,7 @@ describe("issueRows", () => {
 
     expect(row).toEqual({
       id: "I_9",
-      repositoryId: "R_code-hub",
+      repositoryId: "R_logbook",
       number: 9,
       title: "issue 9",
       author: "bendrucker",
@@ -182,7 +182,7 @@ describe("contributionRows", () => {
   const collection = contributionsCollection(1, 2, {
     commitContributionsByRepository: [
       {
-        repository: repository("code-hub"),
+        repository: repository("logbook"),
         contributions: {
           totalCount: 2,
           nodes: [commitDay(4, "2026-08-02T00:00:00Z"), commitDay(1, "2026-08-03T12:30:00Z")],
@@ -193,15 +193,15 @@ describe("contributionRows", () => {
 
   it("keys a commit count by the date part of its timestamp", () => {
     expect(contributionRows(collection, FETCHED_AT).commitDays).toEqual([
-      { repositoryId: "R_code-hub", day: "2026-08-02", commitCount: 4 },
-      { repositoryId: "R_code-hub", day: "2026-08-03", commitCount: 1 },
+      { repositoryId: "R_logbook", day: "2026-08-02", commitCount: 4 },
+      { repositoryId: "R_logbook", day: "2026-08-03", commitCount: 1 },
     ]);
   });
 
   it("returns the repository each contribution names", () => {
     const { repositories } = contributionRows(collection, FETCHED_AT);
 
-    expect(repositories.map((row) => row.id)).toEqual(["R_code-hub"]);
+    expect(repositories.map((row) => row.id)).toEqual(["R_logbook"]);
     expect(repositories[0]?.fetchedAt).toBe(FETCHED_AT);
   });
 });

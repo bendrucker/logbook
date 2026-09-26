@@ -1,12 +1,14 @@
-# Code Hub
+# Logbook
 
-System of record for my GitHub contribution data. An hourly Worker pulls pull requests, reviews, issues, and commit counts from GitHub's GraphQL API, archives every response page in R2, and publishes one row per event to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me).
+System of record for the personal data I pull from APIs on a schedule. A cron-driven Worker polls a source, archives every response page in R2, normalizes it into D1, and publishes one row per event to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me).
+
+GitHub is the first source: pull requests, reviews, issues, and commit counts from GitHub's GraphQL API. Other simple polled APIs can join it later. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
 
 ## Why
 
 The website's own GitHub sync stores one aggregate row per repository per year. That shape cannot answer "this month", cannot count lifetime repositories without double counting one across years, and cannot produce a record like largest PR or most reviews in a week. Every new number on the homepage costs another aggregate table, a backfill script, and a cache validator. One row per event makes each of those a SQL query instead.
 
-[Activity Hub](https://github.com/bendrucker/activity-hub) is the sibling project and the wrong home for this. Its pipeline is built on one activity being one raw file: a webhook delivers a pointer, the original FIT or GPX becomes the immutable record in R2, and a container decodes it into Parquet. GitHub has no file per event, no webhook for repositories I contribute to but do not own, and nothing to decode. What carries over is the boundary layer rather than the pipeline: raw responses in R2 before anything normalizes them, Parquet into the same lake bucket, and the site's `Publish` entrypoint as the only write path.
+[Activity Hub](https://github.com/bendrucker/activity-hub) is the sibling project and the wrong home for a polled source. Its pipeline is built on one activity being one raw file: a webhook delivers a pointer, the original FIT or GPX becomes the immutable record in R2, and a container decodes it into Parquet. GitHub has no file per event, no webhook for repositories I contribute to but do not own, and nothing to decode. What carries over is the boundary layer rather than the pipeline: raw responses in R2 before anything normalizes them, Parquet into the same lake bucket, and the site's `Publish` entrypoint as the only write path.
 
 ## Architecture
 
@@ -16,10 +18,10 @@ One Worker, one D1 database, an hourly sync cron, a nightly lake cron, and R2 fo
 flowchart TB
     api[GitHub GraphQL API]
 
-    subgraph hub [code-hub]
+    subgraph hub [logbook]
         cron[Hourly cron]
         worker[Worker]
-        raw[(R2 code-hub-raw)]
+        raw[(R2 logbook-raw)]
         d1[(D1 events)]
         feed[Feed publish]
         lakecron[Nightly lake build]
@@ -98,7 +100,7 @@ The GitHub token's scope decides what the hub can see. What it publishes is a se
 
 ## Infrastructure
 
-`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `code-hub-raw` and `activity-hub-lake`, both cron triggers, and two public vars: `GITHUB_LOGIN` for whose history the hub reads and `BACKFILL_WINDOWS` for how many windows one backfill call walks. The service binding to the site joins them when publishing lands. Migrations apply by hand with `wrangler d1 migrations apply code-hub --remote` until a deploy job exists.
+`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and two public vars: `GITHUB_LOGIN` for whose history the hub reads and `BACKFILL_WINDOWS` for how many windows one backfill call walks. The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 
 There is no Terraform here. Activity Hub needs it for a DNS record, a Workers route, and the Cloudflare Access applications in front of its admin routes. This hub is reached by cron and by a service binding. It has no hostname to manage. `/admin/sync` sits behind `ADMIN_TOKEN` alone, with no Access application in front of it.
 

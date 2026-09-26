@@ -67,9 +67,9 @@ describe("buildLake", () => {
       expected: {
         id: "R_repo1",
         owner: "bendrucker",
-        name: "code-hub",
+        name: "logbook",
         description: "System of record for GitHub contribution data",
-        url: "https://github.com/bendrucker/code-hub",
+        url: "https://github.com/bendrucker/logbook",
         stargazer_count: 3,
         primary_language: "TypeScript",
         primary_language_color: "#3178c6",
