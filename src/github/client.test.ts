@@ -5,15 +5,35 @@ import {
   graphql,
   GitHubHttpError,
   GraphQLQueryError,
-  RateLimitExhausted,
+  type RequestBudget,
   ResponseValidationError,
+  SecondaryRateLimited,
   type GraphQLOptions,
 } from "./client";
+import type { RateLimit } from "./schema";
 
 const ENDPOINT = "https://api.github.test/graphql";
 
 function options(fetch: typeof globalThis.fetch): GraphQLOptions {
   return { fetch, endpoint: ENDPOINT };
+}
+
+// Records what the client asked and told, and refuses when told to.
+function recordingBudget(refusal?: Error) {
+  const admitted: number[] = [];
+  const readings: RateLimit[] = [];
+  const budget: RequestBudget = {
+    admit: async () => {
+      if (refusal !== undefined) {
+        throw refusal;
+      }
+      admitted.push(admitted.length + 1);
+    },
+    spend: (reading) => {
+      readings.push(reading);
+    },
+  };
+  return { budget, admitted, readings };
 }
 
 describe("graphql", () => {
@@ -80,37 +100,93 @@ describe("graphql", () => {
     expect(error).toMatchObject({ errors: [{ message: "Query has node limit" }] });
   });
 
-  it("stops on the rate limit floor rather than waiting for a 403", async () => {
+  it("asks the budget before sending and tells it what the response cost", async () => {
     const stub = stubFetch(() =>
-      jsonResponse({
-        data: { rateLimit: rateLimit({ remaining: 40, resetAt: "2026-09-09T12:00:00Z" }) },
-      }),
+      jsonResponse({ data: { rateLimit: rateLimit({ cost: 1, remaining: 3000 }) } }),
     );
+    const { budget, admitted, readings } = recordingBudget();
+
+    await graphql("t0ken", "query Q { x }", {}, { ...options(stub.fetch), budget });
+
+    expect(admitted).toEqual([1]);
+    expect(readings).toEqual([rateLimit({ cost: 1, remaining: 3000 })]);
+  });
+
+  it("sends nothing the budget refuses", async () => {
+    const stub = stubFetch(() => jsonResponse({ data: { rateLimit: rateLimit() } }));
+    const refusal = new Error("over budget");
+    const { budget } = recordingBudget(refusal);
 
     const error = await graphql(
       "t0ken",
       "query Q { x }",
       {},
-      { ...options(stub.fetch), floor: 100 },
+      {
+        ...options(stub.fetch),
+        budget,
+      },
     ).catch((thrown: unknown) => thrown);
 
-    expect(error).toBeInstanceOf(RateLimitExhausted);
-    expect(error).toMatchObject({ remaining: 40, resetAt: "2026-09-09T12:00:00Z" });
+    expect(error).toBe(refusal);
+    expect(stub.requests).toHaveLength(0);
   });
 
-  it("returns a response sitting exactly on the floor", async () => {
+  it("charges the budget for a partial failure that reports its cost", async () => {
     const stub = stubFetch(() =>
-      jsonResponse({ data: { rateLimit: rateLimit({ remaining: 100 }) } }),
+      jsonResponse({
+        data: { search: {}, rateLimit: rateLimit({ remaining: 4200 }) },
+        errors: [{ message: "Something went wrong" }],
+      }),
+    );
+    const { budget, readings } = recordingBudget();
+
+    await graphql("t0ken", "query Q { x }", {}, { ...options(stub.fetch), budget }).catch(
+      () => null,
     );
 
-    const response = await graphql(
-      "t0ken",
-      "query Q { x }",
-      {},
-      { ...options(stub.fetch), floor: 100 },
+    expect(readings).toEqual([rateLimit({ remaining: 4200 })]);
+  });
+
+  it("reads a 403 carrying retry-after as a secondary limit", async () => {
+    const body = JSON.stringify({ message: "You have exceeded a secondary rate limit." });
+    const stub = stubFetch(
+      () => new Response(body, { status: 403, headers: { "Retry-After": "120" } }),
     );
 
-    expect(response.rateLimit.remaining).toBe(100);
+    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(SecondaryRateLimited);
+    expect(error).toMatchObject({
+      name: "SecondaryRateLimited",
+      status: 403,
+      retryAfterSeconds: 120,
+      body,
+    });
+  });
+
+  it("waits a minute on a secondary limit that names no wait", async () => {
+    const stub = stubFetch(
+      () => new Response("You have exceeded a secondary rate limit", { status: 429 }),
+    );
+
+    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toMatchObject({ name: "SecondaryRateLimited", retryAfterSeconds: 60 });
+  });
+
+  it("keeps a 403 that names no limit a plain HTTP failure", async () => {
+    const stub = stubFetch(() => new Response("Resource not accessible", { status: 403 }));
+
+    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(GitHubHttpError);
+    expect(error).not.toBeInstanceOf(SecondaryRateLimited);
   });
 
   it("rejects a response that selected no rate limit", async () => {
@@ -159,21 +235,6 @@ describe("graphql", () => {
     expect(error).toBeInstanceOf(GraphQLQueryError);
     expect(error).toMatchObject({ rateLimit: { remaining: 4200 } });
     expect(error).toHaveProperty("body", expect.stringContaining("Something went wrong"));
-  });
-
-  it("carries the body out of a rate limit stop so the page can still be archived", async () => {
-    const body = JSON.stringify({ data: { rateLimit: rateLimit({ remaining: 4 }) } });
-    const stub = stubFetch(() => new Response(body, { status: 200 }));
-
-    const error = await graphql(
-      "t0ken",
-      "query Q { x }",
-      {},
-      { ...options(stub.fetch), floor: 10 },
-    ).catch((thrown: unknown) => thrown);
-
-    expect(error).toBeInstanceOf(RateLimitExhausted);
-    expect(error).toMatchObject({ body });
   });
 
   it("names each error class so a caller can branch on it across the RPC boundary", async () => {

@@ -31,7 +31,9 @@ Change Cloudflare resources (R2 buckets, D1 databases, cron triggers, secrets) t
 
 ## Sync
 
-The hourly cron runs one `updated:>` search per event kind plus `contributionsCollection` for the current year. Each search window opens an hour behind that kind's watermark, which covers the lag between a write on GitHub and its appearance in the search index. Kinds run one after another. The first to reach the rate-limit floor ends the invocation instead of the other two spending their way to the same discovery.
+The hourly cron runs one `updated:>` search per event kind plus `contributionsCollection` for the current year. Each search window opens an hour behind that kind's watermark, which covers the lag between a write on GitHub and its appearance in the search index. Kinds run one after another. The first the rate budget refuses ends the invocation instead of the other two spending their way to the same discovery.
+
+The budget lives in `src/sync/budget.ts`: a floor on GitHub's reported `remaining`, a share per rate window, and a cap per invocation, set by the `RATE_*` vars in `wrangler.jsonc`. It checks each request before it goes out. The spend ledger is the sum of `sync_runs.cost` over runs started in the current window. A refusal or a GitHub secondary limit (`SecondaryRateLimited`) ends the run like any other failure but reports `resumeAt`, the instant worth waiting for.
 
 A watermark is an ISO instant meaning synced through, and it moves only after every page is in R2 and every row is in D1. It moves forward only. A backfill of 2013 cannot rewind a caught-up kind. A kind with no watermark is skipped, because anchoring at now would declare the whole history synced.
 
@@ -44,11 +46,11 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 One call walks `BACKFILL_WINDOWS` monthly windows and answers with `next`, which is the `from` for the call after it and null once the walk reaches the present. `kind=contributions` walks the years `contributionYears` reports rather than months, and reads the year out of `from`. 2012-12 is the earliest month that can match.
 
-`bun run backfill` feeds `next` back in until the route reports null, one line printed per call. Naming no kind walks all four in order. It stops on the first non-2xx and on a window the route reports as failed, printing the `--from` that resumes there.
+`bun run backfill` feeds `next` back in until the route reports null, one line printed per call, and sleeps until `resumeAt` when the route reports one. Backfill requests go out at least a second apart. Naming no kind walks all four in order. It stops on the first non-2xx and on a window the route reports as failed, printing the `--from` that resumes there.
 
 ## Secrets
 
-Worker secrets are set with `wrangler secret put`, never committed. `wrangler dev` reads them from `.dev.vars`, which is gitignored. `.dev.vars.example` lists the names with empty values. `GITHUB_TOKEN` signs every GraphQL and search request. It is a classic personal access token with no scopes, so the hub sees public activity only. Granting it `repo` scope would pull private repositories into the archive and the feed, which the [design](docs/design.md#visibility) rules out. `ADMIN_TOKEN` guards `/admin/sync`, `/admin/backfill`, and `/admin/lake`, and all three answer 404 while it is unset so an unconfigured deployment has no admin surface. Public, non-sensitive identifiers belong in `wrangler.jsonc` as `vars`: `GITHUB_LOGIN` is whose history the hub reads, and `BACKFILL_WINDOWS` is how many windows one backfill call walks.
+Worker secrets are set with `wrangler secret put`, never committed. `wrangler dev` reads them from `.dev.vars`, which is gitignored. `.dev.vars.example` lists the names with empty values. `GITHUB_TOKEN` signs every GraphQL and search request. It is a classic personal access token with no scopes, so the hub sees public activity only. Granting it `repo` scope would pull private repositories into the archive and the feed, which the [design](docs/design.md#visibility) rules out. `ADMIN_TOKEN` guards `/admin/sync`, `/admin/backfill`, and `/admin/lake`, and all three answer 404 while it is unset so an unconfigured deployment has no admin surface. Public, non-sensitive identifiers belong in `wrangler.jsonc` as `vars`: `GITHUB_LOGIN` is whose history the hub reads, and `BACKFILL_WINDOWS` is how many windows one backfill call walks, and the `RATE_*` vars are the rate budget.
 
 ## Lake
 

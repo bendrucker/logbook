@@ -1,7 +1,9 @@
 import { backfillSearch, type Month, monthlyWindows } from "../github/windows";
+import { backfillLimits, openBudget } from "./budget";
 import type { SyncKind } from "./kinds";
 import {
   githubToken,
+  type InvocationOptions,
   syncContributions,
   syncedThrough,
   type SyncOptions,
@@ -26,6 +28,9 @@ export interface BackfillResult {
   rowsChanged: number;
   // Where the next call resumes, or null once the walk reaches the present.
   next: string | null;
+  // Set when the rate budget or a secondary limit stopped the call: the next
+  // call resumes at `next` once this instant passes.
+  resumeAt: string | null;
   error: string | null;
 }
 
@@ -41,19 +46,21 @@ export function parseMonth(value: string): Month {
   return { year, month };
 }
 
-export function backfill(
+export async function backfill(
   env: Env,
   kind: SyncKind,
   from: Month,
-  options: SyncOptions = {},
+  options: InvocationOptions = {},
 ): Promise<BackfillResult> {
   // Read before the walk starts so an unconfigured deployment answers the
   // caller instead of writing a run row per month saying the same thing.
   githubToken(env);
 
+  const budget = await openBudget(env.DB, backfillLimits(env), options);
+  const sync = { ...options, budget };
   return kind === "contributions"
-    ? backfillContributions(env, from.year, options)
-    : backfillSearchWindows(env, kind, from, options);
+    ? backfillContributions(env, from.year, sync)
+    : backfillSearchWindows(env, kind, from, sync);
 }
 
 async function backfillSearchWindows(
@@ -71,6 +78,7 @@ async function backfillSearchWindows(
     pages: 0,
     rowsChanged: 0,
     next: pending[env.BACKFILL_WINDOWS]?.key ?? null,
+    resumeAt: null,
     error: null,
   };
 
@@ -112,6 +120,7 @@ async function backfillContributions(
     pages: 0,
     rowsChanged: 0,
     next: null,
+    resumeAt: null,
     error: null,
   };
 
@@ -149,5 +158,6 @@ function record(result: BackfillResult, window: string, run: SyncResult): void {
   result.windows.push(window);
   result.pages += run.pages;
   result.rowsChanged += run.rowsChanged;
+  result.resumeAt = run.resumeAt;
   result.error = run.error;
 }

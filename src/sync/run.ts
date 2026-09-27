@@ -1,4 +1,4 @@
-import { GitHubResponseError, type GraphQLOptions, RateLimitExhausted } from "../github/client";
+import { GitHubResponseError, type GraphQLOptions, SecondaryRateLimited } from "../github/client";
 import {
   type ContributionsResult,
   fetchContributions,
@@ -20,6 +20,7 @@ import {
   type RowsChanged,
   type SearchPageNodes,
 } from "../normalize";
+import { type Budget, BudgetRefused, type Clock } from "./budget";
 import { crossCheck } from "./cross-check";
 import { finishRun, type RunResult, startRun } from "./runs";
 import { advance } from "./state";
@@ -49,15 +50,24 @@ export interface SearchWindow {
   through: string;
 }
 
+// What a backfill or the cron takes. Each opens its own budget.
+export interface InvocationOptions extends GraphQLOptions {
+  now?: Date;
+  clock?: Clock;
+}
+
 export interface SyncOptions extends GraphQLOptions {
   now?: Date;
+  // Shared by every window one invocation syncs, so the cap spans them all.
+  budget: Budget;
 }
 
 export interface SyncResult extends RunResult {
-  // The budget belongs to the token rather than to this window, so a caller
-  // holding more windows stops instead of spending each one's first request
-  // rediscovering the floor.
-  exhausted: boolean;
+  // Set when the run stopped on the rate budget or a secondary limit rather
+  // than a fault: the instant worth waiting for. The limit belongs to the token
+  // rather than to this window, so a caller holding more windows stops instead
+  // of spending each one's first request rediscovering it.
+  resumeAt: string | null;
 }
 
 const CLEAN: RunResult = {
@@ -66,18 +76,22 @@ const CLEAN: RunResult = {
   truncated: false,
   error: null,
   note: null,
+  cost: 0,
+  rateRemaining: null,
 };
 
 export async function syncWindow(
   env: Env,
   kind: EventKind,
   window: SearchWindow,
-  options: SyncOptions = {},
+  options: SyncOptions,
 ): Promise<SyncResult> {
-  const fetchedAt = (options.now ?? new Date()).toISOString();
+  const now = options.now ?? new Date();
+  const fetchedAt = now.toISOString();
   const id = await startRun(env.DB, kind, window.key, fetchedAt);
+  const spent = options.budget.spent;
   let result = CLEAN;
-  let exhausted = false;
+  let resumeAt: string | null = null;
 
   try {
     const pages = searchPages(kind, {
@@ -103,13 +117,14 @@ export async function syncWindow(
     await advance(env.DB, kind, window.through);
   } catch (error) {
     result = { ...result, error: describe(error) };
-    exhausted = error instanceof RateLimitExhausted;
+    resumeAt = stoppedUntil(error, now);
     await archiveFailure(env.RAW, kind, window, fetchedAt, result.pages + 1, error);
   } finally {
+    result = charged(result, options.budget, spent);
     await finishRun(env.DB, id, result);
   }
 
-  return { ...result, exhausted };
+  return { ...result, resumeAt };
 }
 
 export interface ContributionsRun extends SyncResult {
@@ -120,13 +135,14 @@ export interface ContributionsRun extends SyncResult {
 export async function syncContributions(
   env: Env,
   year: number,
-  options: SyncOptions = {},
+  options: SyncOptions,
 ): Promise<ContributionsRun> {
   const now = options.now ?? new Date();
   const fetchedAt = now.toISOString();
   const id = await startRun(env.DB, "contributions", String(year), fetchedAt);
+  const spent = options.budget.spent;
   let result = CLEAN;
-  let exhausted = false;
+  let resumeAt: string | null = null;
   let collection: ContributionsCollection | null = null;
   let current = yearWindow(year, now);
 
@@ -138,7 +154,7 @@ export async function syncContributions(
 
     // A truncated year is fetched again a quarter at a time, which recovers the
     // days a busy repository's yearly page dropped. The quarters run in turn so
-    // the rate-limit floor stops the walk, and the year stays truncated until
+    // the rate budget stops the walk, and the year stays truncated until
     // every quarter has landed.
     if (fetched.truncated) {
       const quarters = quarterWindows(year, now);
@@ -160,15 +176,35 @@ export async function syncContributions(
     await advance(env.DB, "contributions", syncedThrough(yearEnd(year), now));
   } catch (error) {
     result = { ...result, error: describe(error) };
-    exhausted = error instanceof RateLimitExhausted;
+    resumeAt = stoppedUntil(error, now);
     if (error instanceof GitHubResponseError) {
       await archiveContributions(env.RAW, { window: current.key, fetchedAt, body: error.body });
     }
   } finally {
+    result = charged(result, options.budget, spent);
     await finishRun(env.DB, id, result);
   }
 
-  return { ...result, exhausted, contributionYears: collection?.contributionYears ?? [] };
+  return { ...result, resumeAt, contributionYears: collection?.contributionYears ?? [] };
+}
+
+// The budget spans the invocation, so a run's cost is what it spent from the
+// point the run started.
+function charged(result: RunResult, budget: Budget, before: number): RunResult {
+  const cost = budget.spent - before;
+  return { ...result, cost, rateRemaining: cost > 0 ? budget.remaining : null };
+}
+
+// The cap has no reset to wait for, so a run it stopped resumes as soon as the
+// caller likes.
+function stoppedUntil(error: unknown, now: Date): string | null {
+  if (error instanceof BudgetRefused) {
+    return error.resetAt ?? now.toISOString();
+  }
+  if (error instanceof SecondaryRateLimited) {
+    return new Date(now.getTime() + error.retryAfterSeconds * 1000).toISOString();
+  }
+  return null;
 }
 
 async function ingestContributions(

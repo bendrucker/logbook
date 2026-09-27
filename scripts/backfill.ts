@@ -2,6 +2,8 @@
 // Drives POST /admin/backfill to completion. One call walks BACKFILL_WINDOWS
 // windows and answers with where the next one resumes, so the walk over a
 // decade of history is a loop out here rather than one long request in there.
+// A call the rate budget or a secondary limit stopped names when to resume, and
+// the loop sleeps until then.
 //
 // Usage: ADMIN_TOKEN=... bun run backfill <base-url> [kind] [--from YYYY-MM]
 
@@ -23,6 +25,7 @@ const BackfillResult = z.object({
   pages: z.number(),
   rowsChanged: z.number(),
   next: z.string().nullable(),
+  resumeAt: z.string().nullable(),
   error: z.string().nullable(),
 });
 
@@ -75,16 +78,23 @@ async function walk(kind: SyncKind): Promise<void> {
     const result = await backfill(kind, from);
     console.log(describe(result));
 
-    if (result.error !== null) {
+    const wait = result.resumeAt === null ? null : Date.parse(result.resumeAt) - Date.now();
+    if (result.error !== null && result.resumeAt === null) {
       throw new Error(`${kind} stopped, resume with: ${kind} --from ${result.next ?? "the start"}`);
     }
     if (result.next === null) {
       return;
     }
-    // A resume point that repeats the window just asked for would spin here
-    // forever, which is what a misconfigured BACKFILL_WINDOWS of 0 produces.
-    if (result.next === from) {
+    // A resume point that repeats the window just asked for, with nothing
+    // landed and nothing to wait for, would spin here forever. A
+    // BACKFILL_WINDOWS or a cap of 0 produces it.
+    if (result.next === from && result.pages === 0 && (wait === null || wait <= 0)) {
       throw new Error(`${kind} did not advance past ${from}`);
+    }
+    if (wait !== null && wait > 0) {
+      console.log(`${kind.padEnd(KIND_WIDTH)} waiting until ${result.resumeAt}`);
+      // eslint-disable-next-line no-await-in-loop
+      await Bun.sleep(wait);
     }
     from = result.next;
   }

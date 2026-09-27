@@ -150,9 +150,19 @@ The same query asks for the collection's own totals: `totalCommitContributions`,
 
 #### Rate Budget
 
-The GraphQL API allows [5,000 points per hour](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api#primary-rate-limit) for a personal access token, and it scores a query on how many nodes it asks for. A search page of 100 nodes with no nested connection under it is one point. Nested connections multiply rather than add. A query that grows a sub-connection costs more than its node count reads on the surface. The full backfill is a few hundred requests, which fits inside a single hour's budget with room to spare. The incremental run is noise against it.
+The GraphQL API allows [5,000 points per hour](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api#primary-rate-limit) for a personal access token, and it scores a query on how many nodes it asks for. A search page of 100 nodes with no nested connection under it is one point. Nested connections multiply rather than add. A query that grows a sub-connection costs more than its node count reads on the surface. Every archived request so far has cost 1 point, including the reviewed-PR search with its nested `reviews(first: 100)`. The full backfill is a few hundred requests, which the share below spreads over a few rate windows. The incremental run is noise against it.
 
-Each response carries `rateLimit.remaining`, `rateLimit.cost`, and `rateLimit.resetAt`. The extractor reads them and stops before exhausting the budget rather than after. A run that would overrun ends on a watermark it can resume from.
+Each response carries `rateLimit.remaining`, `rateLimit.cost`, and `rateLimit.resetAt`. Only this field reflects the point budget. The REST `GET /rate_limit` endpoint undercounts GraphQL spend.
+
+The budget is shared with every other tool on the token, and those tools spent about 900 points in 18 minutes on one sampled hour. Logbook therefore spends within three limits, set as Worker vars:
+
+- A floor on `remaining`: 1,000 for the hourly sync, which costs about 4 points and should still run on a busy hour, and 2,500 for a backfill, which yields half the budget to the other tools.
+- A share of 300 points per rate window, whatever is left.
+- A cap per invocation: 40 for the cron and 150 for a backfill call. The cap bounds wall clock and subrequests.
+
+The ledger is derived. Each `sync_runs` row records the points it spent and the last `remaining` it saw, and the spend in the current window is the sum of `cost` over runs started since `resetAt` minus an hour. A request goes out when the last `remaining` minus its expected cost stays at or above the floor, the window's spend stays within the share, and the invocation's spend stays within the cap. The first request of an invocation is what learns the window, so it goes out on the cap alone. A refusal ends the invocation on a watermark it can resume from, and reports the reset to wait for.
+
+GitHub also documents secondary limits: 100 concurrent requests and 2,000 points a minute for GraphQL. Logbook sends one request at a time. A backfill spaces requests at least a second apart, which keeps search within the 30 a minute GitHub documents for REST search in case GraphQL search shares it. A 403 or 429 carrying `retry-after` or a secondary-limit message stops the invocation the way a refusal does, and reports the wait.
 
 #### Validation
 
@@ -221,7 +231,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
 - The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off, which search hides and the totals still count.
 - The backfill is roughly 500 search requests plus one per contribution year, well inside the 10,000 subrequests a paid Workers invocation gets. Paging it across invocations answers the wall clock rather than a platform ceiling. The free tier's 50 subrequests would bind first.
-- Backoff reads `rateLimit` off each response rather than waiting for a 403. The existing `rateLimitBackoff` in the site's `scripts/backfill-github-activity.ts` is the shape to follow.
+- The [rate budget](#rate-budget) reads `rateLimit` off each response and refuses a request before it crosses a limit, rather than waiting for a 403.
 
 ## Risks
 

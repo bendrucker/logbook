@@ -4,11 +4,6 @@ import { rateLimitResponse, type RateLimit } from "./schema";
 const ENDPOINT = "https://api.github.com/graphql";
 const USER_AGENT = "logbook (+https://github.com/bendrucker/logbook)";
 
-// GitHub scores a query on the nodes it asks for, so a page costs more than the
-// one point it reads as. Stopping with headroom leaves a run ending on a
-// watermark it can resume from rather than on a 403.
-export const RATE_LIMIT_FLOOR = 100;
-
 // Raw storage exists so a normalization bug stays diagnosable against the bytes
 // that caused it, which only holds if a response that fails validation is still
 // archivable. Every failure after the bytes arrive therefore carries them, and
@@ -56,22 +51,46 @@ export class GraphQLQueryError extends GitHubResponseError {
   }
 }
 
-// Thrown on the response that crossed the floor rather than on the one that
-// would have failed. The caller resumes from the last watermark it committed
-// once `resetAt` passes, and archives this response's body in the meantime.
-export class RateLimitExhausted extends GitHubResponseError {
-  readonly remaining: number;
-  readonly resetAt: string;
+// GitHub's secondary limits answer 403 or 429, usually naming how long to back
+// off in `retry-after`. The window did nothing wrong, so the run stops the way a
+// budget refusal stops it and the caller waits rather than recording a fault.
+export class SecondaryRateLimited extends GitHubResponseError {
+  readonly status: number;
+  readonly retryAfterSeconds: number;
 
-  constructor(remaining: number, resetAt: string, body: string) {
+  constructor(status: number, retryAfterSeconds: number, body: string) {
     super(
-      "RateLimitExhausted",
-      `GitHub GraphQL rate limit down to ${remaining}, resets at ${resetAt}`,
+      "SecondaryRateLimited",
+      `GitHub GraphQL secondary rate limit (${status}), retry after ${retryAfterSeconds}s`,
       body,
     );
-    this.remaining = remaining;
-    this.resetAt = resetAt;
+    this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
+}
+
+const SECONDARY_LIMIT_MESSAGE = /secondary rate limit/i;
+
+// GitHub documents waiting at least a minute when a secondary limit names no
+// wait of its own.
+const SECONDARY_LIMIT_WAIT_SECONDS = 60;
+
+function secondaryLimit(response: Response, body: string): SecondaryRateLimited | null {
+  if (response.status !== 403 && response.status !== 429) {
+    return null;
+  }
+  const header = response.headers.get("retry-after");
+  if (header === null && !SECONDARY_LIMIT_MESSAGE.test(body)) {
+    return null;
+  }
+  const seconds = Number(header);
+  return new SecondaryRateLimited(
+    response.status,
+    header !== null && Number.isFinite(seconds) && seconds >= 0
+      ? seconds
+      : SECONDARY_LIMIT_WAIT_SECONDS,
+    body,
+  );
 }
 
 export class ResponseValidationError extends GitHubResponseError {
@@ -94,10 +113,18 @@ export function validate<T>(schema: z.ZodType<T>, data: unknown, body: string): 
   return parsed.data;
 }
 
+// Asked before every request and told what each response cost. The sync's rate
+// budget implements it, which keeps the policy on when to stop out of the client.
+export interface RequestBudget {
+  // Resolves once the request may go out, or throws to refuse it.
+  admit(): Promise<void>;
+  spend(reading: RateLimit): void;
+}
+
 export interface GraphQLOptions {
   fetch?: typeof globalThis.fetch;
   endpoint?: string;
-  floor?: number;
+  budget?: RequestBudget;
 }
 
 export interface GraphQLResponse {
@@ -133,6 +160,7 @@ export async function graphql(
   // foreign `this`. An arrow wrapper keeps late binding without that risk.
   const transport = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
 
+  await options.budget?.admit();
   const response = await transport(options.endpoint ?? ENDPOINT, {
     method: "POST",
     headers: {
@@ -145,12 +173,15 @@ export async function graphql(
 
   const body = await response.text();
   if (!response.ok) {
-    throw new GitHubHttpError(response.status, body);
+    throw secondaryLimit(response, body) ?? new GitHubHttpError(response.status, body);
   }
 
   const parsed = validate(envelope, parseJson(body), body);
   if (parsed.errors && parsed.errors.length > 0) {
     const reported = rateLimitResponse.safeParse(parsed.data);
+    if (reported.success) {
+      options.budget?.spend(reported.data.rateLimit);
+    }
     throw new GraphQLQueryError(
       parsed.errors,
       body,
@@ -159,9 +190,7 @@ export async function graphql(
   }
 
   const { rateLimit } = validate(rateLimitResponse, parsed.data, body);
-  if (rateLimit.remaining < (options.floor ?? RATE_LIMIT_FLOOR)) {
-    throw new RateLimitExhausted(rateLimit.remaining, rateLimit.resetAt, body);
-  }
+  options.budget?.spend(rateLimit);
 
   return { data: parsed.data, body, rateLimit };
 }

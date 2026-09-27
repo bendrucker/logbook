@@ -13,6 +13,8 @@ export interface SyncRun {
   truncated: boolean;
   error: string | null;
   note: string | null;
+  cost: number;
+  rateRemaining: number | null;
 }
 
 export interface RunResult {
@@ -23,6 +25,11 @@ export interface RunResult {
   // Something worth reading that did not stop the run, which today means the
   // contributions cross-check disagreeing with the event tables.
   note: string | null;
+  // Points the run's requests spent, which the rate budget sums into its ledger.
+  cost: number;
+  // The last `remaining` GitHub reported to the run, null for a run that sent
+  // nothing.
+  rateRemaining: number | null;
 }
 
 interface RunRow {
@@ -36,10 +43,12 @@ interface RunRow {
   truncated: number;
   error: string | null;
   note: string | null;
+  cost: number;
+  rate_remaining: number | null;
 }
 
 const selection =
-  "SELECT id, kind, window, started_at, finished_at, pages, rows_changed, truncated, error, note FROM sync_runs";
+  "SELECT id, kind, window, started_at, finished_at, pages, rows_changed, truncated, error, note, cost, rate_remaining FROM sync_runs";
 
 export async function startRun(
   db: D1Database,
@@ -64,7 +73,8 @@ export async function finishRun(
 ): Promise<void> {
   await db
     .prepare(
-      "UPDATE sync_runs SET finished_at = ?2, pages = ?3, rows_changed = ?4, truncated = ?5, error = ?6, note = ?7" +
+      "UPDATE sync_runs SET finished_at = ?2, pages = ?3, rows_changed = ?4, truncated = ?5, error = ?6, note = ?7," +
+        " cost = ?8, rate_remaining = ?9" +
         " WHERE id = ?1",
     )
     .bind(
@@ -75,8 +85,24 @@ export async function finishRun(
       result.truncated ? 1 : 0,
       result.error,
       result.note,
+      result.cost,
+      result.rateRemaining,
     )
     .run();
+}
+
+export interface RunSpend {
+  startedAt: string;
+  cost: number;
+}
+
+// Every kind spends from one token's budget, so the spend reads across kinds.
+export async function spendSince(db: D1Database, since: string): Promise<RunSpend[]> {
+  const { results } = await db
+    .prepare("SELECT started_at, cost FROM sync_runs WHERE started_at >= ?1 AND cost > 0")
+    .bind(since)
+    .all<{ started_at: string; cost: number }>();
+  return results.map((row) => ({ startedAt: row.started_at, cost: row.cost }));
 }
 
 export async function lastRuns(db: D1Database): Promise<Record<SyncKind, SyncRun | null>> {
@@ -124,5 +150,7 @@ function toRun(row: RunRow): SyncRun {
     truncated: row.truncated !== 0,
     error: row.error,
     note: row.note,
+    cost: row.cost,
+    rateRemaining: row.rate_remaining,
   };
 }
