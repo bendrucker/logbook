@@ -65,7 +65,7 @@ Every response page is written to R2 before it is parsed, keyed by what produced
 ```text
 raw/
   search/{kind}/{window}/{fetched_at}/{page}.json   # kind is pr-authored, pr-reviewed, or issue
-  contributions/{year}/{fetched_at}.json            # one contributionsCollection window
+  contributions/{window}/{fetched_at}.json          # a year, or a quarter of one ({year}-Q{n})
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -125,8 +125,10 @@ The search connection is the workhorse because it pages without bound when windo
 The `search` query returns [a maximum of 1,000 results](https://docs.github.com/en/graphql/reference/search#query-search) no matter how many matched, and hitting that ceiling is silent. Monthly windows keep every query well underneath it:
 
 - `is:pr author:bendrucker created:2012-12-01..2012-12-31`
-- `is:pr reviewed-by:bendrucker created:2012-12-01..2012-12-31`
+- `is:pr reviewed-by:bendrucker -author:bendrucker created:2012-12-01..2012-12-31`
 - `is:issue author:bendrucker created:2012-12-01..2012-12-31`
+
+The review search excludes my own pull requests. Replying to a review thread submits a `COMMENTED` review, so without the exclusion every reply on my own pull request counts as a review given. When the exclusion landed, 403 of 458 synced reviews for 2026 were those replies.
 
 The upper bound is the month's real last day. A literal `-31` against a thirty-day month is a date GitHub's parser has to reinterpret, and these boundaries are what the whole cap mitigation rests on.
 
@@ -137,6 +139,8 @@ Walking those back to 2012 is 166 windows per event type for the whole history. 
 `user.contributionsCollection(from, to)` takes at most a year per request. Its [`to` argument](https://docs.github.com/en/graphql/reference/users#object-user) defaults to the earlier of now and a year past `from`. The reference documents that default and says nothing about what a wider window does, so the client never sends one. A full history is one request per year. `user.contributionsCollection.contributionYears` lists which years to walk.
 
 `commitContributionsByRepository` returns a plain list rather than a paginated connection, and its `maxRepositories` argument defaults to 25. Anything past the value it is given is dropped with no error and no cursor to follow. The site's existing query asks for 100 across every one of these fields and warns when a list comes back exactly that long. That shape carries over: a year holding exactly the maximum is treated as truncated the same way a search window holding exactly 1,000 is.
+
+Each repository's `contributions` list, one node per day with commits, is capped at 100 the same way. A repository with commits on more than 100 days of a year loses the rest. A truncated year is fetched again one quarter at a time, since a quarter spans at most 92 days. Each quarter is archived beside the year as `contributions/{year}-Q{n}/{fetched_at}.json`, and replay reads the quarters sharing the year's fetch timestamp.
 
 The same query asks for the collection's own totals: `totalCommitContributions`, `totalPullRequestContributions`, `totalPullRequestReviewContributions`, `totalIssueContributions`, `totalRepositoriesWithContributedCommits`, and `restrictedContributionsCount`. Those are the cross-check. A year whose event table count disagrees with GitHub's own total means a search window truncated or a private contribution is being counted on one side and not the other.
 
@@ -219,23 +223,21 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 - The search cap is silent. A window that returns exactly 1,000 results has probably lost rows and says nothing about it. Monthly windows keep the real counts far below, and the totals cross-check is the detector rather than the prevention.
 - GitHub's search index lags writes by an unspecified interval, so an `updated:>` window anchored exactly at the last sync can miss an event indexed late. The window overlaps the previous one, and upserts keyed on node ID make the overlap free.
-- `commitContributionsByRepository` returns a fixed-length list and reports no truncation. A year coming back exactly as long as the `maxRepositories` it was given has probably lost commit rows for everything past it, and `totalRepositoriesWithContributedCommits` from the same query is the count to check that against.
-- `restrictedContributionsCount` counts contributions hidden from the viewer. Whether an owner's own scoped token still sees those is worth confirming against the live API before the cross-check subtracts the field, because the drift alarm is wrong in one direction or the other if the assumption is.
+- `commitContributionsByRepository` returns a fixed-length list and reports no truncation. A year coming back exactly as long as the `maxRepositories` it was given has probably lost commit rows for everything past it, and `totalRepositoriesWithContributedCommits` from the same query is the count to check that against. The quarter refetch recovers a repository's overflowing days but does nothing for a quarter that touched more than 100 repositories.
+- `restrictedContributionsCount` counts contributions hidden from the viewer. With a token that sees no private repository, that is every private contribution, so the cross-check reports it beside the gaps instead of subtracting it.
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.
-- Token scope defines the visible history. A token that loses access to an organization makes those events unfetchable, and the raw bucket becomes the only copy of them.
+- A public repository that goes private drops out of every later search, and the raw bucket becomes the only copy of its events.
 - The cutover has two writers on the site's code page. Retiring the site's sync belongs in the same change that turns on publishing.
+
+## Visibility
+
+The hub reads public activity only. `GITHUB_TOKEN` is a classic personal access token with no scopes, so GitHub filters private repositories out before any response reaches the hub. Nothing private is stored, archived, or published, and no layer downstream has a redaction path to get wrong.
+
+Totals understate real activity by `restrictedContributionsCount`. Reversing the choice means a token with `repo` scope, a full backfill, and a filter at publish.
 
 ## Open Decisions
 
-These come before the first extraction code, because each one changes what gets stored rather than only what gets shown.
-
-#### Visibility
-
-The token sees private repositories. A feed row counting a private pull request names its repository on the site unless a layer removes it. Which layer owns that, and whether private activity counts toward totals at all:
-
-- Filter at ingest. The hub never stores a private event, so nothing downstream can leak one. Totals understate real activity, and reversing the choice means a backfill.
-- Filter at publish. The hub stores everything and sends only public rows. The lake stays complete for private analysis, and the site cannot show private counts even as an anonymous number.
-- Publish counted but unnamed. Private events reach the site with the repository redacted, so totals are complete and no private name appears. The site then needs a render path for a row with no repository to link to.
+These are still open.
 
 #### Involvement Queries
 
@@ -245,7 +247,7 @@ The token sees private repositories. A feed row counting a private pull request 
 - Add `involves:` for issues, which catches issues I participated in but did not open, along with every thread that mentioned me.
 - Keep merged-into-my-repositories as its own event type rather than folding it into pull request counts, since it measures maintenance rather than authorship.
 
-Whichever set wins gets documented here, because a homepage number is uninterpretable without knowing which query produced it. It interacts with the visibility decision above: a wider involvement set pulls in more repositories, and more repositories means more of them private.
+Whichever set wins gets documented here, because a homepage number is uninterpretable without knowing which query produced it. A public-only token keeps a wider set from pulling in private repositories.
 
 #### Reusing `packages/github`
 

@@ -38,12 +38,12 @@ export function searchPageNumber(key: string): number | null {
   return /^\d+$/.test(name) ? Number(name) : null;
 }
 
-export function contributionsPrefix(year: number): string {
-  return `raw/contributions/${year}/`;
+export function contributionsPrefix(window: string): string {
+  return `raw/contributions/${window}/`;
 }
 
-export function contributionsKey(year: number, fetchedAt: string): string {
-  return `${contributionsPrefix(year)}${fetchedAt}${OBJECT_SUFFIX}`;
+export function contributionsKey(window: string, fetchedAt: string): string {
+  return `${contributionsPrefix(window)}${fetchedAt}${OBJECT_SUFFIX}`;
 }
 
 // Re-running a window writes new pages under a new fetch timestamp rather
@@ -73,7 +73,7 @@ export function archiveSearchPage(bucket: R2Bucket, archive: SearchArchive): Pro
 }
 
 export interface ContributionsArchive {
-  year: number;
+  window: string;
   fetchedAt: string;
   body: string;
 }
@@ -82,5 +82,5 @@ export function archiveContributions(
   bucket: R2Bucket,
   archive: ContributionsArchive,
 ): Promise<boolean> {
-  return writeOnce(bucket, contributionsKey(archive.year, archive.fetchedAt), archive.body);
+  return writeOnce(bucket, contributionsKey(archive.window, archive.fetchedAt), archive.body);
 }

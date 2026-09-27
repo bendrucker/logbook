@@ -32,7 +32,7 @@ describe("keys", () => {
   });
 
   it("keys a contributions window by year and fetch", () => {
-    expect(contributionsKey(2025, FETCHED_AT)).toBe(`raw/contributions/2025/${FETCHED_AT}.json`);
+    expect(contributionsKey("2025", FETCHED_AT)).toBe(`raw/contributions/2025/${FETCHED_AT}.json`);
   });
 });
 
@@ -79,12 +79,12 @@ describe("archiving", () => {
 
   it("writes a contributions window under its key", async () => {
     await archiveContributions(env.RAW, {
-      year: 2025,
+      window: "2025",
       fetchedAt: FETCHED_AT,
       body: '{"year":2025}',
     });
 
-    const stored = await env.RAW.get(contributionsKey(2025, FETCHED_AT));
+    const stored = await env.RAW.get(contributionsKey("2025", FETCHED_AT));
     await expect(stored?.text()).resolves.toBe('{"year":2025}');
   });
 

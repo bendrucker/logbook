@@ -42,15 +42,16 @@ export function monthlyWindows(start: Month, now: Date): MonthWindow[] {
   return windows;
 }
 
-const SCOPES: Record<EventKind, { type: string; involvement: string }> = {
-  "pr-authored": { type: "is:pr", involvement: "author" },
-  "pr-reviewed": { type: "is:pr", involvement: "reviewed-by" },
-  issue: { type: "is:issue", involvement: "author" },
+const SCOPES: Record<EventKind, (login: string) => string> = {
+  "pr-authored": (login) => `is:pr author:${login}`,
+  // Replying to a review thread on your own pull request submits a review, so
+  // without the exclusion every such reply reads as a review given.
+  "pr-reviewed": (login) => `is:pr reviewed-by:${login} -author:${login}`,
+  issue: (login) => `is:issue author:${login}`,
 };
 
 function scope(kind: EventKind, login: string): string {
-  const { type, involvement } = SCOPES[kind];
-  return `${type} ${involvement}:${login}`;
+  return SCOPES[kind](login);
 }
 
 export function backfillSearch(kind: EventKind, login: string, window: MonthWindow): string {

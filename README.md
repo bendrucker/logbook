@@ -75,7 +75,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 One call walks `BACKFILL_WINDOWS` monthly windows and answers with `next`, the `from` the following call resumes at. `next` is null once the walk reaches the present. `kind=contributions` walks the years `contributionYears` reports and reads its year out of `from`.
 
-Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a silently truncated search window and a contribution the token cannot see look the same from here. `GET /admin/sync` reports it alongside the watermarks, the last ten failures, and the most recent lake build.
+Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a silently truncated search window and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. `GET /admin/sync` reports it alongside the watermarks, the last ten failures, and the most recent lake build.
 
 ## Lake
 
@@ -94,7 +94,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/lake"
 | `GITHUB_TOKEN` | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request    |
 | `ADMIN_TOKEN`  | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes |
 
-The GitHub token's scope decides what the hub can see. What it publishes is a separate question, still open in [docs/design.md](docs/design.md).
+The GitHub token is a classic personal access token with no scopes, so the hub sees and publishes public activity only. [docs/design.md](docs/design.md#visibility) records the decision.
 
 `ADMIN_TOKEN` is optional. `/admin/sync`, `/admin/backfill`, and `/admin/lake` answer 404 while it is unset. A deployment that never sets one exposes no admin surface.
 

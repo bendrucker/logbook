@@ -178,6 +178,20 @@ export function contributionsPayload(
   };
 }
 
+export function commitDaysPayload(days: readonly string[]) {
+  return contributionsPayload(1, days.length, {
+    commitContributionsByRepository: [
+      {
+        repository: repository("repo-0"),
+        contributions: {
+          totalCount: days.length,
+          nodes: days.map((day) => commitDay(2, `${day}T00:00:00Z`)),
+        },
+      },
+    ],
+  });
+}
+
 export function contributionsResponse(repositoryCount: number, dayTotal = 1) {
   return jsonResponse(contributionsPayload(repositoryCount, dayTotal));
 }

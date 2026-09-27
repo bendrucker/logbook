@@ -1,5 +1,10 @@
 import { GitHubResponseError, type GraphQLOptions, RateLimitExhausted } from "../github/client";
-import { contributionsTruncated, fetchContributions } from "../github/contributions";
+import {
+  type ContributionsResult,
+  fetchContributions,
+  quarterWindows,
+  yearWindow,
+} from "../github/contributions";
 import { archiveContributions, archiveSearchPage } from "../github/raw";
 import {
   issuePages,
@@ -123,36 +128,68 @@ export async function syncContributions(
   let result = CLEAN;
   let exhausted = false;
   let collection: ContributionsCollection | null = null;
+  let current = yearWindow(year, now);
 
   try {
-    const fetched = await fetchContributions(githubToken(env), env.GITHUB_LOGIN, year, {
-      ...options,
-      now,
-    });
+    const token = githubToken(env);
+    const fetched = await fetchContributions(token, env.GITHUB_LOGIN, current, options);
     collection = fetched.collection;
+    result = await ingestContributions(env, fetchedAt, fetched, result);
 
-    await archiveContributions(env.RAW, { year, fetchedAt, body: fetched.body });
-    const changed = await normalizeContributions(env.DB, fetched.collection, fetchedAt);
+    // A truncated year is fetched again a quarter at a time, which recovers the
+    // days a busy repository's yearly page dropped. The quarters run in turn so
+    // the rate-limit floor stops the walk, and the year stays truncated until
+    // every quarter has landed.
+    if (fetched.truncated) {
+      const quarters = quarterWindows(year, now);
+      let quarterTruncated = false;
+      let quarter = quarters.shift();
+      while (quarter !== undefined) {
+        current = quarter;
+        // eslint-disable-next-line no-await-in-loop
+        const part = await fetchContributions(token, env.GITHUB_LOGIN, quarter, options);
+        // eslint-disable-next-line no-await-in-loop
+        result = await ingestContributions(env, fetchedAt, part, result);
+        quarterTruncated ||= part.truncated;
+        quarter = quarters.shift();
+      }
+      result = { ...result, truncated: quarterTruncated };
+    }
 
-    result = {
-      pages: 1,
-      rowsChanged: total(changed),
-      truncated: contributionsTruncated(fetched.collection),
-      error: null,
-      note: await note(env.DB, year, fetched.collection),
-    };
+    result = { ...result, note: await note(env.DB, year, fetched.collection) };
     await advance(env.DB, "contributions", syncedThrough(yearEnd(year), now));
   } catch (error) {
     result = { ...result, error: describe(error) };
     exhausted = error instanceof RateLimitExhausted;
     if (error instanceof GitHubResponseError) {
-      await archiveContributions(env.RAW, { year, fetchedAt, body: error.body });
+      await archiveContributions(env.RAW, { window: current.key, fetchedAt, body: error.body });
     }
   } finally {
     await finishRun(env.DB, id, result);
   }
 
   return { ...result, exhausted, contributionYears: collection?.contributionYears ?? [] };
+}
+
+async function ingestContributions(
+  env: Env,
+  fetchedAt: string,
+  fetched: ContributionsResult,
+  result: RunResult,
+): Promise<RunResult> {
+  await archiveContributions(env.RAW, {
+    window: fetched.window.key,
+    fetchedAt,
+    body: fetched.body,
+  });
+  const rows = await normalizeContributions(env.DB, fetched.collection, fetchedAt);
+
+  return {
+    ...result,
+    pages: result.pages + 1,
+    rowsChanged: result.rowsChanged + total(rows),
+    truncated: result.truncated || fetched.truncated,
+  };
 }
 
 // The cross-check reports on a run whose pages are already in R2 and whose rows

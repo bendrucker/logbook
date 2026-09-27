@@ -13,12 +13,50 @@ export class UnknownUserError extends GitHubResponseError {
   }
 }
 
-export interface ContributionsOptions extends GraphQLOptions {
-  now?: Date;
+export interface ContributionsWindow {
+  // What names the window's prefix in R2: `2026` for a year, `2026-Q3` for a
+  // quarter of one.
+  key: string;
+  from: Date;
+  to: Date;
+}
+
+// The collection takes at most a year per request and rejects a wider window,
+// so a window still in progress stops at now.
+function clipped(key: string, from: Date, end: Date, now: Date): ContributionsWindow {
+  return { key, from, to: now < end ? now : end };
+}
+
+export function yearWindow(year: number, now: Date): ContributionsWindow {
+  return clipped(
+    String(year),
+    new Date(Date.UTC(year, 0, 1)),
+    new Date(Date.UTC(year, 11, 31, 23, 59, 59)),
+    now,
+  );
+}
+
+export const QUARTERS = [1, 2, 3, 4];
+
+export function quarterKey(year: number, quarter: number): string {
+  return `${year}-Q${quarter}`;
+}
+
+// A quarter spans at most 92 days, so no repository's daily contributions in one
+// can overflow a page the way a busy repository's year does.
+export function quarterWindows(year: number, now: Date): ContributionsWindow[] {
+  return QUARTERS.flatMap((quarter) => {
+    const from = new Date(Date.UTC(year, (quarter - 1) * 3, 1));
+    if (from > now) {
+      return [];
+    }
+    const end = new Date(Date.UTC(year, quarter * 3, 1) - 1000);
+    return clipped(quarterKey(year, quarter), from, end, now);
+  });
 }
 
 export interface ContributionsResult {
-  year: number;
+  window: ContributionsWindow;
   collection: ContributionsCollection;
   truncated: boolean;
   rateLimit: RateLimit;
@@ -44,24 +82,13 @@ export function contributionsTruncated(collection: ContributionsCollection): boo
 export async function fetchContributions(
   token: string,
   login: string,
-  year: number,
-  options: ContributionsOptions = {},
+  window: ContributionsWindow,
+  options: GraphQLOptions = {},
 ): Promise<ContributionsResult> {
-  const now = options.now ?? new Date();
-  const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59));
-
-  // The collection takes at most a year per request and rejects a wider window,
-  // so the current year stops at now rather than at December.
-  const to = now < yearEnd ? now : yearEnd;
-
   const response = await graphql(
     token,
     CONTRIBUTIONS,
-    {
-      login,
-      from: new Date(Date.UTC(year, 0, 1)).toISOString(),
-      to: to.toISOString(),
-    },
+    { login, from: window.from.toISOString(), to: window.to.toISOString() },
     options,
   );
 
@@ -73,7 +100,7 @@ export async function fetchContributions(
   const collection = user.contributionsCollection;
 
   return {
-    year,
+    window,
     collection,
     truncated: contributionsTruncated(collection),
     rateLimit: response.rateLimit,

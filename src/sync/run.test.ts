@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  commitDaysPayload,
   contributionsPayload,
   jsonResponse,
   pullRequest,
@@ -10,6 +11,7 @@ import {
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
 import { stubFetch } from "../../test/fetch-stub";
+import { NESTED_PAGE_SIZE } from "../github/queries";
 import { searchKey } from "../github/raw";
 import { recentRuns } from "./runs";
 import { syncContributions, syncWindow } from "./run";
@@ -140,6 +142,48 @@ describe("syncContributions", () => {
     expect(result.note).toContain("pull requests 40 vs 0");
     const [run] = await recentRuns(env.DB, "contributions", 1);
     expect(run?.note).toBe(result.note);
+  });
+
+  it("fetches a truncated year again by quarter and keeps each quarter's days", async () => {
+    const { fetch, requests } = sequence([
+      () => jsonResponse(contributionsPayload(1, NESTED_PAGE_SIZE + 1)),
+      () => jsonResponse(commitDaysPayload(["2026-02-10"])),
+      () => jsonResponse(commitDaysPayload(["2026-05-10"])),
+      () => jsonResponse(commitDaysPayload(["2026-08-10"])),
+    ]);
+
+    const result = await syncContributions(env, 2026, { fetch, now: NOW });
+
+    expect(result).toMatchObject({ pages: 4, truncated: false, error: null });
+    expect(await count("commit_days")).toEqual({ total: 4 });
+    expect(await env.RAW.head(`raw/contributions/2026-Q3/${FETCHED_AT}.json`)).not.toBeNull();
+    const variables = await Promise.all(
+      requests.slice(1).map(async (request) => (await requestBody(request)).variables),
+    );
+    expect(variables).toMatchObject([
+      { from: "2026-01-01T00:00:00.000Z", to: "2026-03-31T23:59:59.000Z" },
+      { from: "2026-04-01T00:00:00.000Z", to: "2026-06-30T23:59:59.000Z" },
+      { from: "2026-07-01T00:00:00.000Z", to: "2026-09-09T12:00:00.000Z" },
+    ]);
+  });
+
+  it("reports the quarters it landed when the rate limit stops the walk", async () => {
+    const { fetch } = sequence([
+      () => jsonResponse(contributionsPayload(1, NESTED_PAGE_SIZE + 1)),
+      () => jsonResponse(commitDaysPayload(["2026-02-10"])),
+      () => {
+        const payload = commitDaysPayload(["2026-05-10"]);
+        return jsonResponse({ data: { ...payload.data, rateLimit: rateLimit({ remaining: 5 }) } });
+      },
+    ]);
+
+    const result = await syncContributions(env, 2026, { fetch, now: NOW });
+
+    expect(result).toMatchObject({ pages: 2, truncated: true, exhausted: true });
+    expect(result.error).toContain("RateLimitExhausted");
+    expect(await readWatermark(env.DB, "contributions")).toBeNull();
+    const [run] = await recentRuns(env.DB, "contributions", 1);
+    expect(run).toMatchObject({ pages: 2 });
   });
 
   it("syncs a past year only through that year's end", async () => {
