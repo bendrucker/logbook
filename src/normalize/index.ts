@@ -1,14 +1,20 @@
 export {
+  authoredBy,
+  normalizeContributionEvents,
   normalizeContributions,
   normalizeSearchPage,
   type RowsChanged,
   type SearchPageNodes,
 } from "./page";
 export {
+  type ArchivedContributionEvents,
+  type ContributionEventsFetch,
   MissingRawObjectError,
   RawObjectError,
   RawValidationError,
   type Replay,
+  readContributionEvents,
+  replayContributionEvents,
   replayContributions,
   replaySearchWindow,
 } from "./replay";

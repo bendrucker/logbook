@@ -1,0 +1,72 @@
+import type { z } from "zod";
+import { GitHubResponseError, graphql, validate, type GraphQLOptions } from "./client";
+import type { PageInfo, RateLimit } from "./schema";
+
+// A page announcing a successor whose cursor the pager already sent would serve
+// the same results again for as long as it kept following it. The page is
+// thrown rather than yielded so the window fails with its bytes archived and
+// its watermark where it was.
+export class RepeatedCursorError extends GitHubResponseError {
+  readonly cursor: string;
+
+  constructor(cursor: string, body: string) {
+    super("RepeatedCursorError", `GitHub returned cursor ${cursor} again`, body);
+    this.cursor = cursor;
+  }
+}
+
+export interface CursorPagesOptions<T> extends GraphQLOptions {
+  token: string;
+  document: string;
+  variables: Record<string, unknown>;
+  schema: z.ZodType<T>;
+  pageInfo: (data: T) => PageInfo;
+  pageSize: number;
+  // A connection that keeps announcing successors ends here.
+  maxPages: number;
+}
+
+export interface CursorPage<T> {
+  page: number;
+  data: T;
+  rateLimit: RateLimit;
+  body: string;
+}
+
+export async function* cursorPages<T>(
+  options: CursorPagesOptions<T>,
+): AsyncGenerator<CursorPage<T>> {
+  let after: string | null = null;
+  const sent = new Set<string>();
+  let page = 0;
+  let remaining = true;
+
+  // A cursor loop rather than for...of: each request depends on the cursor the
+  // response before it returned, so the pages cannot be issued together. A
+  // cursor that fails to advance ends it sooner than the page bound, as an
+  // error.
+  while (remaining && page < options.maxPages) {
+    // eslint-disable-next-line no-await-in-loop
+    const response = await graphql(
+      options.token,
+      options.document,
+      { ...options.variables, first: options.pageSize, after },
+      options,
+    );
+
+    const data = validate(options.schema, response.data, response.body);
+    const pageInfo = options.pageInfo(data);
+    if (pageInfo.hasNextPage && sent.has(pageInfo.endCursor)) {
+      throw new RepeatedCursorError(pageInfo.endCursor, response.body);
+    }
+    page += 1;
+
+    yield { page, data, rateLimit: response.rateLimit, body: response.body };
+
+    remaining = pageInfo.hasNextPage;
+    after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
+    if (after !== null) {
+      sent.add(after);
+    }
+  }
+}

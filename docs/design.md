@@ -66,6 +66,7 @@ Every response page is written to R2 before it is parsed, keyed by what produced
 raw/
   search/{kind}/{window}/{fetched_at}/{page}.json   # kind is pr-authored, pr-reviewed, or issue
   contributions/{window}/{fetched_at}.json          # 2015, 2015-Q3, 2015-07, 2015-07-14, or 2015-07-14T00--2015-07-14T12
+  contribution-events/{kind}/{window}/{fetched_at}/{page}.json   # kind as in search, window as in contributions
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -146,7 +147,19 @@ Each repository's `contributions` list, one node per day with commits, is capped
 
 The same query asks for the collection's own totals: `totalCommitContributions`, `totalPullRequestContributions`, `totalPullRequestReviewContributions`, `totalIssueContributions`, `totalRepositoriesWithContributedCommits`, and `restrictedContributionsCount`. Those are the cross-check. A year whose event table count disagrees with GitHub's own total means a search window truncated or a private contribution is being counted on one side and not the other.
 
-`totalPullRequestReviewContributions` counts pull requests rather than reviews, and it includes reviews on my own pull requests, which the `reviews` table excludes. The cross-check therefore sets it against distinct pull requests by the year of their first review and reports the pair as `reviews 75 (38 own) vs 37 PRs`, with the own count taken off GitHub's figure when it is known.
+`totalPullRequestReviewContributions` counts pull requests rather than reviews, and it includes reviews on my own pull requests, which the `reviews` table excludes. The cross-check therefore sets it against distinct pull requests by the year of their first review and reports the pair as `reviews 75 (38 own) vs 37 PRs`. The own count comes from the year's archived review connection pages, and is taken off GitHub's figure when those pages list as many pull requests as GitHub reports.
+
+Issues and pull requests compare as sets when the year's archived connection pages list exactly as many events as GitHub's total. The note then names the node IDs on each side of a gap, `issues 186 vs 101 (missing I_a, I_b and 83 more)`, rather than a bare count. An archive of any other size is stale or partial, and the check falls back to the totals.
+
+#### Contribution Connections
+
+`contributionsCollection` also exposes cursor-paged `issueContributions`, `pullRequestContributions`, and `pullRequestReviewContributions`. They list exactly what GitHub counts, including issues search hides: an issue in a repository that later turned Issues off drops out of search while the collection still counts it. They run as three backfill kinds, `issue-contributions`, `pr-contributions`, and `review-contributions`, a second enumeration over the same event tables that upserts on node ID.
+
+Each node carries its `Issue` or `PullRequest` with the fields the matching search selects, through a shared fragment, so normalization reuses the search row builders. A review node names one pull request, and the query reads that pull request's `reviews(author:, first: 100)`, so every review on it lands. Review nodes on my own pull requests are dropped, as the review search excludes them.
+
+The windows are the contributions calendar windows, rooted at years. A unit reads at most ten pages of 100. One that ends its cursor having read fewer nodes than the connection's `totalCount`, or stops at ten pages with a successor announced, is truncated and splits down the calendar like a commit window. The pager shares the search pager's cursor loop and its repeated-cursor guard.
+
+Search stays. Connections enumerate by creation, so only an `updated:>` search finds an old event whose state changed, and search also finds events GitHub declines to count as contributions. The union of both is the most complete set either source sees.
 
 #### Rate Budget
 
@@ -214,6 +227,7 @@ Backfill and incremental sync are the same code with different windows, so there
 
 - Walk monthly search windows back to 2012 for each event type. I created my first repository on 2012-12-27, and nothing earlier will match.
 - Walk `contributionsCollection` per year over `contributionYears`.
+- Page the three contribution connections per year, which recovers events the search index hides.
 - Write every page to R2, then normalize.
 
 It runs from an admin route or a local script. A call enqueues root windows in `crawl_units` and drains the frontier until the rate budget's cap, so a single invocation stays inside its wall clock and the next call resumes from the frontier. The hourly cron drains what share its own work leaves, so a large backfill finishes unattended.
@@ -229,7 +243,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - `GITHUB_TOKEN` is a Worker secret, set with `wrangler secret put`. It is the only credential the hub holds.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
-- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off, which search hides and the totals still count.
+- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off, which search hides and the totals still count. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
 - The backfill is roughly 500 search requests plus one per contribution year, well inside the 10,000 subrequests a paid Workers invocation gets. Paging it across invocations answers the wall clock rather than a platform ceiling. The free tier's 50 subrequests would bind first.
 - The [rate budget](#rate-budget) reads `rateLimit` off each response and refuses a request before it crosses a limit, rather than waiting for a 403.
 

@@ -38,6 +38,42 @@ export function searchPageNumber(key: string): number | null {
   return /^\d+$/.test(name) ? Number(name) : null;
 }
 
+// The contribution connections page like search, so their pages mirror the
+// search layout under a prefix of their own, named by the event kind the nodes
+// normalize as.
+function contributionEventsWindowPrefix(kind: EventKind, window: string): string {
+  return `raw/contribution-events/${kind}/${window}/`;
+}
+
+export function contributionEventsKey(
+  kind: EventKind,
+  window: string,
+  fetchedAt: string,
+  page: number,
+): string {
+  const name = String(page).padStart(PAGE_DIGITS, "0");
+  return `${contributionEventsWindowPrefix(kind, window)}${fetchedAt}/${name}${OBJECT_SUFFIX}`;
+}
+
+// Window keys start with their year, as the contributions windows do, so one
+// listing under the year finds every window the crawl split it into.
+export function contributionEventsYearPrefix(kind: EventKind, year: string): string {
+  return `raw/contribution-events/${kind}/${year}`;
+}
+
+// The window, fetch, and page a key `contributionEventsKey` built, read back
+// off a listing.
+export function contributionEventsObject(
+  key: string,
+): { window: string; fetchedAt: string; page: number } | null {
+  const match = /^raw\/contribution-events\/[^/]+\/([^/]+)\/([^/]+)\/(\d+)\.json$/.exec(key);
+  if (match === null) {
+    return null;
+  }
+  const [, window = "", fetchedAt = "", page = ""] = match;
+  return { window, fetchedAt, page: Number(page) };
+}
+
 export function contributionsPrefix(window: string): string {
   return `raw/contributions/${window}/`;
 }
@@ -99,4 +135,20 @@ export function archiveContributions(
   archive: ContributionsArchive,
 ): Promise<boolean> {
   return writeOnce(bucket, contributionsKey(archive.window, archive.fetchedAt), archive.body);
+}
+
+export interface ContributionEventsArchive {
+  kind: EventKind;
+  window: string;
+  fetchedAt: string;
+  page: number;
+  body: string;
+}
+
+export function archiveContributionEventsPage(
+  bucket: R2Bucket,
+  archive: ContributionEventsArchive,
+): Promise<boolean> {
+  const { kind, window, fetchedAt, page, body } = archive;
+  return writeOnce(bucket, contributionEventsKey(kind, window, fetchedAt, page), body);
 }

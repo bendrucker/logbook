@@ -9,10 +9,10 @@ import {
   searchResponse,
 } from "../../test/github-fixtures";
 import { type RequestBudget, ResponseValidationError } from "./client";
+import { RepeatedCursorError } from "./pages";
 import { type PullRequestNode } from "./schema";
 import {
   pullRequestPages,
-  RepeatedCursorError,
   reviewedPullRequestPages,
   SEARCH_MAX_RESULTS,
   SEARCH_PAGE_SIZE,

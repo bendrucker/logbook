@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   commitDaysPayload,
+  contributionEventsPayload,
   contributionsPayload,
   TRUNCATED_COMMIT_TOTAL,
   issue,
@@ -13,12 +14,13 @@ import {
   searchPayload,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
-import { contributionsKey, searchKey } from "../github/raw";
+import { contributionEventsKey, contributionsKey, searchKey } from "../github/raw";
 import { SEARCH_MAX_RESULTS } from "../github/search";
 import type { EventKind } from "../github/windows";
 import {
   MissingRawObjectError,
   RawValidationError,
+  replayContributionEvents,
   replayContributions,
   replaySearchWindow,
 } from "./replay";
@@ -437,5 +439,164 @@ describe("MissingRawObjectError", () => {
 
     expect(error.name).toBe("MissingRawObjectError");
     expect(error.key).toBe("raw/search/issue/2026-08/fetch/0001.json");
+  });
+});
+
+describe("replayContributionEvents", () => {
+  function archiveEvents(
+    kind: EventKind,
+    window: string,
+    fetchedAt: string,
+    page: number,
+    payload: unknown,
+  ): Promise<unknown> {
+    return env.RAW.put(
+      contributionEventsKey(kind, window, fetchedAt, page),
+      JSON.stringify(payload),
+    );
+  }
+
+  it("normalizes a multi-page fetch and drops reviews on the login's own pull requests", async () => {
+    await archiveEvents(
+      "pr-reviewed",
+      "2015",
+      LATER,
+      1,
+      contributionEventsPayload(
+        "pullRequestReviewContributions",
+        [reviewedPullRequest(1), reviewedPullRequest(2, { author: { login: "bendrucker" } })],
+        { totalCount: 3, endCursor: "Y3Vy" },
+      ),
+    );
+    await archiveEvents(
+      "pr-reviewed",
+      "2015",
+      LATER,
+      2,
+      contributionEventsPayload("pullRequestReviewContributions", [reviewedPullRequest(3)], {
+        totalCount: 3,
+      }),
+    );
+
+    const replayed = await replayContributionEvents(
+      env.DB,
+      env.RAW,
+      "pr-reviewed",
+      "2015",
+      "bendrucker",
+    );
+
+    expect(replayed).toMatchObject({ fetchedAt: LATER, truncated: false, rows: { reviews: 2 } });
+    expect(await count("reviews")).toEqual({ total: 2 });
+  });
+
+  it("writes issues and pull requests through the search row builders", async () => {
+    await archiveEvents(
+      "issue",
+      "2015",
+      LATER,
+      1,
+      contributionEventsPayload("issueContributions", [issue(1)]),
+    );
+    await archiveEvents(
+      "pr-authored",
+      "2015",
+      LATER,
+      1,
+      contributionEventsPayload("pullRequestContributions", [pullRequest(1)]),
+    );
+
+    await replayContributionEvents(env.DB, env.RAW, "issue", "2015", "bendrucker");
+    await replayContributionEvents(env.DB, env.RAW, "pr-authored", "2015", "bendrucker");
+
+    expect(await readRow(env.DB, "SELECT id, number, state FROM issues")).toEqual({
+      id: "I_1",
+      number: 1,
+      state: "OPEN",
+    });
+    expect(await readRow(env.DB, "SELECT id, additions FROM pull_requests")).toEqual({
+      id: "PR_1",
+      additions: 10,
+    });
+  });
+
+  it("reads a fetch whose cursor ended short of its count as truncated", async () => {
+    await archiveEvents(
+      "issue",
+      "2015",
+      LATER,
+      1,
+      contributionEventsPayload("issueContributions", [issue(1)], { totalCount: 2 }),
+    );
+
+    const replayed = await replayContributionEvents(env.DB, env.RAW, "issue", "2015", "bendrucker");
+
+    expect(replayed?.truncated).toBe(true);
+  });
+
+  it.each<{ name: string; quarters: readonly string[]; truncated: boolean }>([
+    {
+      name: "every quarter archived covers the year",
+      quarters: ["Q1", "Q2", "Q3", "Q4"],
+      truncated: false,
+    },
+    {
+      name: "a quarter missing leaves it truncated",
+      quarters: ["Q1", "Q2", "Q3"],
+      truncated: true,
+    },
+  ])("$name", async ({ quarters, truncated }) => {
+    await archiveEvents(
+      "issue",
+      "2015",
+      LATER,
+      1,
+      contributionEventsPayload("issueContributions", [issue(1)], { totalCount: 5 }),
+    );
+    for (const [index, quarter] of quarters.entries()) {
+      await archiveEvents(
+        "issue",
+        `2015-${quarter}`,
+        LATER,
+        1,
+        contributionEventsPayload("issueContributions", [issue(index + 2)]),
+      );
+    }
+
+    const replayed = await replayContributionEvents(env.DB, env.RAW, "issue", "2015", "bendrucker");
+
+    expect(replayed?.truncated).toBe(truncated);
+    expect(await count("issues")).toEqual({ total: quarters.length + 1 });
+  });
+
+  it("skips a newer fetch that stopped mid-pagination for the last one that finished", async () => {
+    await archiveEvents(
+      "issue",
+      "2015",
+      EARLIER,
+      1,
+      contributionEventsPayload("issueContributions", [issue(1), issue(2)]),
+    );
+    await archiveEvents(
+      "issue",
+      "2015",
+      LATER,
+      1,
+      contributionEventsPayload("issueContributions", [issue(1)], {
+        totalCount: 2,
+        endCursor: "Y3Vy",
+      }),
+    );
+
+    const replayed = await replayContributionEvents(env.DB, env.RAW, "issue", "2015", "bendrucker");
+
+    expect(replayed).toMatchObject({ fetchedAt: EARLIER, truncated: false });
+    expect(await count("issues")).toEqual({ total: 2 });
+  });
+
+  it("returns null for a year never crawled", async () => {
+    await expect(
+      replayContributionEvents(env.DB, env.RAW, "issue", "2011", "bendrucker"),
+    ).resolves.toBeNull();
   });
 });
