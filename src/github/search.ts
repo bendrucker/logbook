@@ -2,7 +2,7 @@ import type { z } from "zod";
 import type { GraphQLOptions } from "./client";
 import { cursorPages } from "./pages";
 import { ISSUE_SEARCH, PULL_REQUEST_SEARCH, REVIEWED_PULL_REQUEST_SEARCH } from "./queries";
-import { followReviews, type ReviewsPage } from "./reviews";
+import { followReviews, type ReviewsFailure, type ReviewsPage } from "./reviews";
 import {
   issueSearchPage,
   pullRequestSearchPage,
@@ -38,6 +38,9 @@ export interface SearchPageResult<T> {
   // Follow-up responses that read a pull request's reviews past its nested
   // page. Empty for every kind but the reviewed-PR search.
   reviewPages: ReviewsPage[];
+  // A follow-up that failed partway through the page. The pager yields the
+  // page with what it read and throws the failure's error after it.
+  failure: ReviewsFailure | null;
 }
 
 export interface SearchOptions extends GraphQLOptions {
@@ -73,6 +76,7 @@ async function* searchPages<T>(options: DocumentOptions<T>): AsyncGenerator<Sear
       rateLimit,
       body,
       reviewPages: [],
+      failure: null,
     };
   }
 }
@@ -98,7 +102,17 @@ export async function* reviewedPullRequestPages(
   });
 
   for await (const result of pages) {
-    yield followPage(result, options);
+    // Each page's follow-ups finish before the next page is requested, so the
+    // budget sees their cost before it admits the search's next page.
+    // ast-grep-ignore: await-in-for-of
+    const followed = await followPage(result, options);
+    // The page goes out before the failure does, so the search page and the
+    // follow-ups read before it are archived and normalized rather than lost
+    // with the request that failed.
+    yield followed;
+    if (followed.failure !== null) {
+      throw followed.failure.error;
+    }
   }
 }
 
@@ -108,15 +122,22 @@ async function followPage(
 ): Promise<SearchPageResult<ReviewedPullRequestNode>> {
   const nodes: ReviewedPullRequestNode[] = [];
   const reviewPages: ReviewsPage[] = [];
+  let failure: ReviewsFailure | null = null;
   // One pull request at a time, so the budget sees each follow-up's cost
-  // before it admits the next.
+  // before it admits the next. A failure leaves the pull requests after it with
+  // only their nested pages.
   const pending = [...result.nodes];
   let node = pending.shift();
   while (node !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
-    const followed = await followReviews(node, options);
-    nodes.push(followed.node);
-    reviewPages.push(...followed.pages);
+    if (failure !== null) {
+      nodes.push(node);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      const followed = await followReviews(node, options);
+      nodes.push(followed.node);
+      reviewPages.push(...followed.pages);
+      ({ failure } = followed);
+    }
     node = pending.shift();
   }
 
@@ -125,6 +146,7 @@ async function followPage(
     nodes,
     truncated: result.truncated || nodes.some(reviewsTruncated),
     reviewPages,
+    failure,
   };
 }
 

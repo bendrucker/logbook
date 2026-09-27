@@ -137,6 +137,40 @@ describe("syncWindow", () => {
     expect(await readWatermark(env.DB, "pr-reviewed")).toBeNull();
   });
 
+  it("keeps a page and its follow-ups when a later follow-up fails", async () => {
+    const outran = (id: number) =>
+      reviewedPullRequest(id, {
+        reviews: {
+          totalCount: 2,
+          pageInfo: { hasNextPage: true, endCursor: `cmV2-${id}` },
+          nodes: [review(id)],
+        },
+      });
+    const failure = { errors: [{ message: "Something went wrong" }], data: null };
+    const { fetch } = sequence([
+      () => searchResponse([outran(7), outran(9)]),
+      () => jsonResponse(reviewsPayload([review(8)], { totalCount: 2 })),
+      () => jsonResponse(failure),
+    ]);
+
+    const result = await syncWindow(env, "pr-reviewed", WINDOW, options(fetch));
+
+    expect(result).toMatchObject({ pages: 1, truncated: true, resumeAt: null });
+    expect(result.error).toContain("GraphQLQueryError");
+    const listed = await env.RAW.list();
+    expect(listed.objects.map((object) => object.key)).toEqual([
+      searchKey("pr-reviewed", WINDOW.key, FETCHED_AT, 1),
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_7", 1),
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_9", 1),
+    ]);
+    const failed = await env.RAW.get(
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_9", 1),
+    );
+    await expect(failed?.json()).resolves.toEqual(failure);
+    expect(await count("reviews")).toEqual({ total: 3 });
+    expect(await readWatermark(env.DB, "pr-reviewed")).toBeNull();
+  });
+
   it("keeps the bytes of a page it could not parse and writes no rows", async () => {
     const body = { data: { search: { nodes: "not a list" }, rateLimit: rateLimit() } };
     const { fetch } = sequence([() => jsonResponse(body)]);

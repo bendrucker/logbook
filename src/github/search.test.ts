@@ -226,6 +226,82 @@ describe("search entry points", () => {
     expect(page?.reviewPages).toMatchObject([{ pullRequest: "PR_7", page: 1 }]);
   });
 
+  it("yields a page whose follow-up failed before throwing the failure", async () => {
+    const outran = (id: number) =>
+      reviewedPullRequest(id, {
+        reviews: {
+          totalCount: 2,
+          pageInfo: { hasNextPage: true, endCursor: `cmV2-${id}` },
+          nodes: [review(id)],
+        },
+      });
+    const failure = { errors: [{ message: "Something went wrong" }], data: null };
+    let served = 0;
+    const stub = stubFetch(() => {
+      served += 1;
+      if (served === 1) {
+        return searchResponse([outran(7), outran(9)]);
+      }
+      return served === 2
+        ? jsonResponse(reviewsPayload([review(8)], { totalCount: 2 }))
+        : jsonResponse(failure);
+    });
+
+    const iterator = reviewedPullRequestPages({
+      token: "t0ken",
+      searchQuery: "is:pr reviewed-by:bendrucker created:2026-08-01..2026-08-31",
+      login: "bendrucker",
+      fetch: stub.fetch,
+      endpoint: ENDPOINT,
+    });
+    const first = await iterator.next();
+    const page = first.done === true ? undefined : first.value;
+
+    expect(page?.nodes.map((node) => node.reviews.nodes.map((each) => each.id))).toEqual([
+      ["PRR_7", "PRR_8"],
+      ["PRR_9"],
+    ]);
+    expect(page?.reviewPages).toMatchObject([{ pullRequest: "PR_7", page: 1 }]);
+    expect(page?.failure).toMatchObject({ pullRequest: "PR_9", page: 1 });
+    expect(page?.truncated).toBe(true);
+
+    const error = await iterator.next().catch((thrown: unknown) => thrown);
+    expect(error).toBe(page?.failure?.error);
+    expect(stub.requests).toHaveLength(3);
+  });
+
+  it("fails a follow-up that echoes the cursor it started from", async () => {
+    const node = reviewedPullRequest(7, {
+      reviews: {
+        totalCount: 3,
+        pageInfo: { hasNextPage: true, endCursor: "cmV2" },
+        nodes: [review(7)],
+      },
+    });
+    let served = 0;
+    const stub = stubFetch(() => {
+      served += 1;
+      return served === 1
+        ? searchResponse([node])
+        : jsonResponse(reviewsPayload([review(8)], { totalCount: 3, endCursor: "cmV2" }));
+    });
+
+    const iterator = reviewedPullRequestPages({
+      token: "t0ken",
+      searchQuery: "is:pr reviewed-by:bendrucker created:2026-08-01..2026-08-31",
+      login: "bendrucker",
+      fetch: stub.fetch,
+      endpoint: ENDPOINT,
+    });
+    const first = await iterator.next();
+
+    expect(first.value?.reviewPages).toEqual([]);
+    expect(first.value?.failure?.error).toBeInstanceOf(RepeatedCursorError);
+    expect(first.value?.failure?.error).toMatchObject({ cursor: "cmV2" });
+    await expect(iterator.next()).rejects.toBeInstanceOf(RepeatedCursorError);
+    expect(stub.requests).toHaveLength(2);
+  });
+
   it("stops at the result cap rather than following a cursor GitHub will reject", async () => {
     let served = 0;
     const stub = stubFetch(() => {

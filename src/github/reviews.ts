@@ -21,9 +21,20 @@ export interface ReviewsPage {
   body: string;
 }
 
+// A follow-up request that failed, and the page of the pull request's reviews
+// it would have been.
+export interface ReviewsFailure {
+  pullRequest: string;
+  page: number;
+  error: unknown;
+}
+
 export interface FollowedReviews {
   node: ReviewedPullRequestNode;
   pages: ReviewsPage[];
+  // Set when a follow-up failed. The node and pages still hold what the
+  // requests before it read, which were already paid for.
+  failure: ReviewsFailure | null;
 }
 
 export interface FollowReviewsOptions extends GraphQLOptions {
@@ -40,7 +51,7 @@ export async function followReviews(
 ): Promise<FollowedReviews> {
   const pageInfo = node.reviews.pageInfo;
   if (pageInfo?.hasNextPage !== true) {
-    return { node, pages: [] };
+    return { node, pages: [], failure: null };
   }
 
   const pages = cursorPages({
@@ -56,12 +67,17 @@ export async function followReviews(
 
   const read: PullRequestReviewsPage[] = [];
   const archived: ReviewsPage[] = [];
-  for await (const { page, data, body } of pages) {
-    read.push(data);
-    archived.push({ pullRequest: node.id, page, body });
+  let failure: ReviewsFailure | null = null;
+  try {
+    for await (const { page, data, body } of pages) {
+      read.push(data);
+      archived.push({ pullRequest: node.id, page, body });
+    }
+  } catch (error) {
+    failure = { pullRequest: node.id, page: archived.length + 1, error };
   }
 
-  return { node: withReviews(node, read), pages: archived };
+  return { node: withReviews(node, read), pages: archived, failure };
 }
 
 // The pull request with the follow-up pages' reviews appended, which is how

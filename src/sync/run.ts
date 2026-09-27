@@ -9,7 +9,7 @@ import {
 } from "../github/calendar";
 import { type ContributionsResult, fetchContributions } from "../github/contributions";
 import { archiveContributions, archiveSearchPage, archiveSearchReviews } from "../github/raw";
-import type { ReviewsPage } from "../github/reviews";
+import type { ReviewsFailure, ReviewsPage } from "../github/reviews";
 import { issuePages, pullRequestPages, reviewedPullRequestPages } from "../github/search";
 import type { ContributionsCollection } from "../github/schema";
 import type { EventKind } from "../github/windows";
@@ -98,6 +98,7 @@ export async function syncWindow(
   const spent = options.budget.spent;
   let result = CLEAN;
   let resumeAt: string | null = null;
+  let followUp: ReviewsFailure | null = null;
 
   try {
     const pages = searchPages(kind, {
@@ -114,6 +115,7 @@ export async function syncWindow(
     while (page.done !== true) {
       // eslint-disable-next-line no-await-in-loop
       result = await ingest(env, kind, window, fetchedAt, page.value, result);
+      followUp = page.value.failure;
       // eslint-disable-next-line no-await-in-loop
       page = await pages.next();
     }
@@ -127,7 +129,7 @@ export async function syncWindow(
   } catch (error) {
     result = { ...result, error: describe(error) };
     resumeAt = stoppedUntil(error, now);
-    await archiveFailure(env.RAW, kind, window, fetchedAt, result.pages + 1, error);
+    await archiveFailure(env.RAW, { kind, window: window.key, fetchedAt }, result, followUp, error);
   } finally {
     result = charged(result, options.budget, spent);
     await finishRun(env.DB, id, result);
@@ -308,6 +310,7 @@ export interface Page {
   truncated: boolean;
   nodes: SearchPageNodes;
   reviewPages: readonly ReviewsPage[];
+  failure: ReviewsFailure | null;
 }
 
 async function ingest(
@@ -340,20 +343,31 @@ async function ingest(
   };
 }
 
-// Every failure carrying bytes carries the ones that broke the run, and the
-// page it would have been is the next one the window never got to.
+interface FetchKey {
+  kind: EventKind;
+  window: string;
+  fetchedAt: string;
+}
+
+// Every failure carrying bytes carries the ones that broke the run. A review
+// follow-up's lands beside the search page it was completing, as the page of
+// that pull request's reviews it would have been. Any other failure is the
+// next search page the window never got to.
 function archiveFailure(
   bucket: R2Bucket,
-  kind: EventKind,
-  window: SearchWindow,
-  fetchedAt: string,
-  page: number,
+  fetch: FetchKey,
+  result: RunResult,
+  followUp: ReviewsFailure | null,
   error: unknown,
 ): Promise<unknown> {
   if (!(error instanceof GitHubResponseError)) {
     return Promise.resolve(null);
   }
-  return archiveSearchPage(bucket, { kind, window: window.key, fetchedAt, page, body: error.body });
+  if (followUp !== null && followUp.error === error) {
+    const { pullRequest, page } = followUp;
+    return archiveSearchReviews(bucket, { ...fetch, pullRequest, page, body: error.body });
+  }
+  return archiveSearchPage(bucket, { ...fetch, page: result.pages + 1, body: error.body });
 }
 
 interface PagerOptions extends GraphQLOptions {
@@ -382,6 +396,7 @@ interface PagerResult<Node> {
   truncated: boolean;
   nodes: Node[];
   reviewPages?: readonly ReviewsPage[];
+  failure?: ReviewsFailure | null;
 }
 
 export async function* kinded<Node>(
@@ -395,6 +410,7 @@ export async function* kinded<Node>(
       truncated: result.truncated,
       nodes: toNodes(result.nodes),
       reviewPages: result.reviewPages ?? [],
+      failure: result.failure ?? null,
     };
   }
 }
