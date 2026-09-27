@@ -25,7 +25,7 @@ export interface RunResult {
   // Something worth reading that did not stop the run, which today means the
   // contributions cross-check disagreeing with the event tables.
   note: string | null;
-  // Points the run's requests spent, which the rate budget sums into its ledger.
+  // Points the run's requests spent.
   cost: number;
   // The last `remaining` GitHub reported to the run, null for a run that sent
   // nothing.

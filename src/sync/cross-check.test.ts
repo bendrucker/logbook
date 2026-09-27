@@ -14,7 +14,6 @@ import { upsertIssues } from "../store/issues";
 import { upsertReviews } from "../store/reviews";
 import { archivedYear, crossCheck } from "./cross-check";
 
-// Nothing but reviews, so every other total agrees at zero.
 function reported(reviews: number) {
   return contributionsCollection(0, undefined, {
     totalPullRequestContributions: 0,
@@ -26,8 +25,6 @@ function reported(reviews: number) {
 describe("crossCheck", () => {
   beforeEach(async () => {
     await seedRepository(env.DB);
-    // Two pull requests first reviewed in 2026, one of them twice, and one
-    // first reviewed in 2025 that drew another review in 2026.
     await upsertReviews(env.DB, [
       review({ id: "PRR_a", pullRequestNumber: 2, submittedAt: "2026-03-01T00:00:00Z" }),
       review({ id: "PRR_b", pullRequestNumber: 2, submittedAt: "2026-03-02T00:00:00Z" }),
@@ -86,7 +83,6 @@ describe("crossCheck against archived connection pages", () => {
     ]);
   });
 
-  // Nothing but issues, so every other total agrees at zero.
   function issuesReported(issues: number) {
     return contributionsCollection(0, undefined, {
       totalPullRequestContributions: 0,

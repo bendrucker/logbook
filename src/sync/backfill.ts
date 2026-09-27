@@ -60,7 +60,6 @@ export function parseMonth(value: string): Month {
   return { year, month };
 }
 
-// Enqueues the roots from `from` to the present and drains the kind's frontier.
 // Roots already in the frontier keep their status, so calling again with the
 // same `from` carries on where the last call stopped.
 export async function backfill(
@@ -108,9 +107,6 @@ export async function drainBackfill(env: Env, options: SyncOptions): Promise<voi
   }
 }
 
-// Search windows are months, and the windows of anything read off the
-// contributions collection are years, all from the month `from` names through
-// the present.
 function roots(kind: SyncKind, from: Month, now: Date): string[] {
   if (kind === "contributions" || isContributionEventsKind(kind)) {
     const last = now.getUTCFullYear();
@@ -130,8 +126,6 @@ function crawlSource(env: Env, kind: SyncKind, options: SyncOptions): CrawlSourc
       split,
     };
   }
-  // A connection window narrows down the same calendar as the commit windows
-  // when it holds more than a unit's pages or reads short of its count.
   if (isContributionEventsKind(kind)) {
     return {
       fetch: async (window) =>
@@ -139,8 +133,6 @@ function crawlSource(env: Env, kind: SyncKind, options: SyncOptions): CrawlSourc
       split,
     };
   }
-  // A search window matching more than the cap narrows to day ranges, days,
-  // and hours until each one fits.
   return {
     fetch: async (window) => unitFetch(await searchCreated(env, kind, window, options)),
     split: (window) => splitCreatedWindow(window, now),

@@ -18,7 +18,6 @@ function options(fetch: typeof globalThis.fetch): GraphQLOptions {
   return { fetch, endpoint: ENDPOINT };
 }
 
-// Records what the client asked and told, and refuses when told to.
 function recordingBudget(refusal?: Error) {
   const admitted: number[] = [];
   const readings: RateLimit[] = [];

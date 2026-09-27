@@ -63,7 +63,6 @@ function start(span: Span): Temporal.PlainDateTime {
   return span.unit === "hours" ? span.start : firstDay(span).toPlainDateTime();
 }
 
-// The first instant after the window.
 function after(span: Span): Temporal.PlainDateTime {
   switch (span.unit) {
     case "month":
@@ -179,8 +178,7 @@ export function monthlyWindows(from: Month, now: Date): CreatedWindow[] {
   return windows;
 }
 
-// The narrower windows a truncated one is fetched again as, leaving out any yet
-// to start. An hour has none.
+// The narrower windows a truncated one is fetched again as. An hour has none.
 export function splitCreatedWindow(value: string, now: Date): string[] {
   return children(spanOf(value)).flatMap((child) =>
     startsAfter(start(child), now) ? [] : key(child),

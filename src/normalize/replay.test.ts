@@ -56,8 +56,7 @@ function archive(
   );
 }
 
-// One day node per entry. `repositories` above the number listed stands for
-// repositories the window dropped.
+// `repositories` above the number listed stands for repositories the window dropped.
 function commitsPayload(
   entries: readonly (readonly [string, string, number])[],
   repositories?: number,
@@ -428,8 +427,6 @@ describe("replayContributions", () => {
   it("adds up the parts of a day fetched in halves", async () => {
     const put = (window: string, payload: unknown) =>
       env.RAW.put(contributionsKey(window, LATER), JSON.stringify(payload));
-    // The day listed repo-0 whole and dropped repo-1, which committed in both
-    // halves.
     await put("2015-07-14", commitsPayload([["repo-0", "2015-07-14", 6]], 2));
     await put(
       "2015-07-14T00--2015-07-14T12",

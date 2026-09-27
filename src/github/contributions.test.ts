@@ -111,9 +111,6 @@ describe("fetchContributions", () => {
   });
 });
 
-// Cut from archived bodies and trimmed to a few repositories. Where trimming
-// would itself read as a dropped repository, the totals were rewritten to match
-// what was kept.
 function archived(body: { data: unknown }) {
   const { user } = contributionsSchema.parse(body.data);
   if (user === null) {

@@ -229,9 +229,9 @@ describe("backfill", () => {
   });
 });
 
-// Commits the fake source knows about. A window wider than `WIDEST_WHOLE_DAYS`
-// lists only its first repository, the way a window past `maxRepositories`
-// drops the rest, and reports the totals that give the loss away.
+// A window wider than `WIDEST_WHOLE_DAYS` lists only its first repository, the
+// way a window past `maxRepositories` drops the rest, and reports the totals
+// that give the loss away.
 const COMMITS = [
   { name: "repo-0", day: "2014-02-10", count: 2 },
   { name: "repo-1", day: "2014-02-20", count: 3 },
@@ -360,8 +360,6 @@ describe("backfill contributions", () => {
     expect(result.pending).toBe(0);
     expect(result.irreducible).toHaveLength(24);
     expect(result.irreducible.at(0)).toBe("2014-02-10T00--2014-02-10T01");
-    // The day, its first half, and its 07:00 hour each report the same two
-    // commits, which the day counts once.
     expect(await commitDays()).toEqual([
       { repository_id: "R_repo-0", day: "2014-02-10", commit_count: 2 },
     ]);

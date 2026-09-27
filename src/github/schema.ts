@@ -135,8 +135,7 @@ export function reviewsTruncated(node: ReviewedPullRequestNode): boolean {
   return node.reviews.totalCount > node.reviews.nodes.length;
 }
 
-// One page of the follow-up that reads a pull request's reviews past the
-// nested page. A null node is a pull request GitHub no longer returns.
+// A null node is a pull request GitHub no longer returns.
 export const pullRequestReviewsPage = z.object({
   node: z.object({ reviews: reviewConnection }).nullable(),
 });
@@ -198,10 +197,10 @@ function connection<T extends z.ZodType>(item: T) {
   return z.object({ totalCount: z.number(), pageInfo, nodes: nodes(item) });
 }
 
-// Each connection wraps the node it counts in a contribution object. The
-// wrapper comes off here, so a connection page hands on the nodes a search page
-// does and normalization cannot tell which enumeration found them. A null user
-// stays null, since only the caller knows whose login it asked for.
+// The wrapper comes off here, so a connection page hands on the nodes a
+// search page does and normalization cannot tell which enumeration found
+// them. A null user stays null, since only the caller knows whose login it
+// asked for.
 function contributionConnectionPage<Collection, Node>(
   collection: z.ZodType<Collection>,
   unwrap: (collection: Collection) => ContributionConnectionPage<Node>,

@@ -5,8 +5,6 @@
 // decade of history is a loop out here rather than one long request in there.
 // A call the rate budget or a secondary limit stopped names when to resume,
 // and the loop sleeps until then.
-//
-// Usage: ADMIN_TOKEN=... bun run backfill <base-url> [kind] [--from YYYY-MM]
 
 import { parseArgs } from "node:util";
 import { z } from "zod";

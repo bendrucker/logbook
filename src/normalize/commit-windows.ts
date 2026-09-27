@@ -41,21 +41,18 @@ export class ArchivedWindows {
     }
   }
 
-  // `root` and the windows under it form the tree the crawl split them into,
-  // with the newest fetch standing for each. A window from a day up lists whole
-  // days, so its children hold the same count for a repository's day and any
-  // of them is the day's count. A window narrower than a day counts part of
-  // each day, so its siblings add up to the day. Taking the larger of a
-  // window's own count and its children's sum covers both: a parent that
-  // listed the day wins over children still partly fetched, and children that
-  // recovered a repository the parent dropped supply it.
+  // A window from a day up lists whole days, so its children hold the same
+  // count for a repository's day and any of them is the day's count. A window
+  // narrower than a day counts part of each day, so its siblings add up to the
+  // day. Taking the larger of a window's own count and its children's sum
+  // covers both: a parent that listed the day wins over children still partly
+  // fetched, and children that recovered a repository the parent dropped
+  // supply it.
   combine(root: string): CombinedWindows {
     const archived = this.#windows;
     const fetches = [...archived.values()].map((window) => window.fetchedAt).toSorted();
     const fallback = new Date(fetches.at(-1) ?? 0);
 
-    // A window clipped at the instant it was fetched split into the children
-    // that had started by then.
     const children = (key: string): string[] => {
       const at = archived.get(key)?.fetchedAt;
       return splitContributions(key, at === undefined ? fallback : new Date(at)).map(

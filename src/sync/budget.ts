@@ -180,8 +180,7 @@ export interface BudgetOptions {
 }
 
 // The current window started less than an hour before now, so the trailing
-// hour holds every run that could count against it. Runs this invocation
-// starts come later and reach the budget through `spend` instead.
+// hour holds every run that could count against it.
 export async function openBudget(
   db: D1Database,
   limits: BudgetLimits,

@@ -158,8 +158,7 @@ export function yearWindow(year: number, now: Date): ContributionsWindow {
   return window({ unit: "year", year }, now);
 }
 
-// The narrower windows a truncated one is fetched again as, leaving out any yet
-// to start. An hour has none.
+// The narrower windows a truncated one is fetched again as. An hour has none.
 export function splitContributions(value: string, now: Date): ContributionsWindow[] {
   return children(spanOf(value)).flatMap((child) =>
     startsAfter(start(child), now) ? [] : window(child, now),
@@ -167,8 +166,7 @@ export function splitContributions(value: string, now: Date): ContributionsWindo
 }
 
 // A window narrower than a day counts only part of each day's commits, so its
-// rows add up with its siblings' rather than standing alone. Null for a day or
-// anything wider.
+// rows add up with its siblings' rather than standing alone.
 export function enclosingDay(value: string): string | null {
   const span = parse(value);
   return span?.unit === "hours" ? span.start.toPlainDate().toString() : null;

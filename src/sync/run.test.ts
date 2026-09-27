@@ -60,8 +60,6 @@ function count(table: string): Promise<{ total: number } | null> {
   return readRow<{ total: number }>(env.DB, `SELECT COUNT(*) AS total FROM ${table}`);
 }
 
-// A page whose reading leaves the budget under its floor, so the request after
-// it is refused.
 function lastAffordable(nodes: readonly unknown[]): Response {
   const payload = searchPayload(nodes, { endCursor: "cursor" });
   return jsonResponse({

@@ -93,8 +93,7 @@ export async function replaySearchWindow(
     prefixes.push(...listing.delimitedPrefixes);
   }
 
-  // The fetch is chosen from its keys and its last page, so nothing is written
-  // until the replay knows which fetch it is writing.
+  // Nothing is written until the replay knows which fetch it is writing.
   const fetch = await selectFetch(prefixes, (candidate) =>
     listFetch(bucket, kind, prefix, candidate),
   );
@@ -105,9 +104,7 @@ export async function replaySearchWindow(
   return { fetchedAt: fetch.fetchedAt, ...(await writeFetch(db, bucket, fetch)) };
 }
 
-// Replays `window` and every narrower window archived under it, which is how
-// a year rebuilds from the windows the crawl split it into and how a live run
-// totals a day it fetched in parts.
+// Replays `window` and every narrower window archived under it.
 export async function replayContributions(
   db: D1Database,
   bucket: R2Bucket,
@@ -196,8 +193,7 @@ export interface ArchivedContributionEvents {
 }
 
 // The connection pages `window` and the windows the crawl split it into
-// archived, read without writing anything. The cross-check reads a year's
-// pages through here to name the events behind a gap.
+// archived, read without writing anything.
 export async function readContributionEvents(
   bucket: R2Bucket,
   kind: EventKind,
@@ -375,8 +371,7 @@ interface RawPage {
   body: string;
 }
 
-// A search fetch as its listing and last page describe it, before any other
-// page is read.
+// A search fetch before any other page is read.
 interface SearchFetch {
   fetchedAt: string;
   kind: EventKind;
@@ -513,9 +508,8 @@ function searchPageRead(
   };
 }
 
-// Completes each reviewed pull request from the follow-ups archived for it. A
-// pull request with more reviews than its nested page and its follow-ups read
-// shorts the window on its own. The live pager applies the same check.
+// A pull request with more reviews than its nested page and its follow-ups
+// read shorts the window on its own.
 async function withFollowUps(
   bucket: R2Bucket,
   page: SearchPageRead,
@@ -603,8 +597,7 @@ async function* keys(bucket: R2Bucket, prefix: string): AsyncGenerator<string> {
   }
 }
 
-// Reads and parses each key in order, at most `limit` reads open, keeping the
-// parsed page rather than the body it came from.
+// Concurrent reads still come back in key order.
 async function readParsed<T>(
   bucket: R2Bucket,
   pageKeys: readonly string[],

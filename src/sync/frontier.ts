@@ -10,8 +10,8 @@ export interface UnitFetch {
   pages: number;
   rowsChanged: number;
   cost: number;
-  // The response said it dropped data. Its rows still land, because truncation
-  // drops whole items and never corrupts the ones returned.
+  // A truncated response's rows still land, because truncation drops whole
+  // items and never corrupts the ones returned.
   truncated: boolean;
   error: string | null;
   // Set when the rate budget or a secondary limit stopped the fetch: the
@@ -129,7 +129,7 @@ export interface FrontierStatus {
   irreducible: string[];
 }
 
-// Every kind in two reads, keyed by kind. A kind with no units reads as absent.
+// A kind with no units reads as absent.
 export async function frontierStatus(db: D1Database): Promise<Map<string, FrontierStatus>> {
   const [pending, irreducible] = await Promise.all([
     db

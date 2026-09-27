@@ -32,8 +32,8 @@ export interface ReviewsFailure {
 export interface FollowedReviews {
   node: ReviewedPullRequestNode;
   pages: ReviewsPage[];
-  // Set when a follow-up failed. The node and pages still hold what the
-  // requests before it read, which were already paid for.
+  // The node and pages still hold what earlier requests already read and paid
+  // for, even after a follow-up fails.
   failure: ReviewsFailure | null;
 }
 
@@ -42,9 +42,8 @@ export interface FollowReviewsOptions extends GraphQLOptions {
   login: string;
 }
 
-// Reads the reviews a pull request's nested page announced past its end. No
-// pull request comes near a hundred reviews by one login, so this almost never
-// sends a request.
+// No pull request comes near a hundred reviews by one login, so this
+// almost never sends a request.
 export async function followReviews(
   node: ReviewedPullRequestNode,
   options: FollowReviewsOptions,
@@ -80,9 +79,8 @@ export async function followReviews(
   return { node: withReviews(node, read), pages: archived, failure };
 }
 
-// The pull request with the follow-up pages' reviews appended, which is how
-// both the live sync and replay see it. The count stays the nested page's, so
-// `reviewsTruncated` still flags one the follow-up left short.
+// The count stays the nested page's, so `reviewsTruncated` still flags one
+// the follow-up left short.
 export function withReviews(
   node: ReviewedPullRequestNode,
   pages: readonly PullRequestReviewsPage[],

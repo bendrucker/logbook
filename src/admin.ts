@@ -18,7 +18,6 @@ const FAILURE_LIMIT = 10;
 interface KindStatus {
   watermark: Watermark | null;
   lastRun: SyncRun | null;
-  // What the backfill frontier still holds for the kind.
   frontier: FrontierStatus;
 }
 

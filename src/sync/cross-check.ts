@@ -16,9 +16,8 @@ export interface ArchivedYear {
   reviews?: { pullRequests: number; own: number };
 }
 
-// The connection pages the crawl archived for `year`, each kind's windows
-// combined. The connection backfill already fetched them, so the check sends
-// no request.
+// The connection backfill already fetched these pages, so this check sends no
+// request.
 export async function archivedYear(
   bucket: R2Bucket,
   year: number,
@@ -69,20 +68,20 @@ async function archivedNodes(
   return nodes;
 }
 
-// GitHub's own yearly totals against what the event tables hold. A search
-// window that lost rows shows up here and nowhere else. It is recorded rather
-// than failed on: `restrictedContributionsCount` counts contributions the token
-// cannot see, so a gap can be a visibility difference instead of lost rows.
+// A search window that lost rows shows up here and nowhere else. It is
+// recorded rather than failed on: `restrictedContributionsCount` counts
+// contributions the token cannot see, so a gap can be a visibility
+// difference instead of lost rows.
 //
-// Each total is compared like with like. GitHub counts a pull request once
-// however many reviews it drew, including reviews on the login's own pull
-// requests, which the reviews table leaves out. So the review total is set
-// against distinct pull requests by the year of their first review, after
-// taking off the own ones the archived review pages count.
+// GitHub counts a pull request once however many reviews it drew, including
+// reviews on the login's own pull requests, which the reviews table leaves
+// out. So the review total is set against distinct pull requests by the year
+// of their first review, after taking off the own ones the archived review
+// pages count.
 //
-// An archive listing exactly as many events as GitHub reports is GitHub's own
-// list, so issues and pull requests compare as sets of node IDs and the note
-// names the events behind a gap. An archive of another size is stale or
+// An archive listing exactly as many events as GitHub reports is GitHub's
+// own list, so issues and pull requests compare as sets of node IDs and the
+// note names the events behind a gap. An archive of another size is stale or
 // partial, and the comparison falls back to the totals alone.
 export async function crossCheck(
   db: D1Database,

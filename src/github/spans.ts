@@ -77,7 +77,7 @@ export function dayHalves(day: Temporal.PlainDate): HourRange[] {
   return hourRanges(day.toPlainDateTime(), 24, HALF_DAY_HOURS);
 }
 
-// A half day splits into its hours. An hour has nothing narrower.
+// An hour has nothing narrower.
 export function splitHourRange(range: HourRange): HourRange[] {
   return range.hours === 1 ? [] : hourRanges(range.start, range.hours, 1);
 }

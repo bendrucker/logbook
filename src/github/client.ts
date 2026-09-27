@@ -113,8 +113,7 @@ export function validate<T>(schema: z.ZodType<T>, data: unknown, body: string): 
   return parsed.data;
 }
 
-// Asked before every request and told what each response cost. The sync's rate
-// budget implements it, which keeps the policy on when to stop out of the client.
+// Asked before every request and told what each response cost.
 export interface RequestBudget {
   // Resolves once the request may go out, or throws to refuse it.
   admit(): Promise<void>;

@@ -49,12 +49,12 @@ export interface SearchWindow {
   // The instant the window leaves synced. The watermark takes it once every
   // page is in R2 and every row is in D1.
   through: string;
-  // Whether a truncated fetch has narrower windows to be fetched again as.
-  // Nothing under it is synced until they land, so the watermark waits.
+  // Nothing under a split window is synced until its children land, so the
+  // watermark waits.
   splits: boolean;
 }
 
-// What a backfill or the cron takes. Each opens its own budget.
+// Each opens its own budget.
 export interface InvocationOptions extends GraphQLOptions {
   now?: Date;
   clock?: Clock;
@@ -138,9 +138,9 @@ export async function syncWindow(
   return { ...result, fetchedAt, resumeAt };
 }
 
-// The hourly run's current year. A truncated window is fetched again a
-// narrower window at a time, down the calendar until each one comes back whole,
-// which recovers the days a busy repository's yearly page dropped.
+// A truncated window is fetched again a narrower window at a time, down the
+// calendar until each one comes back whole, which recovers the days a busy
+// repository's yearly page dropped.
 export function syncContributions(
   env: Env,
   year: number,

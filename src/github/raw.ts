@@ -46,8 +46,7 @@ export function searchReviewsKey(
   return `${searchReviewsPrefix(kind, window, fetchedAt)}${id}/${name}${OBJECT_SUFFIX}`;
 }
 
-// The pull request a key `searchReviewsKey` built completes, read back off a
-// listing of its fetch. Null for a search page.
+// Null for a search page.
 export function searchReviewsPullRequest(fetchPrefix: string, key: string): string | null {
   const match = /^reviews\/([^/]+)\/\d+\.json$/.exec(key.slice(fetchPrefix.length));
   return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
@@ -88,8 +87,6 @@ export function contributionEventsYearPrefix(kind: EventKind, year: string): str
   return `raw/contribution-events/${kind}/${year}`;
 }
 
-// The window, fetch, and page a key `contributionEventsKey` built, read back
-// off a listing.
 export function contributionEventsObject(
   key: string,
 ): { window: string; fetchedAt: string; page: number } | null {
@@ -115,7 +112,6 @@ export function contributionsYearPrefix(year: string): string {
   return `raw/contributions/${year}`;
 }
 
-// The window and fetch a key `contributionsKey` built, read back off a listing.
 export function contributionsObject(key: string): { window: string; fetchedAt: string } | null {
   const match = /^raw\/contributions\/([^/]+)\/([^/]+)\.json$/.exec(key);
   if (match === null) {
