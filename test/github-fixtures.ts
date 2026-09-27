@@ -178,7 +178,6 @@ export function contributionsPayload(
   };
 }
 
-// One repository committed to on each of `days`.
 export function commitDaysPayload(days: readonly string[]) {
   return contributionsPayload(1, days.length, {
     commitContributionsByRepository: [

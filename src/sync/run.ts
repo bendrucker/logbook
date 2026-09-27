@@ -140,7 +140,7 @@ export async function syncContributions(
 
     // A truncated year is fetched again a quarter at a time, which recovers the
     // days a busy repository's yearly page dropped. The quarters run in turn so
-    // the rate-limit floor stops the walk the way it stops a search window.
+    // the rate-limit floor stops the walk.
     if (truncated) {
       truncated = false;
       const quarters = quarterWindows(year, now);
