@@ -48,7 +48,7 @@ One call walks `BACKFILL_WINDOWS` monthly windows and answers with `next`, which
 
 ## Secrets
 
-Worker secrets are set with `wrangler secret put`, never committed. `wrangler dev` reads them from `.dev.vars`, which is gitignored. `.dev.vars.example` lists the names with empty values. `GITHUB_TOKEN` signs every GraphQL and search request. It is a classic token with no scopes, so the hub sees public activity only. Granting it `repo` scope would pull private repositories into the archive and the feed, which the [design](docs/design.md#visibility) rules out. `ADMIN_TOKEN` guards `/admin/sync`, `/admin/backfill`, and `/admin/lake`, and all three answer 404 while it is unset so an unconfigured deployment has no admin surface. Public, non-sensitive identifiers belong in `wrangler.jsonc` as `vars`: `GITHUB_LOGIN` is whose history the hub reads, and `BACKFILL_WINDOWS` is how many windows one backfill call walks.
+Worker secrets are set with `wrangler secret put`, never committed. `wrangler dev` reads them from `.dev.vars`, which is gitignored. `.dev.vars.example` lists the names with empty values. `GITHUB_TOKEN` signs every GraphQL and search request. It is a classic personal access token with no scopes, so the hub sees public activity only. Granting it `repo` scope would pull private repositories into the archive and the feed, which the [design](docs/design.md#visibility) rules out. `ADMIN_TOKEN` guards `/admin/sync`, `/admin/backfill`, and `/admin/lake`, and all three answer 404 while it is unset so an unconfigured deployment has no admin surface. Public, non-sensitive identifiers belong in `wrangler.jsonc` as `vars`: `GITHUB_LOGIN` is whose history the hub reads, and `BACKFILL_WINDOWS` is how many windows one backfill call walks.
 
 ## Lake
 
