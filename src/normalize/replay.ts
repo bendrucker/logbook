@@ -2,9 +2,16 @@
 // change cost nothing: bump the shape, replay the archived pages, and the event
 // tables rebuild from responses already on disk.
 import { z } from "zod";
-import { contributionsTruncated } from "../github/contributions";
-import { contributionsPrefix, OBJECT_SUFFIX, searchPageNumber, searchPrefix } from "../github/raw";
+import { contributionsTruncated, QUARTERS, quarterKey } from "../github/contributions";
 import {
+  contributionsKey,
+  contributionsPrefix,
+  OBJECT_SUFFIX,
+  searchPageNumber,
+  searchPrefix,
+} from "../github/raw";
+import {
+  type ContributionsCollection,
   contributionsResponse,
   issueSearchPage,
   pullRequestSearchPage,
@@ -76,7 +83,7 @@ export async function replayContributions(
   bucket: R2Bucket,
   year: number,
 ): Promise<Replay | null> {
-  const prefix = contributionsPrefix(year);
+  const prefix = contributionsPrefix(String(year));
   const { keys } = await list(bucket, { prefix });
 
   // A fetch timestamp is an ISO string, so R2's lexicographic listing puts the
@@ -96,7 +103,52 @@ export async function replayContributions(
   const fetchedAt = key.slice(prefix.length, -OBJECT_SUFFIX.length);
   const rows = await normalizeContributions(db, collection, fetchedAt);
 
-  return { fetchedAt, truncated: contributionsTruncated(collection), rows };
+  // A sync that found the year truncated archived its quarters under the same
+  // fetch timestamp, and those hold the days the yearly page dropped.
+  const quarters = await readQuarters(bucket, year, fetchedAt);
+  if (quarters.length === 0) {
+    return { fetchedAt, truncated: contributionsTruncated(collection), rows };
+  }
+
+  const quarterRows = await Promise.all(
+    quarters.map((quarter) => normalizeContributions(db, quarter, fetchedAt)),
+  );
+
+  return {
+    fetchedAt,
+    truncated: quarters.some(contributionsTruncated),
+    rows: quarterRows.reduce(addRows, rows),
+  };
+}
+
+async function readQuarters(
+  bucket: R2Bucket,
+  year: number,
+  fetchedAt: string,
+): Promise<ContributionsCollection[]> {
+  const objects = await Promise.all(
+    QUARTERS.map((quarter) => bucket.get(contributionsKey(quarterKey(year, quarter), fetchedAt))),
+  );
+
+  return Promise.all(objects.flatMap((object) => (object === null ? [] : readCollection(object))));
+}
+
+async function readCollection(object: R2ObjectBody): Promise<ContributionsCollection> {
+  const { user } = parse(contributionsResponse, { key: object.key, body: await object.text() });
+  if (user === null) {
+    throw new RawValidationError(object.key, "the response carries no user", null);
+  }
+  return user.contributionsCollection;
+}
+
+function addRows(a: RowsChanged, b: RowsChanged): RowsChanged {
+  return {
+    repositories: a.repositories + b.repositories,
+    pullRequests: a.pullRequests + b.pullRequests,
+    reviews: a.reviews + b.reviews,
+    issues: a.issues + b.issues,
+    commitDays: a.commitDays + b.commitDays,
+  };
 }
 
 interface RawPage {

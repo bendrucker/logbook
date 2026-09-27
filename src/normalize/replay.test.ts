@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  commitDaysPayload,
   contributionsPayload,
   issue,
   pullRequest,
@@ -246,8 +247,8 @@ describe("replaySearchWindow", () => {
 
 describe("replayContributions", () => {
   it("normalizes the newest archived year", async () => {
-    await env.RAW.put(contributionsKey(2026, EARLIER), JSON.stringify(contributionsPayload(1)));
-    await env.RAW.put(contributionsKey(2026, LATER), JSON.stringify(contributionsPayload(3)));
+    await env.RAW.put(contributionsKey("2026", EARLIER), JSON.stringify(contributionsPayload(1)));
+    await env.RAW.put(contributionsKey("2026", LATER), JSON.stringify(contributionsPayload(3)));
 
     const replayed = await replayContributions(env.DB, env.RAW, 2026);
 
@@ -259,11 +260,29 @@ describe("replayContributions", () => {
 
   it("reports a repository that committed on more days than one page holds", async () => {
     const body = JSON.stringify(contributionsPayload(1, NESTED_PAGE_SIZE + 1));
-    await env.RAW.put(contributionsKey(2026, LATER), body);
+    await env.RAW.put(contributionsKey("2026", LATER), body);
 
     const replayed = await replayContributions(env.DB, env.RAW, 2026);
 
     expect(replayed?.truncated).toBe(true);
+  });
+
+  it("adds the quarters archived with the same fetch as a truncated year", async () => {
+    const year = JSON.stringify(contributionsPayload(1, NESTED_PAGE_SIZE + 1));
+    await env.RAW.put(contributionsKey("2026", LATER), year);
+    await env.RAW.put(
+      contributionsKey("2026-Q1", LATER),
+      JSON.stringify(commitDaysPayload(["2026-02-10"])),
+    );
+    await env.RAW.put(
+      contributionsKey("2026-Q2", EARLIER),
+      JSON.stringify(commitDaysPayload(["2026-05-10"])),
+    );
+
+    const replayed = await replayContributions(env.DB, env.RAW, 2026);
+
+    expect(replayed?.truncated).toBe(false);
+    expect(replayed?.rows.commitDays).toBe(2);
   });
 
   it("reports a year nothing was archived under", async () => {
@@ -271,7 +290,7 @@ describe("replayContributions", () => {
   });
 
   it("names the key when the response carries no user", async () => {
-    const key = contributionsKey(2026, LATER);
+    const key = contributionsKey("2026", LATER);
     await env.RAW.put(key, JSON.stringify({ data: { user: null } }));
 
     await expect(replayContributions(env.DB, env.RAW, 2026)).rejects.toMatchObject({
@@ -281,7 +300,7 @@ describe("replayContributions", () => {
   });
 
   it("changes nothing on a second replay of the same year", async () => {
-    await env.RAW.put(contributionsKey(2026, LATER), JSON.stringify(contributionsPayload(2)));
+    await env.RAW.put(contributionsKey("2026", LATER), JSON.stringify(contributionsPayload(2)));
     await replayContributions(env.DB, env.RAW, 2026);
 
     const replayed = await replayContributions(env.DB, env.RAW, 2026);

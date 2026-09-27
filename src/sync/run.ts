@@ -1,5 +1,10 @@
 import { GitHubResponseError, type GraphQLOptions, RateLimitExhausted } from "../github/client";
-import { contributionsTruncated, fetchContributions } from "../github/contributions";
+import {
+  type ContributionsResult,
+  fetchContributions,
+  quarterWindows,
+  yearWindow,
+} from "../github/contributions";
 import { archiveContributions, archiveSearchPage } from "../github/raw";
 import {
   issuePages,
@@ -123,21 +128,39 @@ export async function syncContributions(
   let result = CLEAN;
   let exhausted = false;
   let collection: ContributionsCollection | null = null;
+  let current = yearWindow(year, now);
 
   try {
-    const fetched = await fetchContributions(githubToken(env), env.GITHUB_LOGIN, year, {
-      ...options,
-      now,
-    });
+    const token = githubToken(env);
+    const fetched = await fetchContributions(token, env.GITHUB_LOGIN, current, options);
     collection = fetched.collection;
+    let pages = 1;
+    let rowsChanged = await ingestContributions(env, fetchedAt, fetched);
+    let truncated = fetched.truncated;
 
-    await archiveContributions(env.RAW, { year, fetchedAt, body: fetched.body });
-    const changed = await normalizeContributions(env.DB, fetched.collection, fetchedAt);
+    // A truncated year is fetched again a quarter at a time, which recovers the
+    // days a busy repository's yearly page dropped. The quarters run in turn so
+    // the rate-limit floor stops the walk the way it stops a search window.
+    if (truncated) {
+      truncated = false;
+      const quarters = quarterWindows(year, now);
+      let quarter = quarters.shift();
+      while (quarter !== undefined) {
+        current = quarter;
+        // eslint-disable-next-line no-await-in-loop
+        const part = await fetchContributions(token, env.GITHUB_LOGIN, quarter, options);
+        // eslint-disable-next-line no-await-in-loop
+        rowsChanged += await ingestContributions(env, fetchedAt, part);
+        truncated ||= part.truncated;
+        pages += 1;
+        quarter = quarters.shift();
+      }
+    }
 
     result = {
-      pages: 1,
-      rowsChanged: total(changed),
-      truncated: contributionsTruncated(fetched.collection),
+      pages,
+      rowsChanged,
+      truncated,
       error: null,
       note: await note(env.DB, year, fetched.collection),
     };
@@ -146,13 +169,26 @@ export async function syncContributions(
     result = { ...result, error: describe(error) };
     exhausted = error instanceof RateLimitExhausted;
     if (error instanceof GitHubResponseError) {
-      await archiveContributions(env.RAW, { year, fetchedAt, body: error.body });
+      await archiveContributions(env.RAW, { window: current.key, fetchedAt, body: error.body });
     }
   } finally {
     await finishRun(env.DB, id, result);
   }
 
   return { ...result, exhausted, contributionYears: collection?.contributionYears ?? [] };
+}
+
+async function ingestContributions(
+  env: Env,
+  fetchedAt: string,
+  fetched: ContributionsResult,
+): Promise<number> {
+  await archiveContributions(env.RAW, {
+    window: fetched.window.key,
+    fetchedAt,
+    body: fetched.body,
+  });
+  return total(await normalizeContributions(env.DB, fetched.collection, fetchedAt));
 }
 
 // The cross-check reports on a run whose pages are already in R2 and whose rows

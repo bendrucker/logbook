@@ -67,9 +67,9 @@ describe("search strings", () => {
     );
   });
 
-  it("scopes a backfill window to reviewed pull requests", () => {
+  it("scopes a backfill window to pull requests someone else authored", () => {
     expect(backfillSearch("pr-reviewed", "bendrucker", window)).toBe(
-      "is:pr reviewed-by:bendrucker created:2024-02-01..2024-02-29",
+      "is:pr reviewed-by:bendrucker -author:bendrucker created:2024-02-01..2024-02-29",
     );
   });
 
