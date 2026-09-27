@@ -134,36 +134,29 @@ export async function syncContributions(
     const token = githubToken(env);
     const fetched = await fetchContributions(token, env.GITHUB_LOGIN, current, options);
     collection = fetched.collection;
-    let pages = 1;
-    let rowsChanged = await ingestContributions(env, fetchedAt, fetched);
-    let truncated = fetched.truncated;
+    result = await ingestContributions(env, fetchedAt, fetched, result);
 
     // A truncated year is fetched again a quarter at a time, which recovers the
     // days a busy repository's yearly page dropped. The quarters run in turn so
-    // the rate-limit floor stops the walk.
-    if (truncated) {
-      truncated = false;
+    // the rate-limit floor stops the walk, and the year stays truncated until
+    // every quarter has landed.
+    if (fetched.truncated) {
       const quarters = quarterWindows(year, now);
+      let quarterTruncated = false;
       let quarter = quarters.shift();
       while (quarter !== undefined) {
         current = quarter;
         // eslint-disable-next-line no-await-in-loop
         const part = await fetchContributions(token, env.GITHUB_LOGIN, quarter, options);
         // eslint-disable-next-line no-await-in-loop
-        rowsChanged += await ingestContributions(env, fetchedAt, part);
-        truncated ||= part.truncated;
-        pages += 1;
+        result = await ingestContributions(env, fetchedAt, part, result);
+        quarterTruncated ||= part.truncated;
         quarter = quarters.shift();
       }
+      result = { ...result, truncated: quarterTruncated };
     }
 
-    result = {
-      pages,
-      rowsChanged,
-      truncated,
-      error: null,
-      note: await note(env.DB, year, fetched.collection),
-    };
+    result = { ...result, note: await note(env.DB, year, fetched.collection) };
     await advance(env.DB, "contributions", syncedThrough(yearEnd(year), now));
   } catch (error) {
     result = { ...result, error: describe(error) };
@@ -182,13 +175,21 @@ async function ingestContributions(
   env: Env,
   fetchedAt: string,
   fetched: ContributionsResult,
-): Promise<number> {
+  result: RunResult,
+): Promise<RunResult> {
   await archiveContributions(env.RAW, {
     window: fetched.window.key,
     fetchedAt,
     body: fetched.body,
   });
-  return total(await normalizeContributions(env.DB, fetched.collection, fetchedAt));
+  const rows = await normalizeContributions(env.DB, fetched.collection, fetchedAt);
+
+  return {
+    ...result,
+    pages: result.pages + 1,
+    rowsChanged: result.rowsChanged + total(rows),
+    truncated: result.truncated || fetched.truncated,
+  };
 }
 
 // The cross-check reports on a run whose pages are already in R2 and whose rows

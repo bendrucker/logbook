@@ -185,7 +185,7 @@ export function commitDaysPayload(days: readonly string[]) {
         repository: repository("repo-0"),
         contributions: {
           totalCount: days.length,
-          nodes: days.map((day) => ({ commitCount: 2, occurredAt: `${day}T00:00:00Z` })),
+          nodes: days.map((day) => commitDay(2, `${day}T00:00:00Z`)),
         },
       },
     ],

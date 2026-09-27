@@ -2,7 +2,11 @@
 // change cost nothing: bump the shape, replay the archived pages, and the event
 // tables rebuild from responses already on disk.
 import { z } from "zod";
-import { contributionsTruncated, QUARTERS, quarterKey } from "../github/contributions";
+import {
+  type ContributionsWindow,
+  contributionsTruncated,
+  quarterWindows,
+} from "../github/contributions";
 import {
   contributionsKey,
   contributionsPrefix,
@@ -94,49 +98,50 @@ export async function replayContributions(
     return null;
   }
 
-  const { user } = parse(contributionsResponse, await readOne(bucket, key));
-  if (user === null) {
-    throw new RawValidationError(key, "the response carries no user", null);
-  }
-
-  const collection = user.contributionsCollection;
+  const collection = readCollection(await readOne(bucket, key));
   const fetchedAt = key.slice(prefix.length, -OBJECT_SUFFIX.length);
   const rows = await normalizeContributions(db, collection, fetchedAt);
-
-  // A sync that found the year truncated archived its quarters under the same
-  // fetch timestamp, and those hold the days the yearly page dropped.
-  const quarters = await readQuarters(bucket, year, fetchedAt);
-  if (quarters.length === 0) {
-    return { fetchedAt, truncated: contributionsTruncated(collection), rows };
+  if (!contributionsTruncated(collection)) {
+    return { fetchedAt, truncated: false, rows };
   }
 
+  // A sync that found the year truncated archived its quarters under the same
+  // fetch timestamp, and those hold the days the yearly page dropped. One the
+  // rate limit stopped partway archived fewer quarters than the year had begun.
+  const windows = quarterWindows(year, new Date(fetchedAt));
+  const quarters = await readQuarters(bucket, windows, fetchedAt);
   const quarterRows = await Promise.all(
     quarters.map((quarter) => normalizeContributions(db, quarter, fetchedAt)),
   );
 
   return {
     fetchedAt,
-    truncated: quarters.some(contributionsTruncated),
+    truncated: quarters.length < windows.length || quarters.some(contributionsTruncated),
     rows: quarterRows.reduce(addRows, rows),
   };
 }
 
 async function readQuarters(
   bucket: R2Bucket,
-  year: number,
+  windows: readonly ContributionsWindow[],
   fetchedAt: string,
 ): Promise<ContributionsCollection[]> {
   const objects = await Promise.all(
-    QUARTERS.map((quarter) => bucket.get(contributionsKey(quarterKey(year, quarter), fetchedAt))),
+    windows.map((window) => bucket.get(contributionsKey(window.key, fetchedAt))),
+  );
+  const pages = await Promise.all(
+    objects.flatMap((object) =>
+      object === null ? [] : object.text().then((body) => ({ key: object.key, body })),
+    ),
   );
 
-  return Promise.all(objects.flatMap((object) => (object === null ? [] : readCollection(object))));
+  return pages.map(readCollection);
 }
 
-async function readCollection(object: R2ObjectBody): Promise<ContributionsCollection> {
-  const { user } = parse(contributionsResponse, { key: object.key, body: await object.text() });
+function readCollection(page: RawPage): ContributionsCollection {
+  const { user } = parse(contributionsResponse, page);
   if (user === null) {
-    throw new RawValidationError(object.key, "the response carries no user", null);
+    throw new RawValidationError(page.key, "the response carries no user", null);
   }
   return user.contributionsCollection;
 }

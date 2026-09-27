@@ -167,6 +167,25 @@ describe("syncContributions", () => {
     ]);
   });
 
+  it("reports the quarters it landed when the rate limit stops the walk", async () => {
+    const { fetch } = sequence([
+      () => jsonResponse(contributionsPayload(1, NESTED_PAGE_SIZE + 1)),
+      () => jsonResponse(commitDaysPayload(["2026-02-10"])),
+      () => {
+        const payload = commitDaysPayload(["2026-05-10"]);
+        return jsonResponse({ data: { ...payload.data, rateLimit: rateLimit({ remaining: 5 }) } });
+      },
+    ]);
+
+    const result = await syncContributions(env, 2026, { fetch, now: NOW });
+
+    expect(result).toMatchObject({ pages: 2, truncated: true, exhausted: true });
+    expect(result.error).toContain("RateLimitExhausted");
+    expect(await readWatermark(env.DB, "contributions")).toBeNull();
+    const [run] = await recentRuns(env.DB, "contributions", 1);
+    expect(run).toMatchObject({ pages: 2 });
+  });
+
   it("syncs a past year only through that year's end", async () => {
     const { fetch, requests } = sequence([() => jsonResponse(contributionsPayload(1))]);
 

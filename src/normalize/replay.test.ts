@@ -270,6 +270,26 @@ describe("replayContributions", () => {
   it("adds the quarters archived with the same fetch as a truncated year", async () => {
     const year = JSON.stringify(contributionsPayload(1, NESTED_PAGE_SIZE + 1));
     await env.RAW.put(contributionsKey("2026", LATER), year);
+    const days: [string, string][] = [
+      ["2026-Q1", "2026-02-10"],
+      ["2026-Q2", "2026-05-10"],
+      ["2026-Q3", "2026-08-10"],
+    ];
+    await Promise.all(
+      days.map(([quarter, day]) =>
+        env.RAW.put(contributionsKey(quarter, LATER), JSON.stringify(commitDaysPayload([day]))),
+      ),
+    );
+
+    const replayed = await replayContributions(env.DB, env.RAW, 2026);
+
+    expect(replayed?.truncated).toBe(false);
+    expect(replayed?.rows.commitDays).toBe(4);
+  });
+
+  it("keeps a year truncated when a quarter from its fetch is missing", async () => {
+    const year = JSON.stringify(contributionsPayload(1, NESTED_PAGE_SIZE + 1));
+    await env.RAW.put(contributionsKey("2026", LATER), year);
     await env.RAW.put(
       contributionsKey("2026-Q1", LATER),
       JSON.stringify(commitDaysPayload(["2026-02-10"])),
@@ -281,7 +301,7 @@ describe("replayContributions", () => {
 
     const replayed = await replayContributions(env.DB, env.RAW, 2026);
 
-    expect(replayed?.truncated).toBe(false);
+    expect(replayed?.truncated).toBe(true);
     expect(replayed?.rows.commitDays).toBe(2);
   });
 
