@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type { GraphQLOptions } from "./client";
 import { cursorPages } from "./pages";
 import { ISSUE_SEARCH, PULL_REQUEST_SEARCH, REVIEWED_PULL_REQUEST_SEARCH } from "./queries";
+import { followReviews, type ReviewsPage } from "./reviews";
 import {
   issueSearchPage,
   pullRequestSearchPage,
@@ -34,6 +35,9 @@ export interface SearchPageResult<T> {
   truncated: boolean;
   rateLimit: RateLimit;
   body: string;
+  // Follow-up responses that read a pull request's reviews past its nested
+  // page. Empty for every kind but the reviewed-PR search.
+  reviewPages: ReviewsPage[];
 }
 
 export interface SearchOptions extends GraphQLOptions {
@@ -45,14 +49,9 @@ interface DocumentOptions<T> extends SearchOptions {
   document: string;
   schema: z.ZodType<SearchPage<T>>;
   variables?: Record<string, unknown>;
-  // Whether a node lost part of a nested connection, which the page's own
-  // count cannot see.
-  nodeTruncated?: (node: T) => boolean;
 }
 
 async function* searchPages<T>(options: DocumentOptions<T>): AsyncGenerator<SearchPageResult<T>> {
-  const nodeTruncated = options.nodeTruncated ?? (() => false);
-
   // The page bound is a stop of its own: GitHub rejects a cursor past the
   // 1,000th result, so a window that keeps announcing successors ends here
   // rather than on that error.
@@ -70,9 +69,10 @@ async function* searchPages<T>(options: DocumentOptions<T>): AsyncGenerator<Sear
       page,
       nodes: search.nodes,
       issueCount: search.issueCount,
-      truncated: searchTruncated(search.issueCount) || search.nodes.some(nodeTruncated),
+      truncated: searchTruncated(search.issueCount),
       rateLimit,
       body,
+      reviewPages: [],
     };
   }
 }
@@ -87,16 +87,45 @@ export function pullRequestPages(
 // login is part of the query rather than only of the search string. Taking it
 // as a required field is what keeps a caller from sending the document without
 // the variable it declares.
-export function reviewedPullRequestPages(
+export async function* reviewedPullRequestPages(
   options: SearchOptions & { login: string },
 ): AsyncGenerator<SearchPageResult<ReviewedPullRequestNode>> {
-  return searchPages({
+  const pages = searchPages({
     ...options,
     document: REVIEWED_PULL_REQUEST_SEARCH,
     schema: reviewedPullRequestSearchPage,
     variables: { login: options.login },
-    nodeTruncated: reviewsTruncated,
   });
+
+  for await (const result of pages) {
+    yield followPage(result, options);
+  }
+}
+
+async function followPage(
+  result: SearchPageResult<ReviewedPullRequestNode>,
+  options: SearchOptions & { login: string },
+): Promise<SearchPageResult<ReviewedPullRequestNode>> {
+  const nodes: ReviewedPullRequestNode[] = [];
+  const reviewPages: ReviewsPage[] = [];
+  // One pull request at a time, so the budget sees each follow-up's cost
+  // before it admits the next.
+  const pending = [...result.nodes];
+  let node = pending.shift();
+  while (node !== undefined) {
+    // eslint-disable-next-line no-await-in-loop
+    const followed = await followReviews(node, options);
+    nodes.push(followed.node);
+    reviewPages.push(...followed.pages);
+    node = pending.shift();
+  }
+
+  return {
+    ...result,
+    nodes,
+    truncated: result.truncated || nodes.some(reviewsTruncated),
+    reviewPages,
+  };
 }
 
 export function issuePages(options: SearchOptions): AsyncGenerator<SearchPageResult<IssueNode>> {

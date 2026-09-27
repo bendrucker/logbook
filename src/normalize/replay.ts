@@ -14,7 +14,9 @@ import {
   contributionsYearPrefix,
   searchPageNumber,
   searchPrefix,
+  searchReviewsPullRequest,
 } from "../github/raw";
+import { withReviews } from "../github/reviews";
 import {
   type ContributionConnectionPage,
   type ContributionsCollection,
@@ -23,6 +25,7 @@ import {
   issueSearchPage,
   type PageInfo,
   pullRequestContributionsPage,
+  pullRequestReviewsPage,
   pullRequestSearchPage,
   reviewContributionsPage,
   reviewedPullRequestSearchPage,
@@ -410,12 +413,39 @@ async function readFetch(
   fetchPrefix: string,
 ): Promise<SearchFetch> {
   const { keys } = await list(bucket, { prefix: fetchPrefix });
-  const pages = await read(bucket, keys);
+  const pageKeys: string[] = [];
+  const reviewKeys = new Map<string, string[]>();
+  for (const key of keys) {
+    const pullRequest = searchReviewsPullRequest(fetchPrefix, key);
+    if (pullRequest === null) {
+      pageKeys.push(key);
+    } else {
+      reviewKeys.set(pullRequest, [...(reviewKeys.get(pullRequest) ?? []), key]);
+    }
+  }
 
-  return { fetchedAt: fetchPrefix.slice(prefix.length, -1), ...searchFetch(kind, pages) };
+  const [pages, reviews] = await Promise.all([
+    read(bucket, pageKeys),
+    Promise.all(
+      [...reviewKeys].map(
+        async ([pullRequest, followUps]) => [pullRequest, await read(bucket, followUps)] as const,
+      ),
+    ),
+  ]);
+
+  return {
+    fetchedAt: fetchPrefix.slice(prefix.length, -1),
+    ...searchFetch(kind, pages, new Map(reviews)),
+  };
 }
 
-function searchFetch(kind: EventKind, pages: readonly RawPage[]): Omit<SearchFetch, "fetchedAt"> {
+// `reviews` holds the follow-up pages that completed a pull request's reviews,
+// keyed by the pull request, in the order they were read.
+function searchFetch(
+  kind: EventKind,
+  pages: readonly RawPage[],
+  reviews: ReadonlyMap<string, readonly RawPage[]>,
+): Omit<SearchFetch, "fetchedAt"> {
   switch (kind) {
     case "pr-authored": {
       const parsed = pages.map((page) => parse(pullRequestSearchPage, page));
@@ -426,14 +456,21 @@ function searchFetch(kind: EventKind, pages: readonly RawPage[]): Omit<SearchFet
     }
     case "pr-reviewed": {
       const parsed = pages.map((page) => parse(reviewedPullRequestSearchPage, page));
-      const nodes = parsed.flatMap((page) => page.search.nodes);
+      const nodes = parsed
+        .flatMap((page) => page.search.nodes)
+        .map((node) =>
+          withReviews(
+            node,
+            (reviews.get(node.id) ?? []).map((page) => parse(pullRequestReviewsPage, page)),
+          ),
+        );
       const { complete, truncated } = coverage(pages, parsed);
       return {
         nodes: { kind, nodes },
         complete,
-        // The reviews sub-connection carries no cursor, so a pull request with
-        // more reviews than one page shorts the window on its own. The live
-        // pager applies the same check.
+        // A pull request with more reviews than its nested page and its
+        // follow-ups read shorts the window on its own. The live pager applies
+        // the same check.
         truncated: truncated || nodes.some(reviewsTruncated),
       };
     }

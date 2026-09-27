@@ -9,13 +9,15 @@ import {
   pullRequest,
   rateLimit,
   requestBody,
+  review,
   reviewedPullRequest,
+  reviewsPayload,
   searchPayload,
   searchResponse,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
 import { stubFetch } from "../../test/fetch-stub";
-import { contributionEventsKey, searchKey } from "../github/raw";
+import { contributionEventsKey, searchKey, searchReviewsKey } from "../github/raw";
 import { Budget, type BudgetLimits } from "./budget";
 import { recentRuns } from "./runs";
 import { syncContributions, syncWindow } from "./run";
@@ -27,6 +29,7 @@ const WINDOW = {
   key: "2026-09",
   query: "is:pr author:bendrucker",
   through: "2026-09-30T23:59:59Z",
+  splits: false,
 };
 
 // Loose enough that only a test reporting a low `remaining` reaches a limit.
@@ -103,6 +106,35 @@ describe("syncWindow", () => {
       searchKey("pr-authored", WINDOW.key, FETCHED_AT, 1),
       searchKey("pr-authored", WINDOW.key, FETCHED_AT, 2),
     ]);
+  });
+
+  it("archives a review follow-up beside its page and holds a truncated window", async () => {
+    const node = reviewedPullRequest(7, {
+      reviews: {
+        totalCount: 2,
+        pageInfo: { hasNextPage: true, endCursor: "cmV2" },
+        nodes: [review(7)],
+      },
+    });
+    const { fetch } = sequence([
+      () => searchResponse([node], { issueCount: 1001 }),
+      () => jsonResponse(reviewsPayload([review(8)], { totalCount: 2 })),
+    ]);
+
+    const result = await syncWindow(
+      env,
+      "pr-reviewed",
+      { ...WINDOW, splits: true },
+      options(fetch),
+    );
+
+    expect(result).toMatchObject({ pages: 1, truncated: true, error: null });
+    const listed = await env.RAW.list();
+    expect(listed.objects.map((object) => object.key)).toContain(
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_7", 1),
+    );
+    expect(await count("reviews")).toEqual({ total: 2 });
+    expect(await readWatermark(env.DB, "pr-reviewed")).toBeNull();
   });
 
   it("keeps the bytes of a page it could not parse and writes no rows", async () => {

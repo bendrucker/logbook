@@ -6,6 +6,8 @@ import {
   requestBody,
   review,
   reviewedPullRequest,
+  reviewsPayload,
+  jsonResponse,
   searchResponse,
 } from "../../test/github-fixtures";
 import { type RequestBudget, ResponseValidationError } from "./client";
@@ -31,10 +33,10 @@ function pages(stub: FetchStub, budget?: RequestBudget) {
   });
 }
 
-async function collect(
-  iterator: AsyncGenerator<SearchPageResult<PullRequestNode>>,
-): Promise<SearchPageResult<PullRequestNode>[]> {
-  const results: SearchPageResult<PullRequestNode>[] = [];
+async function collect<T>(
+  iterator: AsyncGenerator<SearchPageResult<T>>,
+): Promise<SearchPageResult<T>[]> {
+  const results: SearchPageResult<T>[] = [];
   for await (const result of iterator) {
     results.push(result);
   }
@@ -189,6 +191,39 @@ describe("search entry points", () => {
     const first = await iterator.next();
 
     expect(first.value?.truncated).toBe(true);
+  });
+
+  it("reads a pull request's reviews past its nested page", async () => {
+    const node = reviewedPullRequest(7, {
+      reviews: {
+        totalCount: 2,
+        pageInfo: { hasNextPage: true, endCursor: "cmV2" },
+        nodes: [review(7)],
+      },
+    });
+    let served = 0;
+    const stub = stubFetch(() => {
+      served += 1;
+      return served === 1
+        ? searchResponse([node])
+        : jsonResponse(reviewsPayload([review(8)], { totalCount: 2 }));
+    });
+
+    const iterator = reviewedPullRequestPages({
+      token: "t0ken",
+      searchQuery: "is:pr reviewed-by:bendrucker created:2026-08-01..2026-08-31",
+      login: "bendrucker",
+      fetch: stub.fetch,
+      endpoint: ENDPOINT,
+    });
+    const [page] = await collect(iterator);
+
+    await expect(requestBody(stub.requests[1]!)).resolves.toMatchObject({
+      variables: { id: "PR_7", login: "bendrucker", after: "cmV2" },
+    });
+    expect(page?.truncated).toBe(false);
+    expect(page?.nodes[0]?.reviews.nodes.map((each) => each.id)).toEqual(["PRR_7", "PRR_8"]);
+    expect(page?.reviewPages).toMatchObject([{ pullRequest: "PR_7", page: 1 }]);
   });
 
   it("stops at the result cap rather than following a cursor GitHub will reject", async () => {

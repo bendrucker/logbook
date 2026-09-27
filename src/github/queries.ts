@@ -75,6 +75,16 @@ const PULL_REQUEST_FRAGMENT = gql`
   }
 `;
 
+const REVIEW_CONNECTION = `
+  totalCount
+  ${PAGE_INFO}
+  nodes {
+    id
+    state
+    submittedAt
+  }
+`;
+
 // The reviews come off the node's own connection filtered to one author, so
 // every document spreading this declares `$login`. A plain template rather than
 // `gql`, which keeps only the literal text and would drop the page size.
@@ -89,16 +99,27 @@ const REVIEWED_PULL_REQUEST_FRAGMENT = `
     }
     updatedAt
     reviews(author: $login, first: ${NESTED_PAGE_SIZE}) {
-      totalCount
-      nodes {
-        id
-        state
-        submittedAt
-      }
+      ${REVIEW_CONNECTION}
     }
     repository {
       ...RepositoryInfo
     }
+  }
+`;
+
+// The rest of one pull request's reviews, for the rare one whose reviews ran
+// past the page the search nested.
+export const PULL_REQUEST_REVIEWS = `
+  query PullRequestReviews($id: ID!, $login: String!, $first: Int!, $after: String) {
+    node(id: $id) {
+      ... on PullRequest {
+        reviews(author: $login, first: $first, after: $after) {
+          ${REVIEW_CONNECTION}
+        }
+      }
+    }
+
+    ${RATE_LIMIT}
   }
 `;
 

@@ -10,11 +10,17 @@ import {
   repository,
   review,
   reviewedPullRequest,
+  reviewsPayload,
   type SearchOverrides,
   searchPayload,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
-import { contributionEventsKey, contributionsKey, searchKey } from "../github/raw";
+import {
+  contributionEventsKey,
+  contributionsKey,
+  searchKey,
+  searchReviewsKey,
+} from "../github/raw";
 import { SEARCH_MAX_RESULTS } from "../github/search";
 import type { EventKind } from "../github/windows";
 import {
@@ -237,6 +243,27 @@ describe("replaySearchWindow", () => {
     const replayed = await replaySearchWindow(env.DB, env.RAW, "pr-reviewed", WINDOW);
 
     expect(replayed?.truncated).toBe(true);
+  });
+
+  it("completes a pull request's reviews from its archived follow-up", async () => {
+    const node = reviewedPullRequest(7, {
+      id: "MDExOlB1bGxSZXF1ZXN0/w==",
+      reviews: {
+        totalCount: 2,
+        pageInfo: { hasNextPage: true, endCursor: "cmV2" },
+        nodes: [review(7)],
+      },
+    });
+    await archive("pr-reviewed", LATER, 1, [node]);
+    await env.RAW.put(
+      searchReviewsKey("pr-reviewed", WINDOW, LATER, node.id, 1),
+      JSON.stringify(reviewsPayload([review(8)], { totalCount: 2 })),
+    );
+
+    const replayed = await replaySearchWindow(env.DB, env.RAW, "pr-reviewed", WINDOW);
+
+    expect(replayed).toMatchObject({ fetchedAt: LATER, truncated: false });
+    expect(replayed?.rows.reviews).toBe(2);
   });
 
   it("reports a window GitHub returned whole", async () => {

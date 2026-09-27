@@ -133,9 +133,11 @@ The review search excludes my own pull requests. Replying to a review thread sub
 
 The upper bound is the month's real last day. A literal `-31` against a thirty-day month is a date GitHub's parser has to reinterpret, and these boundaries are what the whole cap mitigation rests on.
 
-The review search reads each pull request's reviews through a nested `reviews(author:, first: 100)` connection with no cursor. A pull request whose `reviews.totalCount` exceeds the nodes returned flags its page as truncated, live and on replay. The search pager also stops with a `RepeatedCursorError` when a page announces a cursor it already sent, which would otherwise serve the same page until the page bound.
+A month matching more than 1,000 splits in the backfill frontier. It halves into day ranges named for their ends, such as `2026-08-01--2026-08-15`, which halve again down to single days. A day splits into halves and a half into hours, named like the contributions windows (`2026-08-14T00--2026-08-14T12`) and queried on instants. An hour still past the cap is irreducible. Each window archives under its own key in `raw/search/{kind}/{window}/`.
 
-Walking those back to 2012 is 166 windows per event type for the whole history. The incremental run is the same code path with a different window: one `updated:>{last successful sync}` query per type. Backfill and incremental differ only in what dates go into the string.
+The review search reads each pull request's reviews through a nested `reviews(author:, first: 100)` connection. A pull request whose nested page announces a successor gets a follow-up `node(id:)` query that pages the rest, archived beside the search page under `reviews/{pull request ID}/`, and replay merges those pages back in. A pull request whose `reviews.totalCount` still exceeds the nodes read flags its page as truncated, live and on replay. The search pager also stops with a `RepeatedCursorError` when a page announces a cursor it already sent, which would otherwise serve the same page until the page bound.
+
+Walking those back to 2012 is 166 windows per event type for the whole history. The incremental run is the same code path with a different window: one `updated:{since}..{now}` query per type, where `since` sits an hour behind the watermark. The upper bound is what lets a range past 1,000 after an outage split: it halves at its midpoint, earliest half first, and the watermark climbs through each half as it lands. Backfill and incremental differ only in what dates go into the string.
 
 #### Contributions Collection
 
@@ -159,7 +161,7 @@ Each node carries its `Issue` or `PullRequest` with the fields the matching sear
 
 The windows are the contributions calendar windows, rooted at years. A unit reads at most ten pages of 100. One that ends its cursor having read fewer nodes than the connection's `totalCount`, or stops at ten pages with a successor announced, is truncated and splits down the calendar like a commit window. The pager shares the search pager's cursor loop and its repeated-cursor guard.
 
-Search stays. Connections enumerate by creation, so only an `updated:>` search finds an old event whose state changed, and search also finds events GitHub declines to count as contributions. The union of both is the most complete set either source sees.
+Search stays. Connections enumerate by creation, so only an `updated:` search finds an old event whose state changed, and search also finds events GitHub declines to count as contributions. The union of both is the most complete set either source sees.
 
 #### Rate Budget
 
@@ -238,7 +240,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 ## Operations
 
-- The hourly cron runs one `updated:>` search per event type plus one `contributionsCollection` call for the current year.
+- The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year.
 - A second cron rebuilds the lake at 09:30 UTC. It sits off the hour so it never shares an instant with a sync invocation, and `scheduled` tells the two apart by the cron expression.
 - `GITHUB_TOKEN` is a Worker secret, set with `wrangler secret put`. It is the only credential the hub holds.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
@@ -249,8 +251,8 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 ## Risks
 
-- The search cap drops results without an error. `issueCount` past 1,000 is the only signal, and monthly windows keep the real counts far below it.
-- GitHub's search index lags writes by an unspecified interval, so an `updated:>` window anchored exactly at the last sync can miss an event indexed late. The window overlaps the previous one, and upserts keyed on node ID make the overlap free.
+- The search cap drops results without an error. `issueCount` past 1,000 is the only signal. Monthly windows keep the real counts far below it, and a window past it splits down to hours.
+- GitHub's search index lags writes by an unspecified interval, so an `updated:` window anchored exactly at the last sync can miss an event indexed late. The window overlaps the previous one, and upserts keyed on node ID make the overlap free.
 - `commitContributionsByRepository` returns a fixed-length list and reports no truncation beyond the totals beside it. Calendar splitting recovers both overflowing days and repositories past the 100 cap, down to an hour. An hour that touched more than 100 repositories stays irreducible and flagged.
 - `restrictedContributionsCount` counts contributions hidden from the viewer. With a token that sees no private repository, that is every private contribution, so the cross-check reports it beside the gaps instead of subtracting it.
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.

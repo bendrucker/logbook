@@ -8,7 +8,8 @@ import {
   yearWindow,
 } from "../github/calendar";
 import { type ContributionsResult, fetchContributions } from "../github/contributions";
-import { archiveContributions, archiveSearchPage } from "../github/raw";
+import { archiveContributions, archiveSearchPage, archiveSearchReviews } from "../github/raw";
+import type { ReviewsPage } from "../github/reviews";
 import { issuePages, pullRequestPages, reviewedPullRequestPages } from "../github/search";
 import type { ContributionsCollection } from "../github/schema";
 import type { EventKind } from "../github/windows";
@@ -40,13 +41,17 @@ export function githubToken(env: Env): string {
 }
 
 export interface SearchWindow {
-  // What `sync_runs` records and what names the window's prefix in R2: a month
-  // key for a backfill, the anchor instant for an incremental window.
+  // What `sync_runs` records and what names the window's prefix in R2: a
+  // `created:` window key for a backfill, the `updated:` range for an
+  // incremental window.
   key: string;
   query: string;
   // The instant the window leaves synced. The watermark takes it once every
   // page is in R2 and every row is in D1.
   through: string;
+  // Whether a truncated fetch has narrower windows to be fetched again as.
+  // Nothing under it is synced until they land, so the watermark waits.
+  splits: boolean;
 }
 
 // What a backfill or the cron takes. Each opens its own budget.
@@ -114,8 +119,11 @@ export async function syncWindow(
     }
 
     // Inside the run so a watermark that fails to move is the run's error
-    // rather than an exception out of the cron.
-    await advance(env.DB, kind, window.through);
+    // rather than an exception out of the cron. A window that cannot narrow
+    // further is as synced as it gets.
+    if (!result.truncated || !window.splits) {
+      await advance(env.DB, kind, window.through);
+    }
   } catch (error) {
     result = { ...result, error: describe(error) };
     resumeAt = stoppedUntil(error, now);
@@ -299,6 +307,7 @@ export interface Page {
   body: string;
   truncated: boolean;
   nodes: SearchPageNodes;
+  reviewPages: readonly ReviewsPage[];
 }
 
 async function ingest(
@@ -316,6 +325,11 @@ async function ingest(
     page: page.page,
     body: page.body,
   });
+  await Promise.all(
+    page.reviewPages.map((reviews) =>
+      archiveSearchReviews(env.RAW, { kind, window: window.key, fetchedAt, ...reviews }),
+    ),
+  );
   const changed = await normalizeSearchPage(env.DB, page.nodes, fetchedAt);
 
   return {
@@ -367,6 +381,7 @@ interface PagerResult<Node> {
   body: string;
   truncated: boolean;
   nodes: Node[];
+  reviewPages?: readonly ReviewsPage[];
 }
 
 export async function* kinded<Node>(
@@ -379,6 +394,7 @@ export async function* kinded<Node>(
       body: result.body,
       truncated: result.truncated,
       nodes: toNodes(result.nodes),
+      reviewPages: result.reviewPages ?? [],
     };
   }
 }

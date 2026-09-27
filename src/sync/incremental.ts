@@ -1,4 +1,9 @@
-import { type EventKind, incrementalSearch } from "../github/windows";
+import {
+  type EventKind,
+  incrementalSearch,
+  splitUpdated,
+  type UpdatedRange,
+} from "../github/windows";
 import { drainBackfill } from "./backfill";
 import { BACKFILL_SPACING_MS, type Budget, openBudget, syncLimits } from "./budget";
 import { SEARCH_KINDS, type SyncKind } from "./kinds";
@@ -104,14 +109,35 @@ async function syncKind(
 
   const since = new Date(Date.parse(watermark.window) - OVERLAP_MS).toISOString();
 
-  return syncWindow(
-    env,
-    kind,
-    {
-      key: `updated:${since}`,
-      query: incrementalSearch(kind, env.GITHUB_LOGIN, since),
-      through: now.toISOString(),
-    },
-    options,
-  );
+  // A range matching more than the cap, which a long outage can leave behind,
+  // is fetched again as its halves, earliest first, so the watermark climbs
+  // through each half as it lands. The first half that fails stops the kind:
+  // a later one landing would move the watermark past what it missed.
+  const pending: UpdatedRange[] = [{ since, until: now.toISOString() }];
+  let result: SyncResult | null = null;
+  let range = pending.shift();
+  while (range !== undefined) {
+    const halves = splitUpdated(range);
+    // eslint-disable-next-line no-await-in-loop
+    result = await syncWindow(
+      env,
+      kind,
+      {
+        key: `updated:${range.since}..${range.until}`,
+        query: incrementalSearch(kind, env.GITHUB_LOGIN, range),
+        through: range.until,
+        splits: halves.length > 0,
+      },
+      options,
+    );
+    if (result.error !== null) {
+      return result;
+    }
+    if (result.truncated) {
+      pending.unshift(...halves);
+    }
+    range = pending.shift();
+  }
+
+  return result;
 }
