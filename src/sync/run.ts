@@ -328,11 +328,15 @@ async function ingest(
     page: page.page,
     body: page.body,
   });
-  await Promise.all(
-    page.reviewPages.map((reviews) =>
-      archiveSearchReviews(env.RAW, { kind, window: window.key, fetchedAt, ...reviews }),
-    ),
-  );
+  // A page almost never carries a follow-up, so writing them one at a time
+  // costs nothing a run notices.
+  const pending = [...page.reviewPages];
+  let reviews = pending.shift();
+  while (reviews !== undefined) {
+    // eslint-disable-next-line no-await-in-loop
+    await archiveSearchReviews(env.RAW, { kind, window: window.key, fetchedAt, ...reviews });
+    reviews = pending.shift();
+  }
   const changed = await normalizeSearchPage(env.DB, page.nodes, fetchedAt);
 
   return {

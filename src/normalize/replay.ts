@@ -2,6 +2,7 @@
 // change cost nothing: bump the shape, replay the archived pages, and the event
 // tables rebuild from responses already on disk.
 import { z } from "zod";
+import { OPEN_CONNECTIONS, mapConcurrent } from "../concurrency";
 import { splitContributions } from "../github/calendar";
 import {
   CONTRIBUTION_EVENTS_MAX_PAGES,
@@ -27,6 +28,7 @@ import {
   pullRequestContributionsPage,
   pullRequestReviewsPage,
   pullRequestSearchPage,
+  type ReviewedPullRequestNode,
   reviewContributionsPage,
   reviewedPullRequestSearchPage,
   reviewsTruncated,
@@ -34,7 +36,7 @@ import {
 } from "../github/schema";
 import { SEARCH_MAX_PAGES, searchTruncated } from "../github/search";
 import type { EventKind } from "../github/windows";
-import { combineWindows } from "./commit-windows";
+import { ArchivedWindows } from "./commit-windows";
 import {
   normalizeContributionEvents,
   normalizeSearchPage,
@@ -86,17 +88,21 @@ export async function replaySearchWindow(
   window: string,
 ): Promise<Replay | null> {
   const prefix = searchPrefix(kind, window);
-  const { prefixes } = await list(bucket, { prefix, delimiter: "/" });
+  const prefixes: string[] = [];
+  for await (const listing of listed(bucket, { prefix, delimiter: "/" })) {
+    prefixes.push(...listing.delimitedPrefixes);
+  }
+
+  // The fetch is chosen from its keys and its last page, so nothing is written
+  // until the replay knows which fetch it is writing.
   const fetch = await selectFetch(prefixes, (candidate) =>
-    readFetch(bucket, kind, prefix, candidate),
+    listFetch(bucket, kind, prefix, candidate),
   );
   if (fetch === null) {
     return null;
   }
 
-  const rows = await normalizeSearchPage(db, fetch.nodes, fetch.fetchedAt);
-
-  return { fetchedAt: fetch.fetchedAt, truncated: fetch.truncated, rows };
+  return { fetchedAt: fetch.fetchedAt, ...(await writeFetch(db, bucket, fetch)) };
 }
 
 // Replays `window` and every narrower window archived under it, which is how
@@ -107,13 +113,11 @@ export async function replayContributions(
   bucket: R2Bucket,
   window: string,
 ): Promise<Replay | null> {
-  const { keys } = await list(bucket, { prefix: contributionsYearPrefix(window.slice(0, 4)) });
-
   // A fetch timestamp is an ISO string, so R2's lexicographic listing puts each
   // window's newest fetch last. A window is one object per fetch, so there is
   // no partial fetch to skip past.
   const newest = new Map<string, { key: string; fetchedAt: string }>();
-  for (const key of keys) {
+  for await (const key of keys(bucket, contributionsYearPrefix(window.slice(0, 4)))) {
     const object = contributionsObject(key);
     if (object !== null) {
       newest.set(object.window, { key, fetchedAt: object.fetchedAt });
@@ -125,15 +129,20 @@ export async function replayContributions(
     return null;
   }
 
-  const archived = new Map(
-    await Promise.all(
-      reached.map(async ([name, { key, fetchedAt }]) => {
-        const collection = readCollection(await readOne(bucket, key));
-        return [name, { fetchedAt, collection }] as const;
-      }),
-    ),
+  const archived = new ArchivedWindows();
+  const collections = mapConcurrent(
+    reached,
+    OPEN_CONNECTIONS,
+    async ([name, { key, fetchedAt }]) => ({
+      name,
+      fetchedAt,
+      collection: readCollection(await readOne(bucket, key)),
+    }),
   );
-  const combined = combineWindows(window, archived);
+  for await (const { name, fetchedAt, collection } of collections) {
+    archived.add(name, collection, fetchedAt);
+  }
+  const combined = archived.combine(window);
   const fetchedAt = reached.map(([, object]) => object.fetchedAt).toSorted();
 
   return {
@@ -194,14 +203,10 @@ export async function readContributionEvents(
   kind: EventKind,
   window: string,
 ): Promise<ArchivedContributionEvents | null> {
-  const { keys } = await list(bucket, {
-    prefix: contributionEventsYearPrefix(kind, window.slice(0, 4)),
-  });
-
   // Keys list in order, so each window's fetches arrive oldest first and each
   // fetch's pages in the order they were read.
   const archived = new Map<string, Map<string, string[]>>();
-  for (const key of keys) {
+  for await (const key of keys(bucket, contributionEventsYearPrefix(kind, window.slice(0, 4)))) {
     const object = contributionEventsObject(key);
     if (object === null) {
       continue;
@@ -216,18 +221,25 @@ export async function readContributionEvents(
     return null;
   }
 
-  const selected = await Promise.all(
-    reached.map(([name, fetches]) =>
-      selectFetch([...fetches.keys()], async (fetchedAt) => ({
-        window: name,
-        fetchedAt,
-        ...contributionEventsFetch(kind, await read(bucket, fetches.get(fetchedAt) ?? [])),
-      })),
-    ),
-  );
-  const fetches = selected
-    .filter((fetch) => fetch !== null)
-    .toSorted((a, b) => a.fetchedAt.localeCompare(b.fetchedAt));
+  // One window at a time, so the reads of one fetch's pages are the only ones
+  // open.
+  const selected: ContributionEventsFetch[] = [];
+  const pending = [...reached];
+  let next = pending.shift();
+  while (next !== undefined) {
+    const [name, fetches] = next;
+    // eslint-disable-next-line no-await-in-loop
+    const fetch = await selectFetch([...fetches.keys()], async (fetchedAt) => ({
+      window: name,
+      fetchedAt,
+      ...(await readEventsFetch(bucket, kind, fetches.get(fetchedAt) ?? [])),
+    }));
+    if (fetch !== null) {
+      selected.push(fetch);
+    }
+    next = pending.shift();
+  }
+  const fetches = selected.toSorted((a, b) => a.fetchedAt.localeCompare(b.fetchedAt));
   const byWindow = new Map(fetches.map((fetch) => [fetch.window, fetch]));
 
   return { fetches, truncated: eventsTruncated(window, byWindow) };
@@ -247,13 +259,7 @@ export async function replayContributionEvents(
     return null;
   }
 
-  let rows: RowsChanged = {
-    repositories: 0,
-    pullRequests: 0,
-    reviews: 0,
-    issues: 0,
-    commitDays: 0,
-  };
+  let rows = UNCHANGED;
   // One fetch after another, since a later fetch of the same event or
   // repository has to land after the earlier one it supersedes.
   const pending = [...archived.fetches];
@@ -261,13 +267,7 @@ export async function replayContributionEvents(
   while (fetch !== undefined) {
     // eslint-disable-next-line no-await-in-loop
     const changed = await normalizeContributionEvents(db, fetch.nodes, login, fetch.fetchedAt);
-    rows = {
-      repositories: rows.repositories + changed.repositories,
-      pullRequests: rows.pullRequests + changed.pullRequests,
-      reviews: rows.reviews + changed.reviews,
-      issues: rows.issues + changed.issues,
-      commitDays: rows.commitDays + changed.commitDays,
-    };
+    rows = added(rows, changed);
     fetch = pending.shift();
   }
 
@@ -300,22 +300,27 @@ function eventsTruncated(
   );
 }
 
-function contributionEventsFetch(
+async function readEventsFetch(
+  bucket: R2Bucket,
   kind: EventKind,
-  pages: readonly RawPage[],
-): Omit<ContributionEventsFetch, "window" | "fetchedAt"> {
+  pageKeys: readonly string[],
+): Promise<Omit<ContributionEventsFetch, "window" | "fetchedAt">> {
   switch (kind) {
     case "pr-authored": {
-      const parsed = pages.map((page) => connectionPage(pullRequestContributionsPage, page));
+      const parsed = await readParsed(bucket, pageKeys, OPEN_CONNECTIONS, (page) =>
+        connectionPage(pullRequestContributionsPage, page),
+      );
       return {
         nodes: { kind, nodes: parsed.flatMap((page) => page.nodes) },
-        ...connectionCoverage(pages, parsed),
+        ...connectionCoverage(pageKeys, parsed),
       };
     }
     case "pr-reviewed": {
-      const parsed = pages.map((page) => connectionPage(reviewContributionsPage, page));
+      const parsed = await readParsed(bucket, pageKeys, OPEN_CONNECTIONS, (page) =>
+        connectionPage(reviewContributionsPage, page),
+      );
       const nodes = parsed.flatMap((page) => page.nodes);
-      const { complete, truncated } = connectionCoverage(pages, parsed);
+      const { complete, truncated } = connectionCoverage(pageKeys, parsed);
       return {
         nodes: { kind, nodes },
         complete,
@@ -323,10 +328,12 @@ function contributionEventsFetch(
       };
     }
     case "issue": {
-      const parsed = pages.map((page) => connectionPage(issueContributionsPage, page));
+      const parsed = await readParsed(bucket, pageKeys, OPEN_CONNECTIONS, (page) =>
+        connectionPage(issueContributionsPage, page),
+      );
       return {
         nodes: { kind, nodes: parsed.flatMap((page) => page.nodes) },
-        ...connectionCoverage(pages, parsed),
+        ...connectionCoverage(pageKeys, parsed),
       };
     }
   }
@@ -344,16 +351,13 @@ function connectionPage<T>(
 }
 
 function connectionCoverage(
-  pages: readonly RawPage[],
+  pageKeys: readonly string[],
   parsed: readonly ContributionConnectionPage<unknown>[],
 ): { complete: boolean; truncated: boolean } {
   return {
     complete:
-      contiguous(pages) &&
-      finished(
-        parsed.map((page) => page.pageInfo),
-        CONTRIBUTION_EVENTS_MAX_PAGES,
-      ),
+      contiguous(pageKeys) &&
+      finished(parsed.at(-1)?.pageInfo, parsed.length, CONTRIBUTION_EVENTS_MAX_PAGES),
     truncated: contributionEventsTruncated(parsed),
   };
 }
@@ -371,13 +375,27 @@ interface RawPage {
   body: string;
 }
 
+// A search fetch as its listing and last page describe it, before any other
+// page is read.
 interface SearchFetch {
   fetchedAt: string;
-  nodes: SearchPageNodes;
-  truncated: boolean;
+  kind: EventKind;
+  pageKeys: string[];
+  // Each pull request's review follow-ups, in the order they were read.
+  reviewKeys: ReadonlyMap<string, readonly string[]>;
+  // Null when the keys already show a page missing, which settles the fetch
+  // without reading it.
+  last: SearchPageRead | null;
   // False when the archive holds fewer pages than the fetch read, which a run
   // interrupted mid-pagination leaves behind.
   complete: boolean;
+}
+
+interface SearchPageRead {
+  key: string;
+  nodes: SearchPageNodes;
+  pageInfo: PageInfo;
+  truncated: boolean;
 }
 
 // A fetch timestamp is an ISO string, so R2's lexicographic listing puts the
@@ -406,16 +424,15 @@ async function selectFetch<Fetch extends { complete: boolean }>(
   return newest;
 }
 
-async function readFetch(
+async function listFetch(
   bucket: R2Bucket,
   kind: EventKind,
   prefix: string,
   fetchPrefix: string,
 ): Promise<SearchFetch> {
-  const { keys } = await list(bucket, { prefix: fetchPrefix });
   const pageKeys: string[] = [];
   const reviewKeys = new Map<string, string[]>();
-  for (const key of keys) {
+  for await (const key of keys(bucket, fetchPrefix)) {
     const pullRequest = searchReviewsPullRequest(fetchPrefix, key);
     if (pullRequest === null) {
       pageKeys.push(key);
@@ -424,124 +441,184 @@ async function readFetch(
     }
   }
 
-  const [pages, reviews] = await Promise.all([
-    read(bucket, pageKeys),
-    Promise.all(
-      [...reviewKeys].map(
-        async ([pullRequest, followUps]) => [pullRequest, await read(bucket, followUps)] as const,
-      ),
-    ),
-  ]);
+  const lastKey = pageKeys.at(-1);
+  const last =
+    lastKey === undefined || !contiguous(pageKeys)
+      ? null
+      : parseSearchPage(kind, await readOne(bucket, lastKey));
 
   return {
     fetchedAt: fetchPrefix.slice(prefix.length, -1),
-    ...searchFetch(kind, pages, new Map(reviews)),
+    kind,
+    pageKeys,
+    reviewKeys,
+    last,
+    complete: finished(last?.pageInfo, pageKeys.length, SEARCH_MAX_PAGES),
   };
 }
 
-// `reviews` holds the follow-up pages that completed a pull request's reviews,
-// keyed by the pull request, in the order they were read.
-function searchFetch(
-  kind: EventKind,
-  pages: readonly RawPage[],
-  reviews: ReadonlyMap<string, readonly RawPage[]>,
-): Omit<SearchFetch, "fetchedAt"> {
+// Writes a fetch's pages as they are read, in key order, so a node two pages
+// list keeps the later page's copy.
+async function writeFetch(
+  db: D1Database,
+  bucket: R2Bucket,
+  fetch: SearchFetch,
+): Promise<Omit<Replay, "fetchedAt">> {
+  const pages = mapConcurrent(fetch.pageKeys, OPEN_CONNECTIONS, async (key) => {
+    const page =
+      key === fetch.last?.key
+        ? fetch.last
+        : parseSearchPage(fetch.kind, await readOne(bucket, key));
+    return withFollowUps(bucket, page, fetch.reviewKeys);
+  });
+
+  let rows = UNCHANGED;
+  let truncated = false;
+  for await (const page of pages) {
+    // ast-grep-ignore: await-in-for-of
+    rows = added(rows, await normalizeSearchPage(db, page.nodes, fetch.fetchedAt));
+    truncated ||= page.truncated;
+  }
+
+  return { rows, truncated };
+}
+
+function parseSearchPage(kind: EventKind, page: RawPage): SearchPageRead {
   switch (kind) {
     case "pr-authored": {
-      const parsed = pages.map((page) => parse(pullRequestSearchPage, page));
-      return {
-        nodes: { kind, nodes: parsed.flatMap((page) => page.search.nodes) },
-        ...coverage(pages, parsed),
-      };
+      const { search } = parse(pullRequestSearchPage, page);
+      return searchPageRead(page.key, { kind, nodes: search.nodes }, search);
     }
     case "pr-reviewed": {
-      const parsed = pages.map((page) => parse(reviewedPullRequestSearchPage, page));
-      const nodes = parsed
-        .flatMap((page) => page.search.nodes)
-        .map((node) =>
-          withReviews(
-            node,
-            (reviews.get(node.id) ?? []).map((page) => parse(pullRequestReviewsPage, page)),
-          ),
-        );
-      const { complete, truncated } = coverage(pages, parsed);
-      return {
-        nodes: { kind, nodes },
-        complete,
-        // A pull request with more reviews than its nested page and its
-        // follow-ups read shorts the window on its own. The live pager applies
-        // the same check.
-        truncated: truncated || nodes.some(reviewsTruncated),
-      };
+      const { search } = parse(reviewedPullRequestSearchPage, page);
+      return searchPageRead(page.key, { kind, nodes: search.nodes }, search);
     }
     case "issue": {
-      const parsed = pages.map((page) => parse(issueSearchPage, page));
-      return {
-        nodes: { kind, nodes: parsed.flatMap((page) => page.search.nodes) },
-        ...coverage(pages, parsed),
-      };
+      const { search } = parse(issueSearchPage, page);
+      return searchPageRead(page.key, { kind, nodes: search.nodes }, search);
     }
   }
 }
 
-function coverage(
-  pages: readonly RawPage[],
-  parsed: readonly SearchPage<unknown>[],
-): { complete: boolean; truncated: boolean } {
+function searchPageRead(
+  key: string,
+  nodes: SearchPageNodes,
+  search: SearchPage<unknown>["search"],
+): SearchPageRead {
   return {
-    complete:
-      contiguous(pages) &&
-      finished(
-        parsed.map((page) => page.search.pageInfo),
-        SEARCH_MAX_PAGES,
-      ),
-    truncated: parsed.some((page) => searchTruncated(page.search.issueCount)),
+    key,
+    nodes,
+    pageInfo: search.pageInfo,
+    truncated: searchTruncated(search.issueCount),
+  };
+}
+
+// Completes each reviewed pull request from the follow-ups archived for it. A
+// pull request with more reviews than its nested page and its follow-ups read
+// shorts the window on its own. The live pager applies the same check.
+async function withFollowUps(
+  bucket: R2Bucket,
+  page: SearchPageRead,
+  reviewKeys: ReadonlyMap<string, readonly string[]>,
+): Promise<SearchPageRead> {
+  if (page.nodes.kind !== "pr-reviewed") {
+    return page;
+  }
+
+  const nodes: ReviewedPullRequestNode[] = [];
+  // One follow-up read at a time, since the page reads beside this one already
+  // hold the other connections. Almost no pull request has one.
+  const pending = [...page.nodes.nodes];
+  let node = pending.shift();
+  while (node !== undefined) {
+    // eslint-disable-next-line no-await-in-loop
+    const reviews = await readParsed(bucket, reviewKeys.get(node.id) ?? [], 1, (followUp) =>
+      parse(pullRequestReviewsPage, followUp),
+    );
+    nodes.push(withReviews(node, reviews));
+    node = pending.shift();
+  }
+
+  return {
+    ...page,
+    nodes: { kind: page.nodes.kind, nodes },
+    truncated: page.truncated || nodes.some(reviewsTruncated),
   };
 }
 
 // Keys sort on the zero-padded page number `searchKey` wrote, so a fetch whose
 // last page numbers as many pages as were listed lost none along the way.
-function contiguous(pages: readonly RawPage[]): boolean {
-  const last = pages.at(-1);
+function contiguous(pageKeys: readonly string[]): boolean {
+  const last = pageKeys.at(-1);
 
-  return last !== undefined && searchPageNumber(last.key) === pages.length;
+  return last !== undefined && searchPageNumber(last) === pageKeys.length;
 }
 
 // A fetch ends when GitHub announces no successor or when the paginator hits
 // the bound it stops at rather than following a cursor GitHub would reject.
-function finished(pageInfo: readonly PageInfo[], maxPages: number): boolean {
-  const last = pageInfo.at(-1);
+function finished(last: PageInfo | undefined, pages: number, maxPages: number): boolean {
   if (last === undefined) {
     return false;
   }
 
-  return !last.hasNextPage || pageInfo.length >= maxPages;
+  return !last.hasNextPage || pages >= maxPages;
 }
 
-interface Listing {
-  keys: string[];
-  prefixes: string[];
+const UNCHANGED: RowsChanged = {
+  repositories: 0,
+  pullRequests: 0,
+  reviews: 0,
+  issues: 0,
+  commitDays: 0,
+};
+
+function added(rows: RowsChanged, changed: RowsChanged): RowsChanged {
+  return {
+    repositories: rows.repositories + changed.repositories,
+    pullRequests: rows.pullRequests + changed.pullRequests,
+    reviews: rows.reviews + changed.reviews,
+    issues: rows.issues + changed.issues,
+    commitDays: rows.commitDays + changed.commitDays,
+  };
 }
 
-async function list(bucket: R2Bucket, options: R2ListOptions): Promise<Listing> {
-  const listing: Listing = { keys: [], prefixes: [] };
+// R2 lists a thousand keys at a time, and each listing is yielded as it lands
+// rather than after the last.
+async function* listed(bucket: R2Bucket, options: R2ListOptions): AsyncGenerator<R2Objects> {
   let cursor: string | undefined;
   let remaining = true;
 
   while (remaining) {
     // eslint-disable-next-line no-await-in-loop
-    const listed = await bucket.list({ ...options, cursor });
-    listing.keys.push(...listed.objects.map((object) => object.key));
-    listing.prefixes.push(...listed.delimitedPrefixes);
-    remaining = listed.truncated;
-    cursor = listed.truncated ? listed.cursor : undefined;
+    const listing = await bucket.list({ ...options, cursor });
+    yield listing;
+    remaining = listing.truncated;
+    cursor = listing.truncated ? listing.cursor : undefined;
   }
-
-  return listing;
 }
 
-function read(bucket: R2Bucket, keys: readonly string[]): Promise<RawPage[]> {
-  return Promise.all(keys.map((key) => readOne(bucket, key)));
+async function* keys(bucket: R2Bucket, prefix: string): AsyncGenerator<string> {
+  for await (const listing of listed(bucket, { prefix })) {
+    yield* listing.objects.map((object) => object.key);
+  }
+}
+
+// Reads and parses each key in order, at most `limit` reads open, keeping the
+// parsed page rather than the body it came from.
+async function readParsed<T>(
+  bucket: R2Bucket,
+  pageKeys: readonly string[],
+  limit: number,
+  parsePage: (page: RawPage) => T,
+): Promise<T[]> {
+  const parsed: T[] = [];
+  const pages = mapConcurrent(pageKeys, limit, async (key) =>
+    parsePage(await readOne(bucket, key)),
+  );
+  for await (const page of pages) {
+    parsed.push(page);
+  }
+  return parsed;
 }
 
 async function readOne(bucket: R2Bucket, key: string): Promise<RawPage> {
