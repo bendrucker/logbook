@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { stubFetch } from "../../test/fetch-stub";
-import { contributionsResponse, jsonResponse, requestBody } from "../../test/github-fixtures";
+import {
+  contributionsCollection,
+  contributionsResponse,
+  jsonResponse,
+  requestBody,
+  TRUNCATED_COMMIT_TOTAL,
+} from "../../test/github-fixtures";
+import archived2014Q3 from "../../test/fixtures/contributions/2014-Q3.json";
+import archived2015Q3 from "../../test/fixtures/contributions/2015-Q3.json";
+import archived2026 from "../../test/fixtures/contributions/2026.json";
+import archived2026Q3 from "../../test/fixtures/contributions/2026-Q3.json";
+import { contributionsResponse as contributionsSchema } from "./schema";
 import {
   fetchContributions,
-  MAX_REPOSITORIES,
+  contributionsTruncated,
   quarterWindows,
   UnknownUserError,
   yearWindow,
@@ -23,7 +34,7 @@ describe("fetchContributions", () => {
 
     expect(result.window.key).toBe("2025");
     expect(result.collection).toMatchObject({
-      totalCommitContributions: 120,
+      totalCommitContributions: 12,
       totalPullRequestReviewContributions: 12,
       restrictedContributionsCount: 0,
       contributionYears: [2026, 2025],
@@ -64,31 +75,8 @@ describe("fetchContributions", () => {
     });
   });
 
-  it("leaves a year under the repository maximum unflagged", async () => {
-    const stub = stubFetch(() => contributionsResponse(MAX_REPOSITORIES - 1));
-
-    const result = await fetchContributions("t0ken", "bendrucker", yearWindow(2025, NOW), {
-      fetch: stub.fetch,
-      endpoint: ENDPOINT,
-    });
-
-    expect(result.truncated).toBe(false);
-  });
-
-  it("flags a year that came back on the repository maximum", async () => {
-    const stub = stubFetch(() => contributionsResponse(MAX_REPOSITORIES));
-
-    const result = await fetchContributions("t0ken", "bendrucker", yearWindow(2025, NOW), {
-      fetch: stub.fetch,
-      endpoint: ENDPOINT,
-    });
-
-    expect(result.truncated).toBe(true);
-    expect(result.collection.totalRepositoriesWithContributedCommits).toBe(MAX_REPOSITORIES);
-  });
-
-  it("flags a repository whose daily contributions did not all fit on the page", async () => {
-    const stub = stubFetch(() => contributionsResponse(2, 400));
+  it("flags a year whose day list came back short", async () => {
+    const stub = stubFetch(() => contributionsResponse(2, TRUNCATED_COMMIT_TOTAL));
 
     const result = await fetchContributions("t0ken", "bendrucker", yearWindow(2025, NOW), {
       fetch: stub.fetch,
@@ -125,6 +113,47 @@ describe("fetchContributions", () => {
         endpoint: ENDPOINT,
       }),
     ).rejects.toThrow(UnknownUserError);
+  });
+});
+
+// Cut from archived bodies and trimmed to a few repositories. Where trimming
+// would itself read as a dropped repository, the totals were rewritten to match
+// what was kept.
+function archived(body: { data: unknown }) {
+  const { user } = contributionsSchema.parse(body.data);
+  if (user === null) {
+    throw new Error("the fixture carries no user");
+  }
+  return user.contributionsCollection;
+}
+
+describe("contributionsTruncated", () => {
+  it("flags a quarter listing fewer repositories than it reports", () => {
+    expect(contributionsTruncated(archived(archived2015Q3))).toBe(true);
+  });
+
+  it("flags a year whose busiest repositories listed fewer commits than they report", () => {
+    expect(contributionsTruncated(archived(archived2026))).toBe(true);
+  });
+
+  it("leaves a quarter whose repositories report over 100 commits each unflagged", () => {
+    expect(contributionsTruncated(archived(archived2026Q3))).toBe(false);
+    expect(contributionsTruncated(archived(archived2014Q3))).toBe(false);
+  });
+
+  it("leaves a collection listing exactly the repository maximum unflagged", () => {
+    expect(contributionsTruncated(contributionsCollection(100))).toBe(false);
+  });
+
+  it("flags commits the collection reports that no listed repository accounts for", () => {
+    const collection = contributionsCollection(2);
+
+    expect(
+      contributionsTruncated({
+        ...collection,
+        totalCommitContributions: collection.totalCommitContributions + 1,
+      }),
+    ).toBe(true);
   });
 });
 

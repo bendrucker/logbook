@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   commitDaysPayload,
   contributionsPayload,
+  TRUNCATED_COMMIT_TOTAL,
   issue,
   pullRequest,
   repository,
@@ -12,7 +13,6 @@ import {
   searchPayload,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
-import { NESTED_PAGE_SIZE } from "../github/queries";
 import { contributionsKey, searchKey } from "../github/raw";
 import { SEARCH_MAX_RESULTS } from "../github/search";
 import type { EventKind } from "../github/windows";
@@ -186,8 +186,10 @@ describe("replaySearchWindow", () => {
     expect(replayed?.fetchedAt).toBe(LATER);
   });
 
-  it("reports a window whose match count hit the search cap", async () => {
-    await archive("pr-authored", LATER, 1, [pullRequest(1)], { issueCount: SEARCH_MAX_RESULTS });
+  it("reports a window whose match count passed the search cap", async () => {
+    await archive("pr-authored", LATER, 1, [pullRequest(1)], {
+      issueCount: SEARCH_MAX_RESULTS + 1,
+    });
 
     const replayed = await replaySearchWindow(env.DB, env.RAW, "pr-authored", WINDOW);
 
@@ -196,7 +198,7 @@ describe("replaySearchWindow", () => {
 
   it("reports a pull request whose reviews outran their one page", async () => {
     const node = reviewedPullRequest(7, {
-      reviews: { totalCount: NESTED_PAGE_SIZE + 1, nodes: [review(7)] },
+      reviews: { totalCount: 2, nodes: [review(7)] },
     });
     await archive("pr-reviewed", LATER, 1, [node]);
 
@@ -259,7 +261,7 @@ describe("replayContributions", () => {
   });
 
   it("reports a repository that committed on more days than one page holds", async () => {
-    const body = JSON.stringify(contributionsPayload(1, NESTED_PAGE_SIZE + 1));
+    const body = JSON.stringify(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL));
     await env.RAW.put(contributionsKey("2026", LATER), body);
 
     const replayed = await replayContributions(env.DB, env.RAW, 2026);
@@ -268,7 +270,7 @@ describe("replayContributions", () => {
   });
 
   it("adds the quarters archived with the same fetch as a truncated year", async () => {
-    const year = JSON.stringify(contributionsPayload(1, NESTED_PAGE_SIZE + 1));
+    const year = JSON.stringify(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL));
     await env.RAW.put(contributionsKey("2026", LATER), year);
     const days: [string, string][] = [
       ["2026-Q1", "2026-02-10"],
@@ -288,7 +290,7 @@ describe("replayContributions", () => {
   });
 
   it("keeps a year truncated when a quarter from its fetch is missing", async () => {
-    const year = JSON.stringify(contributionsPayload(1, NESTED_PAGE_SIZE + 1));
+    const year = JSON.stringify(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL));
     await env.RAW.put(contributionsKey("2026", LATER), year);
     await env.RAW.put(
       contributionsKey("2026-Q1", LATER),

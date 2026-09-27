@@ -179,12 +179,12 @@ describe("issueRows", () => {
 describe("contributionRows", () => {
   // One repository with two days, so the date part of each timestamp is what
   // separates the rows.
-  const collection = contributionsCollection(1, 2, {
+  const collection = contributionsCollection(1, 5, {
     commitContributionsByRepository: [
       {
         repository: repository("logbook"),
         contributions: {
-          totalCount: 2,
+          totalCount: 5,
           nodes: [commitDay(4, "2026-08-02T00:00:00Z"), commitDay(1, "2026-08-03T12:30:00Z")],
         },
       },

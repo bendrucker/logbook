@@ -2,10 +2,11 @@
 // remaining budget off whatever response it just took.
 const gql = (strings: TemplateStringsArray) => strings.raw.join("");
 
-// Baked into the documents below rather than passed as variables, so the checks
-// that detect a list arriving full read the same number the query asked for.
-export const MAX_REPOSITORIES = 100;
-export const NESTED_PAGE_SIZE = 100;
+// Baked into the documents below rather than passed as variables. The checks
+// that detect a dropped item compare against the totals each response reports,
+// never against these.
+const MAX_REPOSITORIES = 100;
+const NESTED_PAGE_SIZE = 100;
 
 const REPOSITORY_FRAGMENT = gql`
   fragment RepositoryInfo on Repository {

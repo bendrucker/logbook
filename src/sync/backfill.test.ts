@@ -101,7 +101,7 @@ describe("backfill", () => {
 
   it("walks the years the collection reports rather than a range of its own", async () => {
     const { fetch, requests } = stubGitHub(() =>
-      jsonResponse(contributionsPayload(1, 1, { contributionYears: [2014, 2013, 2012] })),
+      jsonResponse(contributionsPayload(1, undefined, { contributionYears: [2014, 2013, 2012] })),
     );
 
     const result = await backfill(

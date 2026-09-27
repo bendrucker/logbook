@@ -1,6 +1,5 @@
 // Runtime shapes for the documents in `queries.ts`.
 import { z } from "zod";
-import { NESTED_PAGE_SIZE } from "./queries";
 
 export const rateLimit = z.object({
   cost: z.number(),
@@ -119,12 +118,11 @@ const reviewedPullRequestNode = z.object({
 export type ReviewedPullRequestNode = z.infer<typeof reviewedPullRequestNode>;
 
 // The reviews sub-connection returns one page and carries no cursor the outer
-// paginator could follow, so a pull request with more reviews than that has
-// lost the rest. The total is compared against what the query asked for rather
-// than against the nodes returned, since `nodes()` drops nulls and a filtered
-// length under the total would report a complete page as truncated.
+// paginator could follow, so a pull request with more reviews than that page
+// holds has lost the rest. `nodes()` drops null entries, which can only make a
+// complete page read as short: the check errs toward flagging.
 export function reviewsTruncated(node: ReviewedPullRequestNode): boolean {
-  return node.reviews.totalCount > NESTED_PAGE_SIZE;
+  return node.reviews.totalCount > node.reviews.nodes.length;
 }
 
 const issueNode = z.object({

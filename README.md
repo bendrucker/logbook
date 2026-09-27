@@ -75,7 +75,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 One call walks `BACKFILL_WINDOWS` monthly windows and answers with `next`, the `from` the following call resumes at. `next` is null once the walk reaches the present. `kind=contributions` walks the years `contributionYears` reports and reads its year out of `from`.
 
-Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a silently truncated search window and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. `GET /admin/sync` reports it alongside the watermarks, the last ten failures, and the most recent lake build.
+Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a search gap and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. GitHub counts reviews once per pull request, including my own, so the note sets that figure against distinct pull requests: `reviews 75 (38 own) vs 37 PRs`. `GET /admin/sync` reports it alongside the watermarks, the last ten failures, and the most recent lake build.
 
 ## Lake
 

@@ -23,7 +23,7 @@ import {
   reviewsTruncated,
   type SearchPage,
 } from "../github/schema";
-import { SEARCH_MAX_PAGES, SEARCH_MAX_RESULTS } from "../github/search";
+import { SEARCH_MAX_PAGES, searchTruncated } from "../github/search";
 import type { EventKind } from "../github/windows";
 import { normalizeContributions, normalizeSearchPage, type RowsChanged } from "./page";
 import type { SearchPageNodes } from "./page";
@@ -227,7 +227,8 @@ function searchFetch(kind: EventKind, pages: readonly RawPage[]): Omit<SearchFet
         nodes: { kind, nodes },
         complete,
         // The reviews sub-connection carries no cursor, so a pull request with
-        // more reviews than one page shorts the window on its own.
+        // more reviews than one page shorts the window on its own. The live
+        // pager applies the same check.
         truncated: truncated || nodes.some(reviewsTruncated),
       };
     }
@@ -247,7 +248,7 @@ function coverage(
 ): { complete: boolean; truncated: boolean } {
   return {
     complete: contiguous(pages) && finished(parsed),
-    truncated: parsed.some((page) => page.search.issueCount >= SEARCH_MAX_RESULTS),
+    truncated: parsed.some((page) => searchTruncated(page.search.issueCount)),
   };
 }
 

@@ -1,0 +1,67 @@
+{
+  "data": {
+    "user": {
+      "contributionsCollection": {
+        "totalCommitContributions": 183,
+        "totalPullRequestContributions": 21,
+        "totalPullRequestReviewContributions": 0,
+        "totalIssueContributions": 24,
+        "totalRepositoriesWithContributedCommits": 1,
+        "restrictedContributionsCount": 0,
+        "contributionYears": [
+          2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012,
+          2011
+        ],
+        "commitContributionsByRepository": [
+          {
+            "repository": {
+              "id": "MDEwOlJlcG9zaXRvcnkxODc2NzEzMw==",
+              "name": "pledge-app",
+              "owner": { "login": "valet-io" },
+              "description": null,
+              "url": "https://github.com/valet-io/pledge-app",
+              "stargazerCount": 1,
+              "primaryLanguage": { "name": "JavaScript", "color": "#f1e05a" },
+              "createdAt": "2014-04-14T16:06:08Z",
+              "isFork": false,
+              "visibility": "PUBLIC"
+            },
+            "contributions": {
+              "totalCount": 183,
+              "nodes": [
+                { "commitCount": 3, "occurredAt": "2014-09-30T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2014-09-29T07:00:00Z" },
+                { "commitCount": 1, "occurredAt": "2014-09-26T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2014-09-13T07:00:00Z" },
+                { "commitCount": 1, "occurredAt": "2014-09-08T07:00:00Z" },
+                { "commitCount": 4, "occurredAt": "2014-09-03T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2014-08-30T07:00:00Z" },
+                { "commitCount": 1, "occurredAt": "2014-08-29T07:00:00Z" },
+                { "commitCount": 5, "occurredAt": "2014-08-21T07:00:00Z" },
+                { "commitCount": 5, "occurredAt": "2014-08-20T07:00:00Z" },
+                { "commitCount": 5, "occurredAt": "2014-08-19T07:00:00Z" },
+                { "commitCount": 3, "occurredAt": "2014-08-15T07:00:00Z" },
+                { "commitCount": 1, "occurredAt": "2014-08-14T07:00:00Z" },
+                { "commitCount": 4, "occurredAt": "2014-08-13T07:00:00Z" },
+                { "commitCount": 10, "occurredAt": "2014-08-11T07:00:00Z" },
+                { "commitCount": 3, "occurredAt": "2014-08-07T07:00:00Z" },
+                { "commitCount": 5, "occurredAt": "2014-07-25T07:00:00Z" },
+                { "commitCount": 10, "occurredAt": "2014-07-23T07:00:00Z" },
+                { "commitCount": 10, "occurredAt": "2014-07-21T07:00:00Z" },
+                { "commitCount": 7, "occurredAt": "2014-07-16T07:00:00Z" },
+                { "commitCount": 14, "occurredAt": "2014-07-09T07:00:00Z" },
+                { "commitCount": 9, "occurredAt": "2014-07-08T07:00:00Z" },
+                { "commitCount": 10, "occurredAt": "2014-07-07T07:00:00Z" },
+                { "commitCount": 8, "occurredAt": "2014-07-04T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2014-07-03T07:00:00Z" },
+                { "commitCount": 25, "occurredAt": "2014-07-02T07:00:00Z" },
+                { "commitCount": 31, "occurredAt": "2014-07-01T07:00:00Z" }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "rateLimit": { "cost": 1, "remaining": 3850, "resetAt": "2026-09-27T20:31:47Z" }
+  }
+}

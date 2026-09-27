@@ -131,47 +131,56 @@ export function searchResponse(nodes: readonly unknown[], overrides: SearchOverr
   return jsonResponse(searchPayload(nodes, overrides));
 }
 
-export function commitDay(commitCount = 4, occurredAt = "2026-08-02T00:00:00Z") {
+const COMMITS_PER_DAY = 4;
+
+// A repository total no single listed day reaches, standing for a day list
+// that came back short.
+export const TRUNCATED_COMMIT_TOTAL = 400;
+
+export function commitDay(commitCount = COMMITS_PER_DAY, occurredAt = "2026-08-02T00:00:00Z") {
   return { commitCount, occurredAt };
 }
 
+// Each repository lists one day of commits and reports `commitTotal` commits
+// for the window, so a total above one day's count stands for days the list
+// dropped.
 export function commitContributions(
   count: number,
-  dayTotal = 1,
+  commitTotal = COMMITS_PER_DAY,
 ): ContributionsCollection["commitContributionsByRepository"] {
   return Array.from({ length: count }, (_, index) => ({
     repository: repository(`repo-${index}`),
-    contributions: { totalCount: dayTotal, nodes: [commitDay()] },
+    contributions: { totalCount: commitTotal, nodes: [commitDay()] },
   }));
 }
 
 export function contributionsCollection(
   repositoryCount: number,
-  dayTotal = 1,
+  commitTotal = COMMITS_PER_DAY,
   overrides: Partial<ContributionsCollection> = {},
 ): ContributionsCollection {
   return {
-    totalCommitContributions: 120,
+    totalCommitContributions: repositoryCount * commitTotal,
     totalPullRequestContributions: 40,
     totalPullRequestReviewContributions: 12,
     totalIssueContributions: 8,
     totalRepositoriesWithContributedCommits: repositoryCount,
     restrictedContributionsCount: 0,
     contributionYears: [2026, 2025],
-    commitContributionsByRepository: commitContributions(repositoryCount, dayTotal),
+    commitContributionsByRepository: commitContributions(repositoryCount, commitTotal),
     ...overrides,
   };
 }
 
 export function contributionsPayload(
   repositoryCount: number,
-  dayTotal = 1,
+  commitTotal = COMMITS_PER_DAY,
   overrides: Partial<ContributionsCollection> = {},
 ) {
   return {
     data: {
       user: {
-        contributionsCollection: contributionsCollection(repositoryCount, dayTotal, overrides),
+        contributionsCollection: contributionsCollection(repositoryCount, commitTotal, overrides),
       },
       rateLimit: rateLimit(),
     },
@@ -179,12 +188,14 @@ export function contributionsPayload(
 }
 
 export function commitDaysPayload(days: readonly string[]) {
-  return contributionsPayload(1, days.length, {
+  const commits = 2 * days.length;
+  return contributionsPayload(1, commits, {
+    totalCommitContributions: commits,
     commitContributionsByRepository: [
       {
         repository: repository("repo-0"),
         contributions: {
-          totalCount: days.length,
+          totalCount: commits,
           nodes: days.map((day) => commitDay(2, `${day}T00:00:00Z`)),
         },
       },
@@ -192,8 +203,8 @@ export function commitDaysPayload(days: readonly string[]) {
   });
 }
 
-export function contributionsResponse(repositoryCount: number, dayTotal = 1) {
-  return jsonResponse(contributionsPayload(repositoryCount, dayTotal));
+export function contributionsResponse(repositoryCount: number, commitTotal = COMMITS_PER_DAY) {
+  return jsonResponse(contributionsPayload(repositoryCount, commitTotal));
 }
 
 export function jsonResponse(body: unknown, status = 200): Response {
