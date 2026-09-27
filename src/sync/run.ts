@@ -199,7 +199,13 @@ async function runContributions(
     if (year !== null) {
       result = { ...result, note: await note(env.DB, year, fetched.collection) };
     }
-    await advance(env.DB, "contributions", syncedThrough(root.to.toISOString(), now));
+    // A crawl unit that came back truncated leaves its narrower windows to the
+    // frontier, so nothing under it is synced until they land. One that cannot
+    // narrow further is as synced as it gets.
+    const settled = walk || !fetched.truncated || splitContributions(root.key, now).length === 0;
+    if (settled) {
+      await advance(env.DB, "contributions", syncedThrough(root.to.toISOString(), now));
+    }
   } catch (error) {
     result = { ...result, error: describe(error) };
     resumeAt = stoppedUntil(error, now);

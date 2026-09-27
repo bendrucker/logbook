@@ -280,6 +280,10 @@ describe("backfill contributions", () => {
     expect(stopped).toMatchObject({ pending: 3 });
     expect(stopped.error).toContain("BudgetRefused");
     expect(stopped.resumeAt).not.toBeNull();
+    // The year and its first quarter split, and only January has landed.
+    expect(await readWatermark(env.DB, "contributions")).toMatchObject({
+      window: "2014-01-31T23:59:59.000Z",
+    });
 
     const second = contributionsSource();
     const resumed = await backfill(
@@ -291,6 +295,9 @@ describe("backfill contributions", () => {
 
     expect(resumed).toMatchObject({ windows: ["2014-02", "2014-03", "2014-Q2"], pending: 0 });
     expect(second.requests).toHaveLength(3);
+    expect(await readWatermark(env.DB, "contributions")).toMatchObject({
+      window: LATER.toISOString(),
+    });
   });
 
   it("marks a window still truncated at the hour irreducible", async () => {
