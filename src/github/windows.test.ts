@@ -131,6 +131,8 @@ describe("createdWindow", () => {
     "2026-Q3",
     "2026-13",
     "2026-02-30",
+    "2026-02-29",
+    "2026-02-01--2026-02-29",
     "2026-08-14--2026-08-14",
     "2026-08-15--2026-08-01",
     "2026-08-14T03--2026-08-14T15",
@@ -168,6 +170,24 @@ describe("splitCreatedWindow", () => {
 
   it("leaves an hour irreducible", () => {
     expect(splitCreatedWindow("2026-08-14T05--2026-08-14T06", now)).toEqual([]);
+  });
+
+  it("halves February by its own length", () => {
+    expect(splitCreatedWindow("2024-02", now)).toEqual([
+      "2024-02-01--2024-02-14",
+      "2024-02-15--2024-02-29",
+    ]);
+    expect(splitCreatedWindow("2026-02", now)).toEqual([
+      "2026-02-01--2026-02-14",
+      "2026-02-15--2026-02-28",
+    ]);
+  });
+
+  it("halves a thirty-day month on the 15th", () => {
+    expect(splitCreatedWindow("2026-04", now)).toEqual([
+      "2026-04-01--2026-04-15",
+      "2026-04-16--2026-04-30",
+    ]);
   });
 
   it("leaves out a half yet to start", () => {

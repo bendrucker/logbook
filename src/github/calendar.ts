@@ -3,6 +3,20 @@
 // a quarter to months, a month to days, a day to halves, and a half to hours.
 // Each window's key names its prefix in R2 and its row in the crawl frontier.
 
+import { Temporal } from "temporal-polyfill";
+import {
+  dayHalves,
+  type HourRange,
+  hourRangeEnd,
+  hourRangeKey,
+  parseDay,
+  parseHourRange,
+  parseYearMonth,
+  splitHourRange,
+  startsAfter,
+  toUtc,
+} from "./spans";
+
 export interface ContributionsWindow {
   // `2015`, `2015-Q3`, `2015-07`, `2015-07-14`, or an hour range such as
   // `2015-07-14T00--2015-07-14T12`.
@@ -18,29 +32,15 @@ export class InvalidWindowError extends Error {
   }
 }
 
-const HOUR_MS = 60 * 60 * 1000;
-
-// A day splits into halves and a half into hours. An hour is the finest window,
-// so one still truncated there is irreducible.
-const HALF_DAY_HOURS = 12;
-
 type Span =
   | { unit: "year"; year: number }
   | { unit: "quarter"; year: number; quarter: number }
-  | { unit: "month"; year: number; month: number }
-  | { unit: "day"; start: Date }
-  | { unit: "hours"; start: Date; hours: number };
+  | { unit: "month"; month: Temporal.PlainYearMonth }
+  | { unit: "day"; day: Temporal.PlainDate }
+  | HourRange;
 
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function dayKey(date: Date): string {
-  return date.toISOString().slice(0, "2015-07-14".length);
-}
-
-function hourKey(date: Date): string {
-  return date.toISOString().slice(0, "2015-07-14T00".length);
+function firstMonth(span: { year: number; quarter: number }): Temporal.PlainYearMonth {
+  return Temporal.PlainYearMonth.from({ year: span.year, month: span.quarter * 3 - 2 });
 }
 
 function key(span: Span): string {
@@ -50,23 +50,24 @@ function key(span: Span): string {
     case "quarter":
       return `${span.year}-Q${span.quarter}`;
     case "month":
-      return `${span.year}-${pad(span.month)}`;
+      return span.month.toString();
     case "day":
-      return dayKey(span.start);
+      return span.day.toString();
     case "hours":
-      return `${hourKey(span.start)}--${hourKey(new Date(span.start.getTime() + span.hours * HOUR_MS))}`;
+      return hourRangeKey(span);
   }
 }
 
-function start(span: Span): Date {
+function start(span: Span): Temporal.PlainDateTime {
   switch (span.unit) {
     case "year":
-      return new Date(Date.UTC(span.year, 0, 1));
+      return Temporal.PlainDateTime.from({ year: span.year, month: 1, day: 1 });
     case "quarter":
-      return new Date(Date.UTC(span.year, (span.quarter - 1) * 3, 1));
+      return firstMonth(span).toPlainDate({ day: 1 }).toPlainDateTime();
     case "month":
-      return new Date(Date.UTC(span.year, span.month - 1, 1));
+      return span.month.toPlainDate({ day: 1 }).toPlainDateTime();
     case "day":
+      return span.day.toPlainDateTime();
     case "hours":
       return span.start;
   }
@@ -74,18 +75,18 @@ function start(span: Span): Date {
 
 // The first instant after the window, which the next window at its level
 // starts on.
-function after(span: Span): Date {
+function after(span: Span): Temporal.PlainDateTime {
   switch (span.unit) {
     case "year":
-      return new Date(Date.UTC(span.year + 1, 0, 1));
+      return start(span).add({ years: 1 });
     case "quarter":
-      return new Date(Date.UTC(span.year, span.quarter * 3, 1));
+      return start(span).add({ months: 3 });
     case "month":
-      return new Date(Date.UTC(span.year, span.month, 1));
+      return start(span).add({ months: 1 });
     case "day":
-      return new Date(span.start.getTime() + 24 * HOUR_MS);
+      return start(span).add({ days: 1 });
     case "hours":
-      return new Date(span.start.getTime() + span.hours * HOUR_MS);
+      return hourRangeEnd(span);
   }
 }
 
@@ -93,40 +94,28 @@ function children(span: Span): Span[] {
   switch (span.unit) {
     case "year":
       return [1, 2, 3, 4].map((quarter) => ({ unit: "quarter", year: span.year, quarter }));
-    case "quarter":
-      return [1, 2, 3].map((offset) => ({
-        unit: "month",
-        year: span.year,
-        month: (span.quarter - 1) * 3 + offset,
-      }));
-    case "month": {
-      const days = new Date(Date.UTC(span.year, span.month, 0)).getUTCDate();
-      return Array.from({ length: days }, (_, index) => ({
-        unit: "day",
-        start: new Date(Date.UTC(span.year, span.month - 1, index + 1)),
-      }));
+    case "quarter": {
+      const first = firstMonth(span);
+      return [0, 1, 2].map((offset) => ({ unit: "month", month: first.add({ months: offset }) }));
     }
+    case "month":
+      return Array.from({ length: span.month.daysInMonth }, (_, index) => ({
+        unit: "day",
+        day: span.month.toPlainDate({ day: index + 1 }),
+      }));
     case "day":
-      return hourRanges(span.start, 24, HALF_DAY_HOURS);
+      return dayHalves(span.day);
     case "hours":
-      return span.hours === 1 ? [] : hourRanges(span.start, span.hours, 1);
+      return splitHourRange(span);
   }
-}
-
-function hourRanges(from: Date, total: number, hours: number): Span[] {
-  return Array.from({ length: total / hours }, (_, index) => ({
-    unit: "hours",
-    start: new Date(from.getTime() + index * hours * HOUR_MS),
-    hours,
-  }));
 }
 
 // The collection rejects a window reaching into the future, so one still in
 // progress stops at now. Bounds are inclusive, so a window ends a second before
 // the next one starts.
 function window(span: Span, now: Date): ContributionsWindow {
-  const end = new Date(after(span).getTime() - 1000);
-  return { key: key(span), from: start(span), to: now < end ? now : end };
+  const end = toUtc(after(span).subtract({ seconds: 1 }));
+  return { key: key(span), from: toUtc(start(span)), to: now < end ? now : end };
 }
 
 function parse(value: string): Span | null {
@@ -140,33 +129,17 @@ function parse(value: string): Span | null {
     return { unit: "quarter", year: Number(match[1]), quarter: Number(match[2]) };
   }
 
-  match = /^(\d{4})-(\d{2})$/.exec(value);
-  if (match !== null) {
-    const month = Number(match[2]);
-    return month >= 1 && month <= 12 ? { unit: "month", year: Number(match[1]), month } : null;
+  const month = parseYearMonth(value);
+  if (month !== null) {
+    return { unit: "month", month };
   }
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return roundTrips({ unit: "day", start: new Date(`${value}T00:00:00Z`) }, value);
+  const day = parseDay(value);
+  if (day !== null) {
+    return { unit: "day", day };
   }
 
-  match = /^(\d{4}-\d{2}-\d{2}T\d{2})--(\d{4}-\d{2}-\d{2}T\d{2})$/.exec(value);
-  if (match !== null) {
-    const from = new Date(`${match[1]}:00:00Z`);
-    const hours = (Date.parse(`${match[2]}:00:00Z`) - from.getTime()) / HOUR_MS;
-    const aligned = from.getUTCHours() % hours === 0;
-    return (hours === HALF_DAY_HOURS || hours === 1) && aligned
-      ? roundTrips({ unit: "hours", start: from, hours }, value)
-      : null;
-  }
-
-  return null;
-}
-
-// `Date` rolls an impossible day like 2015-02-30 into March rather than failing,
-// so a key only parses when it names the window it produces.
-function roundTrips(span: Span, value: string): Span | null {
-  return !Number.isNaN(start(span).getTime()) && key(span) === value ? span : null;
+  return parseHourRange(value);
 }
 
 function spanOf(value: string): Span {
@@ -188,7 +161,9 @@ export function yearWindow(year: number, now: Date): ContributionsWindow {
 // The narrower windows a truncated one is fetched again as, leaving out any yet
 // to start. An hour has none.
 export function splitContributions(value: string, now: Date): ContributionsWindow[] {
-  return children(spanOf(value)).flatMap((child) => (start(child) > now ? [] : window(child, now)));
+  return children(spanOf(value)).flatMap((child) =>
+    startsAfter(start(child), now) ? [] : window(child, now),
+  );
 }
 
 // A window narrower than a day counts only part of each day's commits, so its
@@ -196,7 +171,7 @@ export function splitContributions(value: string, now: Date): ContributionsWindo
 // anything wider.
 export function enclosingDay(value: string): string | null {
   const span = parse(value);
-  return span?.unit === "hours" ? dayKey(span.start) : null;
+  return span?.unit === "hours" ? span.start.toPlainDate().toString() : null;
 }
 
 // The cross-check compares a whole year's totals, so only a year window has

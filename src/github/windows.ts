@@ -3,6 +3,20 @@
 // to halves of its days, a range of days to halves again down to a single day,
 // a day to halves, and a half to hours. Each window's key names its prefix in
 // R2 and its row in the crawl frontier.
+import { Temporal } from "temporal-polyfill";
+import {
+  dayHalves,
+  fromUtc,
+  type HourRange,
+  hourRangeEnd,
+  hourRangeKey,
+  parseDay,
+  parseHourRange,
+  parseYearMonth,
+  splitHourRange,
+  startsAfter,
+} from "./spans";
+
 export type EventKind = "pr-authored" | "pr-reviewed" | "issue";
 
 export interface Month {
@@ -30,55 +44,34 @@ export class InvalidSearchWindowError extends Error {
   }
 }
 
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-
-// A day splits into halves and a half into hours. An hour is the finest window,
-// so one still truncated there is irreducible.
-const HALF_DAY_HOURS = 12;
-
 type Span =
-  | { unit: "month"; year: number; month: number }
-  | { unit: "days"; start: Date; days: number }
-  | { unit: "hours"; start: Date; hours: number };
+  | { unit: "month"; month: Temporal.PlainYearMonth }
+  | { unit: "days"; start: Temporal.PlainDate; days: number }
+  | HourRange;
 
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
+// Search reads second-precision timestamps, so an instant bound stops at the
+// second.
+function instant(time: Temporal.PlainDateTime): string {
+  return `${time.toString({ smallestUnit: "second" })}Z`;
 }
 
-function dayKey(date: Date): string {
-  return date.toISOString().slice(0, "2026-08-14".length);
+function firstDay(span: Exclude<Span, HourRange>): Temporal.PlainDate {
+  return span.unit === "month" ? span.month.toPlainDate({ day: 1 }) : span.start;
 }
 
-function hourKey(date: Date): string {
-  return date.toISOString().slice(0, "2026-08-14T00".length);
-}
-
-// Search reads second-precision timestamps, so an instant bound drops the
-// milliseconds `toISOString` adds.
-function instant(date: Date): string {
-  return `${date.toISOString().slice(0, "2026-08-14T00:00:00".length)}Z`;
-}
-
-// Day zero of the following month is the last day of this one. A literal `-31`
-// against a thirty-day month is a date GitHub's parser has to reinterpret.
-function daysIn({ year, month }: Month): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-function start(span: Span): Date {
-  return span.unit === "month" ? new Date(Date.UTC(span.year, span.month - 1, 1)) : span.start;
+function start(span: Span): Temporal.PlainDateTime {
+  return span.unit === "hours" ? span.start : firstDay(span).toPlainDateTime();
 }
 
 // The first instant after the window.
-function after(span: Span): Date {
+function after(span: Span): Temporal.PlainDateTime {
   switch (span.unit) {
     case "month":
-      return new Date(Date.UTC(span.year, span.month, 1));
+      return start(span).add({ months: 1 });
     case "days":
-      return new Date(span.start.getTime() + span.days * DAY_MS);
+      return start(span).add({ days: span.days });
     case "hours":
-      return new Date(span.start.getTime() + span.hours * HOUR_MS);
+      return hourRangeEnd(span);
   }
 }
 
@@ -87,90 +80,72 @@ function after(span: Span): Date {
 function key(span: Span): string {
   switch (span.unit) {
     case "month":
-      return `${span.year}-${pad(span.month)}`;
+      return span.month.toString();
     case "days": {
-      const first = dayKey(span.start);
-      const last = dayKey(new Date(after(span).getTime() - DAY_MS));
+      const first = span.start.toString();
+      const last = span.start.add({ days: span.days - 1 }).toString();
       return span.days === 1 ? first : `${first}--${last}`;
     }
     case "hours":
-      return `${hourKey(span.start)}--${hourKey(after(span))}`;
+      return hourRangeKey(span);
   }
 }
 
 function toWindow(span: Span): CreatedWindow {
-  const through = new Date(after(span).getTime() - 1);
+  const through = after(span).subtract({ milliseconds: 1 });
   const [from, to] =
     span.unit === "hours"
       ? [instant(span.start), instant(through)]
-      : [dayKey(start(span)), dayKey(through)];
-  return { key: key(span), start: from, end: to, through: through.toISOString() };
+      : [firstDay(span).toString(), through.toPlainDate().toString()];
+  return {
+    key: key(span),
+    start: from,
+    end: to,
+    through: `${through.toString({ smallestUnit: "millisecond" })}Z`,
+  };
 }
 
 // Halving costs fewer requests than a window per day: a month over the cap
 // usually needs only its two halves.
-function halves(from: Date, days: number): Span[] {
+function halves(from: Temporal.PlainDate, days: number): Span[] {
   const first = Math.floor(days / 2);
   return [
     { unit: "days", start: from, days: first },
-    { unit: "days", start: new Date(from.getTime() + first * DAY_MS), days: days - first },
+    { unit: "days", start: from.add({ days: first }), days: days - first },
   ];
-}
-
-function hourRanges(from: Date, total: number, hours: number): Span[] {
-  return Array.from({ length: total / hours }, (_, index) => ({
-    unit: "hours",
-    start: new Date(from.getTime() + index * hours * HOUR_MS),
-    hours,
-  }));
 }
 
 function children(span: Span): Span[] {
   switch (span.unit) {
     case "month":
-      return halves(start(span), daysIn(span));
+      return halves(firstDay(span), span.month.daysInMonth);
     case "days":
-      return span.days === 1
-        ? hourRanges(span.start, 24, HALF_DAY_HOURS)
-        : halves(span.start, span.days);
+      return span.days === 1 ? dayHalves(span.start) : halves(span.start, span.days);
     case "hours":
-      return span.hours === 1 ? [] : hourRanges(span.start, span.hours, 1);
+      return splitHourRange(span);
   }
 }
 
 function parse(value: string): Span | null {
-  let match = /^(\d{4})-(\d{2})$/.exec(value);
-  if (match !== null) {
-    const month = Number(match[2]);
-    return month >= 1 && month <= 12 ? { unit: "month", year: Number(match[1]), month } : null;
+  const month = parseYearMonth(value);
+  if (month !== null) {
+    return { unit: "month", month };
   }
 
-  match = /^(\d{4}-\d{2}-\d{2})(?:--(\d{4}-\d{2}-\d{2}))?$/.exec(value);
+  const match = /^(\d{4}-\d{2}-\d{2})(?:--(\d{4}-\d{2}-\d{2}))?$/.exec(value);
   if (match !== null) {
-    const from = new Date(`${match[1]}T00:00:00Z`);
-    const last = match[2] === undefined ? from : new Date(`${match[2]}T00:00:00Z`);
-    const days = Math.round((last.getTime() - from.getTime()) / DAY_MS) + 1;
-    return days >= 1 ? roundTrips({ unit: "days", start: from, days }, value) : null;
+    const from = parseDay(match[1] ?? "");
+    const last = match[2] === undefined ? from : parseDay(match[2]);
+    if (from === null || last === null) {
+      return null;
+    }
+    // A single day is written as the day, so a range has to run forward past
+    // its first day to be a key some window produces.
+    const days = from.until(last).days + 1;
+    return match[2] === undefined || days > 1 ? { unit: "days", start: from, days } : null;
   }
 
-  match = /^(\d{4}-\d{2}-\d{2}T\d{2})--(\d{4}-\d{2}-\d{2}T\d{2})$/.exec(value);
-  if (match !== null) {
-    const from = new Date(`${match[1]}:00:00Z`);
-    const hours = (Date.parse(`${match[2]}:00:00Z`) - from.getTime()) / HOUR_MS;
-    const aligned = from.getUTCHours() % hours === 0;
-    return (hours === HALF_DAY_HOURS || hours === 1) && aligned
-      ? roundTrips({ unit: "hours", start: from, hours }, value)
-      : null;
-  }
-
-  return null;
-}
-
-// `Date` rolls an impossible day like 2015-02-30 into March rather than failing,
-// and a one-day range reads the same as the day, so a key only parses when it
-// is the name its window produces.
-function roundTrips(span: Span, value: string): Span | null {
-  return !Number.isNaN(start(span).getTime()) && key(span) === value ? span : null;
+  return parseHourRange(value);
 }
 
 function spanOf(value: string): Span {
@@ -186,16 +161,19 @@ export function createdWindow(value: string): CreatedWindow {
 }
 
 export function monthWindow(month: Month): CreatedWindow {
-  return toWindow({ unit: "month", ...month });
+  return toWindow({ unit: "month", month: Temporal.PlainYearMonth.from(month) });
 }
 
 export function monthlyWindows(from: Month, now: Date): CreatedWindow[] {
   const windows: CreatedWindow[] = [];
-  const first = from.year * 12 + (from.month - 1);
-  const last = now.getUTCFullYear() * 12 + now.getUTCMonth();
+  const last = fromUtc(now).toPlainDate().toPlainYearMonth();
 
-  for (let index = first; index <= last; index++) {
-    windows.push(monthWindow({ year: Math.floor(index / 12), month: (index % 12) + 1 }));
+  for (
+    let month = Temporal.PlainYearMonth.from(from);
+    Temporal.PlainYearMonth.compare(month, last) <= 0;
+    month = month.add({ months: 1 })
+  ) {
+    windows.push(toWindow({ unit: "month", month }));
   }
 
   return windows;
@@ -204,7 +182,9 @@ export function monthlyWindows(from: Month, now: Date): CreatedWindow[] {
 // The narrower windows a truncated one is fetched again as, leaving out any yet
 // to start. An hour has none.
 export function splitCreatedWindow(value: string, now: Date): string[] {
-  return children(spanOf(value)).flatMap((child) => (start(child) > now ? [] : key(child)));
+  return children(spanOf(value)).flatMap((child) =>
+    startsAfter(start(child), now) ? [] : key(child),
+  );
 }
 
 const SCOPES: Record<EventKind, (login: string) => string> = {

@@ -88,10 +88,23 @@ describe("contributionsWindow", () => {
     "2015-Q5",
     "2015-13",
     "2015-02-30",
+    "2015-02-29",
     "2015-07-14T00--2015-07-14T05",
+    "2015-07-14T12--2015-07-14T24",
     "2015-07-14T06--2015-07-14T18",
   ])("rejects %s", (key) => {
     expect(() => contributionsWindow(key, NOW)).toThrow(InvalidWindowError);
+  });
+});
+
+describe("contributionsWindow on a leap day", () => {
+  it("reads the day and its halves", () => {
+    expect(contributionsWindow("2016-02-29", NOW)).toEqual({
+      key: "2016-02-29",
+      from: new Date("2016-02-29T00:00:00Z"),
+      to: new Date("2016-02-29T23:59:59Z"),
+    });
+    expect(bounds("2016-02-29").at(-1)?.key).toBe("2016-02-29T12--2016-03-01T00");
   });
 });
 
