@@ -193,12 +193,12 @@ describe("syncWindow", () => {
 });
 
 describe("syncContributions", () => {
-  it("archives the year, writes commit days, and reports the years GitHub holds", async () => {
+  it("archives the year and writes commit days", async () => {
     const { fetch } = sequence([() => jsonResponse(contributionsPayload(2))]);
 
     const result = await syncContributions(env, 2026, options(fetch));
 
-    expect(result).toMatchObject({ pages: 1, error: null, contributionYears: [2026, 2025] });
+    expect(result).toMatchObject({ pages: 1, error: null, fetchedAt: FETCHED_AT });
     expect(await count("commit_days")).toEqual({ total: 2 });
     expect(await env.RAW.head(`raw/contributions/2026/${FETCHED_AT}.json`)).not.toBeNull();
   });
@@ -236,6 +236,30 @@ describe("syncContributions", () => {
       { from: "2026-04-01T00:00:00.000Z", to: "2026-06-30T23:59:59.000Z" },
       { from: "2026-07-01T00:00:00.000Z", to: "2026-09-09T12:00:00.000Z" },
     ]);
+  });
+
+  it("narrows a quarter that still truncates to its months", async () => {
+    const { fetch, requests } = sequence([
+      () => jsonResponse(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL)),
+      () => jsonResponse(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL)),
+      () => jsonResponse(commitDaysPayload(["2026-01-10"])),
+      () => jsonResponse(commitDaysPayload(["2026-02-10"])),
+      () => jsonResponse(commitDaysPayload(["2026-03-10"])),
+      () => jsonResponse(commitDaysPayload(["2026-05-10"])),
+      () => jsonResponse(commitDaysPayload(["2026-08-10"])),
+    ]);
+
+    const result = await syncContributions(env, 2026, options(fetch));
+
+    expect(result).toMatchObject({ pages: 7, truncated: false, error: null });
+    const variables = await Promise.all(
+      requests.slice(1, 3).map(async (request) => (await requestBody(request)).variables),
+    );
+    expect(variables).toMatchObject([
+      { from: "2026-01-01T00:00:00.000Z", to: "2026-03-31T23:59:59.000Z" },
+      { from: "2026-01-01T00:00:00.000Z", to: "2026-01-31T23:59:59.000Z" },
+    ]);
+    expect(await env.RAW.head(`raw/contributions/2026-01/${FETCHED_AT}.json`)).not.toBeNull();
   });
 
   it("reports the quarters it landed when the budget stops the walk", async () => {

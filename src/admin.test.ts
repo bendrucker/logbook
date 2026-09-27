@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, test } from "vitest";
 import { pullRequest, seedRepository } from "../test/fixtures";
 import { emptyBucket } from "../test/r2";
 import { upsertPullRequests } from "./store";
+import { enqueue } from "./sync/frontier";
 import { advance } from "./sync/state";
 import { finishRun, startRun } from "./sync/runs";
 
@@ -100,6 +101,26 @@ describe("GET /admin/sync", () => {
         contributions: { watermark: null, lastRun: null },
       },
       failures: [{ id, error: "502 from search" }],
+    });
+  });
+
+  it("reports what the backfill frontier still holds per kind", async () => {
+    await enqueue(env.DB, "issue", ["2014-01", "2014-02"]);
+    await enqueue(env.DB, "contributions", ["2015-07-14T03--2015-07-14T04"]);
+    await env.DB.prepare("UPDATE crawl_units SET status = 'irreducible' WHERE kind = ?")
+      .bind("contributions")
+      .run();
+
+    const response = await get(authorization);
+
+    expect(await response.json()).toMatchObject({
+      kinds: {
+        "pr-authored": { frontier: { pending: 0, irreducible: [] } },
+        issue: { frontier: { pending: 2, irreducible: [] } },
+        contributions: {
+          frontier: { pending: 0, irreducible: ["2015-07-14T03--2015-07-14T04"] },
+        },
+      },
     });
   });
 
@@ -203,7 +224,7 @@ describe("POST /admin/backfill", () => {
     await expect(response.json()).resolves.toEqual({ error: "GITHUB_TOKEN is not configured" });
   });
 
-  it("walks nothing and resumes nowhere once the window is in the future", async () => {
+  it("walks nothing and leaves nothing pending once the window is in the future", async () => {
     const response = await post("kind=issue&from=2099-01", authorization);
 
     expect(response.status).toBe(200);
@@ -212,7 +233,8 @@ describe("POST /admin/backfill", () => {
       windows: [],
       pages: 0,
       rowsChanged: 0,
-      next: null,
+      pending: 0,
+      irreducible: [],
       resumeAt: null,
       error: null,
     });

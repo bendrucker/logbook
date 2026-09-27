@@ -142,6 +142,21 @@ describe("Budget", () => {
     expect(waits).toEqual([700]);
   });
 
+  it("keeps the spend and reading under other limits", async () => {
+    const budget = new Budget({ ...LOOSE, cap: 3 });
+    budget.spend(rateLimit({ remaining: 2000 }));
+    budget.spend(rateLimit({ remaining: 1999 }));
+
+    const stricter = budget.withLimits({ floor: 2500 });
+    await expect(stricter.admit()).rejects.toMatchObject({ limit: "floor" });
+
+    const looser = budget.withLimits({ floor: 0 });
+    await looser.admit();
+    looser.spend(rateLimit({ remaining: 1998 }));
+    await expect(looser.admit()).rejects.toMatchObject({ limit: "cap" });
+    expect(looser.spent).toBe(3);
+  });
+
   it("refuses without waiting", async () => {
     const { clock, waits } = fakeClock();
     const budget = new Budget({ ...LOOSE, cap: 1, spacingMs: 1000 }, [], clock);

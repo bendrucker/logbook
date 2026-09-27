@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { fakeClock } from "../../test/clock";
 import { stubFetch } from "../../test/fetch-stub";
 import {
   contributionsPayload,
@@ -10,6 +11,7 @@ import {
   searchPayload,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
+import { enqueue, frontierStatus } from "./frontier";
 import { syncIncremental } from "./incremental";
 import { recentRuns } from "./runs";
 import { advance, readWatermark } from "./state";
@@ -111,5 +113,37 @@ describe("syncIncremental", () => {
     expect(refused?.error).toContain("BudgetRefused");
     expect(await readWatermark(env.DB, "issue")).toMatchObject({ window: WATERMARK });
     expect(await recentRuns(env.DB, "contributions", 1)).toEqual([]);
+  });
+
+  it("drains backfill windows with what the incremental work left", async () => {
+    await enqueue(env.DB, "issue", ["2014-01"]);
+    const { fetch, queries } = stubGitHub([
+      () => jsonResponse(contributionsPayload(1)),
+      () => jsonResponse(searchPayload([])),
+    ]);
+
+    await syncIncremental(env, { fetch, now: NOW, clock: fakeClock().clock });
+
+    expect(queries.at(-1)).toBe("is:issue author:bendrucker created:2014-01-01..2014-01-31");
+    expect((await frontierStatus(env.DB)).get("issue")).toBeUndefined();
+  });
+
+  it("leaves backfill windows pending below the backfill floor", async () => {
+    await enqueue(env.DB, "issue", ["2014-01"]);
+    const payload = contributionsPayload(1);
+    const { fetch, requests } = stubGitHub([
+      () =>
+        jsonResponse({
+          data: {
+            ...payload.data,
+            rateLimit: rateLimit({ remaining: env.RATE_FLOOR_BACKFILL - 1 }),
+          },
+        }),
+    ]);
+
+    await syncIncremental(env, { fetch, now: NOW, clock: fakeClock().clock });
+
+    expect(requests).toHaveLength(1);
+    expect((await frontierStatus(env.DB)).get("issue")).toEqual({ pending: 1, irreducible: [] });
   });
 });

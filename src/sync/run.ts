@@ -1,10 +1,13 @@
 import { GitHubResponseError, type GraphQLOptions, SecondaryRateLimited } from "../github/client";
 import {
-  type ContributionsResult,
-  fetchContributions,
-  quarterWindows,
+  type ContributionsWindow,
+  contributionsWindow,
+  enclosingDay,
+  splitContributions,
+  windowYear,
   yearWindow,
-} from "../github/contributions";
+} from "../github/calendar";
+import { type ContributionsResult, fetchContributions } from "../github/contributions";
 import { archiveContributions, archiveSearchPage } from "../github/raw";
 import {
   issuePages,
@@ -17,6 +20,7 @@ import type { EventKind } from "../github/windows";
 import {
   normalizeContributions,
   normalizeSearchPage,
+  replayContributions,
   type RowsChanged,
   type SearchPageNodes,
 } from "../normalize";
@@ -63,6 +67,8 @@ export interface SyncOptions extends GraphQLOptions {
 }
 
 export interface SyncResult extends RunResult {
+  // When the run started, which names its pages in R2.
+  fetchedAt: string;
   // Set when the run stopped on the rate budget or a secondary limit rather
   // than a fault: the instant worth waiting for. The limit belongs to the token
   // rather than to this window, so a caller holding more windows stops instead
@@ -124,56 +130,76 @@ export async function syncWindow(
     await finishRun(env.DB, id, result);
   }
 
-  return { ...result, resumeAt };
+  return { ...result, fetchedAt, resumeAt };
 }
 
-export interface ContributionsRun extends SyncResult {
-  // The years GitHub reports holding contributions for.
-  contributionYears: number[];
-}
-
-export async function syncContributions(
+// The hourly run's current year. A truncated window is fetched again a
+// narrower window at a time, down the calendar until each one comes back whole,
+// which recovers the days a busy repository's yearly page dropped.
+export function syncContributions(
   env: Env,
   year: number,
   options: SyncOptions,
-): Promise<ContributionsRun> {
+): Promise<SyncResult> {
+  return runContributions(env, yearWindow(year, options.now ?? new Date()), options, true);
+}
+
+// One crawl unit: the window alone, leaving its split to the frontier.
+export function syncContributionsWindow(
+  env: Env,
+  key: string,
+  options: SyncOptions,
+): Promise<SyncResult> {
+  return runContributions(env, contributionsWindow(key, options.now ?? new Date()), options, false);
+}
+
+async function runContributions(
+  env: Env,
+  root: ContributionsWindow,
+  options: SyncOptions,
+  walk: boolean,
+): Promise<SyncResult> {
   const now = options.now ?? new Date();
   const fetchedAt = now.toISOString();
-  const id = await startRun(env.DB, "contributions", String(year), fetchedAt);
+  const id = await startRun(env.DB, "contributions", root.key, fetchedAt);
   const spent = options.budget.spent;
   let result = CLEAN;
   let resumeAt: string | null = null;
-  let collection: ContributionsCollection | null = null;
-  let current = yearWindow(year, now);
+  let current = root;
 
   try {
     const token = githubToken(env);
-    const fetched = await fetchContributions(token, env.GITHUB_LOGIN, current, options);
-    collection = fetched.collection;
+    const fetched = await fetchContributions(token, env.GITHUB_LOGIN, root, options);
     result = await ingestContributions(env, fetchedAt, fetched, result);
 
-    // A truncated year is fetched again a quarter at a time, which recovers the
-    // days a busy repository's yearly page dropped. The quarters run in turn so
-    // the rate budget stops the walk, and the year stays truncated until
-    // every quarter has landed.
-    if (fetched.truncated) {
-      const quarters = quarterWindows(year, now);
-      let quarterTruncated = false;
-      let quarter = quarters.shift();
-      while (quarter !== undefined) {
-        current = quarter;
+    // The narrower windows run in turn so the rate budget stops the walk, and
+    // the root stays truncated until every one has landed. Depth first, so a
+    // window's children run before its next sibling.
+    if (walk && fetched.truncated) {
+      const pending = splitContributions(root.key, now);
+      let irreducible = false;
+      let window = pending.shift();
+      while (window !== undefined) {
+        current = window;
         // eslint-disable-next-line no-await-in-loop
-        const part = await fetchContributions(token, env.GITHUB_LOGIN, quarter, options);
+        const part = await fetchContributions(token, env.GITHUB_LOGIN, window, options);
         // eslint-disable-next-line no-await-in-loop
         result = await ingestContributions(env, fetchedAt, part, result);
-        quarterTruncated ||= part.truncated;
-        quarter = quarters.shift();
+        if (part.truncated) {
+          const children = splitContributions(window.key, now);
+          irreducible ||= children.length === 0;
+          pending.unshift(...children);
+        }
+        window = pending.shift();
       }
-      result = { ...result, truncated: quarterTruncated };
+      result = { ...result, truncated: irreducible };
     }
 
-    result = { ...result, note: await note(env.DB, year, fetched.collection) };
-    await advance(env.DB, "contributions", syncedThrough(yearEnd(year), now));
+    const year = windowYear(root.key);
+    if (year !== null) {
+      result = { ...result, note: await note(env.DB, year, fetched.collection) };
+    }
+    await advance(env.DB, "contributions", syncedThrough(root.to.toISOString(), now));
   } catch (error) {
     result = { ...result, error: describe(error) };
     resumeAt = stoppedUntil(error, now);
@@ -185,7 +211,7 @@ export async function syncContributions(
     await finishRun(env.DB, id, result);
   }
 
-  return { ...result, resumeAt, contributionYears: collection?.contributionYears ?? [] };
+  return { ...result, fetchedAt, resumeAt };
 }
 
 // The budget spans the invocation, so a run's cost is what it spent from the
@@ -218,7 +244,7 @@ async function ingestContributions(
     fetchedAt,
     body: fetched.body,
   });
-  const rows = await normalizeContributions(env.DB, fetched.collection, fetchedAt);
+  const rows = await contributionRowsChanged(env, fetched, fetchedAt);
 
   return {
     ...result,
@@ -226,6 +252,21 @@ async function ingestContributions(
     rowsChanged: result.rowsChanged + total(rows),
     truncated: result.truncated || fetched.truncated,
   };
+}
+
+// A window narrower than a day counts part of each day's commits, so its rows
+// are the day's total across every part archived so far rather than its own.
+async function contributionRowsChanged(
+  env: Env,
+  fetched: ContributionsResult,
+  fetchedAt: string,
+): Promise<RowsChanged> {
+  const day = enclosingDay(fetched.window.key);
+  if (day === null) {
+    return normalizeContributions(env.DB, fetched.collection, fetchedAt);
+  }
+  const replayed = await replayContributions(env.DB, env.RAW, day);
+  return replayed?.rows ?? (await normalizeContributions(env.DB, fetched.collection, fetchedAt));
 }
 
 // The cross-check reports on a run whose pages are already in R2 and whose rows
@@ -249,12 +290,6 @@ async function note(
 export function syncedThrough(end: string, now: Date): string {
   const at = now.toISOString();
   return end < at ? end : at;
-}
-
-// The collection takes at most a year per request, so a year is synced no
-// further than its own last instant.
-function yearEnd(year: number): string {
-  return new Date(Date.UTC(year, 11, 31, 23, 59, 59)).toISOString();
 }
 
 interface Page {

@@ -13,7 +13,13 @@ import {
   upsertRepositories,
   upsertReviews,
 } from "../store";
-import { contributionRows, issueRows, pullRequestRows, reviewRows } from "./rows";
+import {
+  type ContributionRows,
+  contributionRows,
+  issueRows,
+  pullRequestRows,
+  reviewRows,
+} from "./rows";
 
 export interface RowsChanged {
   repositories: number;
@@ -80,12 +86,18 @@ export async function normalizeSearchPage(
   }
 }
 
-export async function normalizeContributions(
+export function normalizeContributions(
   db: D1Database,
   collection: ContributionsCollection,
   fetchedAt: string,
 ): Promise<RowsChanged> {
-  const rows = contributionRows(collection, fetchedAt);
+  return writeContributionRows(db, contributionRows(collection, fetchedAt));
+}
+
+export async function writeContributionRows(
+  db: D1Database,
+  rows: ContributionRows,
+): Promise<RowsChanged> {
   const repositories = await upsertRepositories(db, dedupe(rows.repositories));
   const commitDays = await upsertCommitDays(db, rows.commitDays);
 
@@ -102,6 +114,7 @@ function writeRepositories(
 
 // A page of a hundred nodes usually names far fewer repositories, and the same
 // id twice in one batch is a statement that writes what the one before it did.
+// The last row for an id wins.
 function dedupe(rows: readonly Repository[]): Repository[] {
   return [...new Map(rows.map((row) => [row.id, row])).values()];
 }
