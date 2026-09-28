@@ -97,6 +97,18 @@ export class Budget {
     return this.#reading?.remaining ?? null;
   }
 
+  // The same spend and reading under other limits, for work an invocation does
+  // after its own: the cron drains backfill windows at the backfill floor, and
+  // the cap still counts what the incremental sync spent.
+  withLimits(limits: Partial<BudgetLimits>): Budget {
+    const budget = new Budget({ ...this.#limits, ...limits }, this.#ledger, this.#clock);
+    budget.#spent = this.#spent;
+    budget.#spentThisWindow = this.#spentThisWindow;
+    budget.#reading = this.#reading;
+    budget.#lastRequest = this.#lastRequest;
+    return budget;
+  }
+
   async admit(): Promise<void> {
     this.#check();
 

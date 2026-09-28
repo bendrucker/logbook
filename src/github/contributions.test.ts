@@ -12,13 +12,8 @@ import archived2015Q3 from "../../test/fixtures/contributions/2015-Q3.json";
 import archived2026 from "../../test/fixtures/contributions/2026.json";
 import archived2026Q3 from "../../test/fixtures/contributions/2026-Q3.json";
 import { contributionsResponse as contributionsSchema } from "./schema";
-import {
-  fetchContributions,
-  contributionsTruncated,
-  quarterWindows,
-  UnknownUserError,
-  yearWindow,
-} from "./contributions";
+import { yearWindow } from "./calendar";
+import { fetchContributions, contributionsTruncated, UnknownUserError } from "./contributions";
 
 const ENDPOINT = "https://api.github.test/graphql";
 const NOW = new Date("2026-09-09T12:00:00Z");
@@ -154,33 +149,5 @@ describe("contributionsTruncated", () => {
         totalCommitContributions: collection.totalCommitContributions + 1,
       }),
     ).toBe(true);
-  });
-});
-
-describe("quarterWindows", () => {
-  function bounds(year: number) {
-    return quarterWindows(year, NOW).map(({ key, from, to }) => ({
-      key,
-      from: from.toISOString(),
-      to: to.toISOString(),
-    }));
-  }
-
-  it("splits a past year into four quarters that meet end to end", () => {
-    expect(bounds(2025)).toEqual([
-      { key: "2025-Q1", from: "2025-01-01T00:00:00.000Z", to: "2025-03-31T23:59:59.000Z" },
-      { key: "2025-Q2", from: "2025-04-01T00:00:00.000Z", to: "2025-06-30T23:59:59.000Z" },
-      { key: "2025-Q3", from: "2025-07-01T00:00:00.000Z", to: "2025-09-30T23:59:59.000Z" },
-      { key: "2025-Q4", from: "2025-10-01T00:00:00.000Z", to: "2025-12-31T23:59:59.000Z" },
-    ]);
-  });
-
-  it("stops the current year at now and leaves out quarters yet to start", () => {
-    expect(bounds(2026).at(-1)).toEqual({
-      key: "2026-Q3",
-      from: "2026-07-01T00:00:00.000Z",
-      to: "2026-09-09T12:00:00.000Z",
-    });
-    expect(bounds(2026)).toHaveLength(3);
   });
 });

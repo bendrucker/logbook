@@ -2,15 +2,10 @@
 // change cost nothing: bump the shape, replay the archived pages, and the event
 // tables rebuild from responses already on disk.
 import { z } from "zod";
+import { splitContributions } from "../github/calendar";
 import {
-  type ContributionsWindow,
-  contributionsTruncated,
-  quarterWindows,
-} from "../github/contributions";
-import {
-  contributionsKey,
-  contributionsPrefix,
-  OBJECT_SUFFIX,
+  contributionsObject,
+  contributionsYearPrefix,
   searchPageNumber,
   searchPrefix,
 } from "../github/raw";
@@ -25,7 +20,8 @@ import {
 } from "../github/schema";
 import { SEARCH_MAX_PAGES, searchTruncated } from "../github/search";
 import type { EventKind } from "../github/windows";
-import { normalizeContributions, normalizeSearchPage, type RowsChanged } from "./page";
+import { combineWindows } from "./commit-windows";
+import { normalizeSearchPage, type RowsChanged, writeContributionRows } from "./page";
 import type { SearchPageNodes } from "./page";
 
 export class RawObjectError extends Error {
@@ -82,60 +78,74 @@ export async function replaySearchWindow(
   return { fetchedAt: fetch.fetchedAt, truncated: fetch.truncated, rows };
 }
 
+// Replays `window` and every narrower window archived under it, which is how
+// a year rebuilds from the windows the crawl split it into and how a live run
+// totals a day it fetched in parts.
 export async function replayContributions(
   db: D1Database,
   bucket: R2Bucket,
-  year: number,
+  window: string,
 ): Promise<Replay | null> {
-  const prefix = contributionsPrefix(String(year));
-  const { keys } = await list(bucket, { prefix });
+  const { keys } = await list(bucket, { prefix: contributionsYearPrefix(window.slice(0, 4)) });
 
-  // A fetch timestamp is an ISO string, so R2's lexicographic listing puts the
-  // newest object last. A year is one object per fetch, so there is no partial
-  // fetch to skip past.
-  const key = keys.at(-1);
-  if (key === undefined) {
+  // A fetch timestamp is an ISO string, so R2's lexicographic listing puts each
+  // window's newest fetch last. A window is one object per fetch, so there is
+  // no partial fetch to skip past.
+  const newest = new Map<string, { key: string; fetchedAt: string }>();
+  for (const key of keys) {
+    const object = contributionsObject(key);
+    if (object !== null) {
+      newest.set(object.window, { key, fetchedAt: object.fetchedAt });
+    }
+  }
+
+  const reached = within(window, newest);
+  if (reached.length === 0) {
     return null;
   }
 
-  const collection = readCollection(await readOne(bucket, key));
-  const fetchedAt = key.slice(prefix.length, -OBJECT_SUFFIX.length);
-  const rows = await normalizeContributions(db, collection, fetchedAt);
-  if (!contributionsTruncated(collection)) {
-    return { fetchedAt, truncated: false, rows };
-  }
-
-  // A sync that found the year truncated archived its quarters under the same
-  // fetch timestamp, and those hold the days the yearly page dropped. One the
-  // rate limit stopped partway archived fewer quarters than the year had begun.
-  const windows = quarterWindows(year, new Date(fetchedAt));
-  const quarters = await readQuarters(bucket, windows, fetchedAt);
-  const quarterRows = await Promise.all(
-    quarters.map((quarter) => normalizeContributions(db, quarter, fetchedAt)),
+  const archived = new Map(
+    await Promise.all(
+      reached.map(async ([name, { key, fetchedAt }]) => {
+        const collection = readCollection(await readOne(bucket, key));
+        return [name, { fetchedAt, collection }] as const;
+      }),
+    ),
   );
+  const combined = combineWindows(window, archived);
+  const fetchedAt = reached.map(([, object]) => object.fetchedAt).toSorted();
 
   return {
-    fetchedAt,
-    truncated: quarters.length < windows.length || quarters.some(contributionsTruncated),
-    rows: quarterRows.reduce(addRows, rows),
+    fetchedAt: fetchedAt.at(-1) ?? "",
+    truncated: combined.truncated,
+    rows: await writeContributionRows(db, combined.rows),
   };
 }
 
-async function readQuarters(
-  bucket: R2Bucket,
-  windows: readonly ContributionsWindow[],
-  fetchedAt: string,
-): Promise<ContributionsCollection[]> {
-  const objects = await Promise.all(
-    windows.map((window) => bucket.get(contributionsKey(window.key, fetchedAt))),
-  );
-  const pages = await Promise.all(
-    objects.flatMap((object) =>
-      object === null ? [] : object.text().then((body) => ({ key: object.key, body })),
-    ),
-  );
+// The listing already says which windows exist, so no child is left out for
+// having started after some instant.
+const LATEST = new Date(8.64e15);
 
-  return pages.map(readCollection);
+// The windows the replay reads: `window` and the archived windows the crawl
+// split it into, down to the finest. A listing under the year also holds the
+// year's other quarters and months, which a narrower replay leaves alone.
+function within<Value>(window: string, newest: ReadonlyMap<string, Value>): [string, Value][] {
+  const reached: [string, Value][] = [];
+  const pending = [window];
+  let key = pending.shift();
+  while (key !== undefined) {
+    const value = newest.get(key);
+    if (value !== undefined) {
+      reached.push([key, value]);
+    }
+    pending.push(
+      ...splitContributions(key, LATEST)
+        .map((child) => child.key)
+        .filter((child) => newest.has(child)),
+    );
+    key = pending.shift();
+  }
+  return reached;
 }
 
 function readCollection(page: RawPage): ContributionsCollection {
@@ -144,16 +154,6 @@ function readCollection(page: RawPage): ContributionsCollection {
     throw new RawValidationError(page.key, "the response carries no user", null);
   }
   return user.contributionsCollection;
-}
-
-function addRows(a: RowsChanged, b: RowsChanged): RowsChanged {
-  return {
-    repositories: a.repositories + b.repositories,
-    pullRequests: a.pullRequests + b.pullRequests,
-    reviews: a.reviews + b.reviews,
-    issues: a.issues + b.issues,
-    commitDays: a.commitDays + b.commitDays,
-  };
 }
 
 interface RawPage {

@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-// Drives POST /admin/backfill to completion. One call walks BACKFILL_WINDOWS
-// windows and answers with where the next one resumes, so the walk over a
+// Drives POST /admin/backfill to completion. One call enqueues the kind's
+// windows from `--from` to the present and drains the frontier until its rate
+// cap, answering with how many windows are still pending. The walk over a
 // decade of history is a loop out here rather than one long request in there.
-// A call the rate budget or a secondary limit stopped names when to resume, and
-// the loop sleeps until then.
+// A call the rate budget or a secondary limit stopped names when to resume,
+// and the loop sleeps until then.
 //
 // Usage: ADMIN_TOKEN=... bun run backfill <base-url> [kind] [--from YYYY-MM]
 
@@ -24,7 +25,8 @@ const BackfillResult = z.object({
   windows: z.array(z.string()),
   pages: z.number(),
   rowsChanged: z.number(),
-  next: z.string().nullable(),
+  pending: z.number(),
+  irreducible: z.array(z.string()),
   resumeAt: z.string().nullable(),
   error: z.string().nullable(),
 });
@@ -47,13 +49,6 @@ if (target === undefined) {
 if (requested !== undefined && !isSyncKind(requested)) {
   fail(USAGE);
 }
-// A resume point belongs to the kind that stopped there. Applying it to all
-// four would start the ones still behind it past history they never walked,
-// and they would report done with the gap left in place.
-if (flags.from !== undefined && requested === undefined) {
-  fail("--from resumes one kind, so name which one");
-}
-
 const base = parseUrl(target);
 const kinds = requested === undefined ? SYNC_KINDS : [requested];
 
@@ -70,33 +65,30 @@ try {
 }
 
 async function walk(kind: SyncKind): Promise<void> {
-  // Undefined leaves `from` off the first request so the route picks its own start.
-  let from = flags.from;
-
   for (;;) {
+    // Every call passes the same `--from`. The frontier keeps what finished, so
+    // enqueueing the same windows again carries on rather than refetching.
     // eslint-disable-next-line no-await-in-loop
-    const result = await backfill(kind, from);
+    const result = await backfill(kind, flags.from);
     console.log(describe(result));
 
     const wait = result.resumeAt === null ? null : Date.parse(result.resumeAt) - Date.now();
     if (result.error !== null && result.resumeAt === null) {
-      throw new Error(`${kind} stopped, resume with: ${kind} --from ${result.next ?? "the start"}`);
+      throw new Error(`${kind} stopped on a failed window, rerun to retry it`);
     }
-    if (result.next === null) {
+    if (result.pending === 0) {
       return;
     }
-    // A resume point that repeats the window just asked for, with nothing
-    // landed and nothing to wait for, would spin here forever. A
-    // BACKFILL_WINDOWS or a cap of 0 produces it.
-    if (result.next === from && result.pages === 0 && (wait === null || wait <= 0)) {
-      throw new Error(`${kind} did not advance past ${from}`);
+    // Windows left pending with nothing landed and nothing to wait for would
+    // spin here forever. A cap of 0 produces it.
+    if (result.pages === 0 && (wait === null || wait <= 0)) {
+      throw new Error(`${kind} did not advance with ${result.pending} windows pending`);
     }
     if (wait !== null && wait > 0) {
       console.log(`${kind.padEnd(KIND_WIDTH)} waiting until ${result.resumeAt}`);
       // eslint-disable-next-line no-await-in-loop
       await Bun.sleep(wait);
     }
-    from = result.next;
   }
 }
 
@@ -122,7 +114,7 @@ async function backfill(kind: SyncKind, from: string | undefined): Promise<Backf
 function describe(result: BackfillResult): string {
   const range =
     result.windows.length === 0 ? "no windows" : `${result.windows[0]}..${result.windows.at(-1)}`;
-  const resume = result.next === null ? "done" : `next ${result.next}`;
+  const resume = result.pending === 0 ? "done" : `pending ${result.pending}`;
   const line = [
     result.kind.padEnd(KIND_WIDTH),
     range.padEnd(17),
@@ -130,7 +122,9 @@ function describe(result: BackfillResult): string {
     `rows ${result.rowsChanged}`.padEnd(12),
     resume,
   ].join(" ");
-  return result.error === null ? line : `${line}  ${result.error}`;
+  const irreducible =
+    result.irreducible.length === 0 ? "" : `  irreducible ${result.irreducible.join(", ")}`;
+  return result.error === null ? `${line}${irreducible}` : `${line}${irreducible}  ${result.error}`;
 }
 
 function adminToken(): string {

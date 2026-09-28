@@ -1,5 +1,6 @@
 import { type EventKind, incrementalSearch } from "../github/windows";
-import { type Budget, openBudget, syncLimits } from "./budget";
+import { drainBackfill } from "./backfill";
+import { BACKFILL_SPACING_MS, type Budget, openBudget, syncLimits } from "./budget";
 import { SEARCH_KINDS, type SyncKind } from "./kinds";
 import {
   githubToken,
@@ -48,7 +49,29 @@ export async function syncIncremental(env: Env, options: InvocationOptions = {})
     kind = remaining.shift();
   }
 
-  await contained("contributions", syncContributions(env, now.getUTCFullYear(), sync));
+  const contributions = await contained(
+    "contributions",
+    syncContributions(env, now.getUTCFullYear(), sync),
+  );
+  if (contributions !== null && contributions.resumeAt !== null) {
+    return;
+  }
+
+  // Leftover share goes to the windows a backfill enqueued, at the floor and
+  // spacing a backfill keeps. The drain takes the caller's options rather than
+  // the fixed `now` above, so each of its runs stamps its own time and a unit
+  // for the current year never lands on the key the run above just wrote.
+  try {
+    await drainBackfill(env, {
+      ...options,
+      budget: budget.withLimits({
+        floor: env.RATE_FLOOR_BACKFILL,
+        spacingMs: BACKFILL_SPACING_MS,
+      }),
+    });
+  } catch (error) {
+    console.error(`backfill drain failed: ${String(error)}`);
+  }
 }
 
 // One kind's storage failure is not the other kinds' problem, and a throw here

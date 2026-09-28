@@ -47,6 +47,36 @@ function archive(
   );
 }
 
+// One day node per entry. `repositories` above the number listed stands for
+// repositories the window dropped.
+function commitsPayload(
+  entries: readonly (readonly [string, string, number])[],
+  repositories?: number,
+) {
+  const names = [...new Set(entries.map(([name]) => name))];
+  const listed = names.map((name) => {
+    const nodes = entries
+      .filter(([each]) => each === name)
+      .map(([, day, commitCount]) => ({ commitCount, occurredAt: `${day}T07:00:00Z` }));
+    const commits = nodes.reduce((total, node) => total + node.commitCount, 0);
+    return { repository: repository(name), contributions: { totalCount: commits, nodes } };
+  });
+  const commits = entries.reduce((total, [, , commitCount]) => total + commitCount, 0);
+  return contributionsPayload(0, 0, {
+    totalCommitContributions: commits,
+    totalRepositoriesWithContributedCommits: repositories ?? names.length,
+    commitContributionsByRepository: listed,
+  });
+}
+
+function commitDays() {
+  return env.DB.prepare(
+    "SELECT repository_id, day, commit_count FROM commit_days ORDER BY repository_id, day",
+  )
+    .all()
+    .then(({ results }) => results);
+}
+
 function count(table: string): Promise<{ total: number } | null> {
   return readRow<{ total: number }>(env.DB, `SELECT COUNT(*) AS total FROM ${table}`);
 }
@@ -252,7 +282,7 @@ describe("replayContributions", () => {
     await env.RAW.put(contributionsKey("2026", EARLIER), JSON.stringify(contributionsPayload(1)));
     await env.RAW.put(contributionsKey("2026", LATER), JSON.stringify(contributionsPayload(3)));
 
-    const replayed = await replayContributions(env.DB, env.RAW, 2026);
+    const replayed = await replayContributions(env.DB, env.RAW, "2026");
 
     expect(replayed?.fetchedAt).toBe(LATER);
     expect(replayed?.rows.commitDays).toBe(3);
@@ -264,7 +294,7 @@ describe("replayContributions", () => {
     const body = JSON.stringify(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL));
     await env.RAW.put(contributionsKey("2026", LATER), body);
 
-    const replayed = await replayContributions(env.DB, env.RAW, 2026);
+    const replayed = await replayContributions(env.DB, env.RAW, "2026");
 
     expect(replayed?.truncated).toBe(true);
   });
@@ -283,13 +313,13 @@ describe("replayContributions", () => {
       ),
     );
 
-    const replayed = await replayContributions(env.DB, env.RAW, 2026);
+    const replayed = await replayContributions(env.DB, env.RAW, "2026");
 
     expect(replayed?.truncated).toBe(false);
     expect(replayed?.rows.commitDays).toBe(4);
   });
 
-  it("keeps a year truncated when a quarter from its fetch is missing", async () => {
+  it("keeps a year truncated while one of its quarters is missing", async () => {
     const year = JSON.stringify(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL));
     await env.RAW.put(contributionsKey("2026", LATER), year);
     await env.RAW.put(
@@ -301,21 +331,90 @@ describe("replayContributions", () => {
       JSON.stringify(commitDaysPayload(["2026-05-10"])),
     );
 
-    const replayed = await replayContributions(env.DB, env.RAW, 2026);
+    const replayed = await replayContributions(env.DB, env.RAW, "2026");
 
     expect(replayed?.truncated).toBe(true);
-    expect(replayed?.rows.commitDays).toBe(2);
+    expect(replayed?.rows.commitDays).toBe(3);
+  });
+
+  it("recovers a repository a quarter dropped from the months under it", async () => {
+    const put = (window: string, payload: unknown) =>
+      env.RAW.put(contributionsKey(window, LATER), JSON.stringify(payload));
+    await put("2015", commitsPayload([["repo-0", "2015-08-03", 3]], 2));
+    await put("2015-Q1", commitsPayload([]));
+    await put("2015-Q2", commitsPayload([]));
+    await put("2015-Q3", commitsPayload([["repo-0", "2015-08-03", 3]], 2));
+    await put("2015-Q4", commitsPayload([]));
+    await put("2015-07", commitsPayload([["repo-1", "2015-07-14", 5]]));
+    await put("2015-08", commitsPayload([["repo-0", "2015-08-03", 3]]));
+    await put("2015-09", commitsPayload([]));
+
+    const replayed = await replayContributions(env.DB, env.RAW, "2015");
+
+    expect(replayed?.truncated).toBe(false);
+    expect(await commitDays()).toEqual([
+      { repository_id: "R_repo-0", day: "2015-08-03", commit_count: 3 },
+      { repository_id: "R_repo-1", day: "2015-07-14", commit_count: 5 },
+    ]);
+  });
+
+  it("adds up the parts of a day fetched in halves", async () => {
+    const put = (window: string, payload: unknown) =>
+      env.RAW.put(contributionsKey(window, LATER), JSON.stringify(payload));
+    // The day listed repo-0 whole and dropped repo-1, which committed in both
+    // halves.
+    await put("2015-07-14", commitsPayload([["repo-0", "2015-07-14", 6]], 2));
+    await put(
+      "2015-07-14T00--2015-07-14T12",
+      commitsPayload([
+        ["repo-0", "2015-07-14", 4],
+        ["repo-1", "2015-07-14", 3],
+      ]),
+    );
+    await put(
+      "2015-07-14T12--2015-07-15T00",
+      commitsPayload([
+        ["repo-0", "2015-07-14", 2],
+        ["repo-1", "2015-07-14", 2],
+      ]),
+    );
+
+    const replayed = await replayContributions(env.DB, env.RAW, "2015-07-14");
+
+    expect(replayed?.truncated).toBe(false);
+    expect(await commitDays()).toEqual([
+      { repository_id: "R_repo-0", day: "2015-07-14", commit_count: 6 },
+      { repository_id: "R_repo-1", day: "2015-07-14", commit_count: 5 },
+    ]);
+  });
+
+  it("replays a narrower window without the rest of its year", async () => {
+    await env.RAW.put(
+      contributionsKey("2015", LATER),
+      JSON.stringify(commitsPayload([["repo-0", "2015-02-03", 1]])),
+    );
+    await env.RAW.put(
+      contributionsKey("2015-07", LATER),
+      JSON.stringify(commitsPayload([["repo-1", "2015-07-14", 5]])),
+    );
+
+    const replayed = await replayContributions(env.DB, env.RAW, "2015-Q3");
+
+    expect(replayed?.rows.commitDays).toBe(1);
+    expect(await commitDays()).toEqual([
+      { repository_id: "R_repo-1", day: "2015-07-14", commit_count: 5 },
+    ]);
   });
 
   it("reports a year nothing was archived under", async () => {
-    await expect(replayContributions(env.DB, env.RAW, 2011)).resolves.toBeNull();
+    await expect(replayContributions(env.DB, env.RAW, "2011")).resolves.toBeNull();
   });
 
   it("names the key when the response carries no user", async () => {
     const key = contributionsKey("2026", LATER);
     await env.RAW.put(key, JSON.stringify({ data: { user: null } }));
 
-    await expect(replayContributions(env.DB, env.RAW, 2026)).rejects.toMatchObject({
+    await expect(replayContributions(env.DB, env.RAW, "2026")).rejects.toMatchObject({
       key,
       name: "RawValidationError",
     });
@@ -323,9 +422,9 @@ describe("replayContributions", () => {
 
   it("changes nothing on a second replay of the same year", async () => {
     await env.RAW.put(contributionsKey("2026", LATER), JSON.stringify(contributionsPayload(2)));
-    await replayContributions(env.DB, env.RAW, 2026);
+    await replayContributions(env.DB, env.RAW, "2026");
 
-    const replayed = await replayContributions(env.DB, env.RAW, 2026);
+    const replayed = await replayContributions(env.DB, env.RAW, "2026");
 
     expect(replayed?.rows.commitDays).toBe(0);
     expect(replayed?.rows.repositories).toBe(0);

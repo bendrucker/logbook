@@ -7,6 +7,7 @@ import {
   InvalidMonthError,
   parseMonth,
 } from "./sync/backfill";
+import { type FrontierStatus, frontierStatus } from "./sync/frontier";
 import { byKind, SYNC_KINDS, type SyncKind } from "./sync/kinds";
 import { MissingSecretError } from "./sync/run";
 import { lastRuns, recentFailures, type SyncRun } from "./sync/runs";
@@ -17,6 +18,8 @@ const FAILURE_LIMIT = 10;
 interface KindStatus {
   watermark: Watermark | null;
   lastRun: SyncRun | null;
+  // What the backfill frontier still holds for the kind.
+  frontier: FrontierStatus;
 }
 
 export interface SyncStatus {
@@ -33,16 +36,21 @@ export async function handleSyncStatus(request: Request, env: Env): Promise<Resp
   }
 
   try {
-    const [watermarks, runs, failures, lake] = await Promise.all([
+    const [watermarks, runs, failures, lake, frontier] = await Promise.all([
       readWatermarks(env.DB),
       lastRuns(env.DB),
       recentFailures(env.DB, FAILURE_LIMIT),
       readLatestBuild(env.DB),
+      frontierStatus(env.DB),
     ]);
 
     const status: SyncStatus = {
       generatedAt: new Date().toISOString(),
-      kinds: byKind((kind) => ({ watermark: watermarks[kind], lastRun: runs[kind] })),
+      kinds: byKind((kind) => ({
+        watermark: watermarks[kind],
+        lastRun: runs[kind],
+        frontier: frontier.get(kind) ?? { pending: 0, irreducible: [] },
+      })),
       failures,
       lake,
     };

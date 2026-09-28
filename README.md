@@ -73,7 +73,9 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   "$WORKER/admin/backfill?kind=pr-authored&from=2012-12"
 ```
 
-One call walks `BACKFILL_WINDOWS` monthly windows and answers with `next`, the `from` the following call resumes at. `next` is null once the walk reaches the present. `kind=contributions` walks the years `contributionYears` reports and reads its year out of `from`. A call the rate budget or a GitHub secondary limit stopped also answers with `resumeAt`, and `bun run backfill` sleeps until then before resuming at `next`. Backfill requests go out at least a second apart.
+A call enqueues the kind's windows from `from` to the present in the `crawl_units` frontier and drains them until the rate budget stops it: months for the search kinds, years for `kind=contributions`. It answers with the windows it fetched, the count still `pending`, and any `irreducible` windows. A window already in the frontier keeps its status, so calling again with the same `from` carries on where the last call stopped without refetching what finished. A call the rate budget or a GitHub secondary limit stopped also answers with `resumeAt`, and `bun run backfill` sleeps until then and calls again. Backfill requests go out at least a second apart. The hourly cron drains whatever share its own work leaves, so a large backfill also finishes unattended across hours.
+
+A window whose response says it dropped data is split into narrower windows and marked `split`. Contributions narrow down the calendar from a year to quarters, months, days, half days, and hours. A window still truncated at an hour, or a truncated search month, is marked `irreducible`. Its rows still land, since truncation drops whole items and leaves the returned ones intact.
 
 ### Rate Budget
 
@@ -89,7 +91,7 @@ GitHub's 5,000 GraphQL points an hour are shared with every other tool on the to
 
 Each `sync_runs` row records the points it spent and the last `remaining` GitHub reported. The spend in the current rate window is the sum of `cost` over the runs started in it, so the ledger needs no table of its own. The budget checks every request before it goes out and refuses one that would cross a limit, which ends the invocation with the watermark where it was. A 403 or 429 naming a secondary limit ends it the same way.
 
-Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a search gap and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. GitHub counts reviews once per pull request, including my own, so the note sets that figure against distinct pull requests: `reviews 75 (38 own) vs 37 PRs`. `GET /admin/sync` reports it alongside the watermarks, the last ten failures, and the most recent lake build.
+Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a search gap and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. GitHub counts reviews once per pull request, including my own, so the note sets that figure against distinct pull requests: `reviews 75 (38 own) vs 37 PRs`. `GET /admin/sync` reports it alongside the watermarks, each kind's pending and irreducible frontier windows, the last ten failures, and the most recent lake build.
 
 ## Lake
 
@@ -114,7 +116,7 @@ The GitHub token is a classic personal access token with no scopes, so the hub s
 
 ## Infrastructure
 
-`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` for whose history the hub reads, `BACKFILL_WINDOWS` for how many windows one backfill call walks, and the [rate budget](#rate-budget). The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
+`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` for whose history the hub reads and the [rate budget](#rate-budget). The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 
 There is no Terraform here. Activity Hub needs it for a DNS record, a Workers route, and the Cloudflare Access applications in front of its admin routes. This hub is reached by cron and by a service binding. It has no hostname to manage. `/admin/sync` sits behind `ADMIN_TOKEN` alone, with no Access application in front of it.
 

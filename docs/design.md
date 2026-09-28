@@ -65,7 +65,7 @@ Every response page is written to R2 before it is parsed, keyed by what produced
 ```text
 raw/
   search/{kind}/{window}/{fetched_at}/{page}.json   # kind is pr-authored, pr-reviewed, or issue
-  contributions/{window}/{fetched_at}.json          # a year, or a quarter of one ({year}-Q{n})
+  contributions/{window}/{fetched_at}.json          # 2015, 2015-Q3, 2015-07, 2015-07-14, or 2015-07-14T00--2015-07-14T12
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -114,7 +114,7 @@ Commits are per-repository daily counts because that is the finest grain `contri
 
 `sync_state` is a key/value table. One key per event type holds the last window normalized successfully, and `updated_at` says when. The watermark advances only after the pages are in R2 and the rows are in D1. A failed run re-reads its window instead of skipping past it.
 
-`sync_runs` holds one row per extraction attempt, written before the work starts so a run that dies mid-flight reads as one that never finished. It carries the kind, the window, page and row counts, whether the window truncated, an error, and a note the contributions cross-check writes when GitHub's yearly total disagrees with the event tables. `lake_builds` is that shape for the nightly build, carrying per-table row counts as JSON. `/admin/sync` reports the newest of each.
+`sync_runs` holds one row per extraction attempt, written before the work starts so a run that dies mid-flight reads as one that never finished. It carries the kind, the window, page and row counts, whether the window truncated, an error, and a note the contributions cross-check writes when GitHub's yearly total disagrees with the event tables. `crawl_units` is the backfill frontier: one row per window with its parent and a status of `pending`, `done`, `split`, or `irreducible`. A unit is done only once its pages are in R2 and its rows are in D1. One the budget interrupts stays pending and restarts from its first page. `lake_builds` is that shape for the nightly build, carrying per-table row counts as JSON. `/admin/sync` reports the newest of each.
 
 ## Extraction
 
@@ -142,7 +142,7 @@ Walking those back to 2012 is 166 windows per event type for the whole history. 
 
 `commitContributionsByRepository` returns a plain list rather than a paginated connection, and its `maxRepositories` argument defaults to 25. Anything past the value it is given is dropped with no error and no cursor to follow. The query asks for 100. A window is truncated when it lists fewer repositories than `totalRepositoriesWithContributedCommits`, which the same response reports, so a window holding exactly 100 of 100 is complete.
 
-Each repository's `contributions` list, one node per day with commits, is capped at 100 the same way. Its `totalCount` is the repository's commit total for the window, not its number of days, so a repository whose listed `commitCount` sums short of that total lost days. A final guard compares every listed commit against `totalCommitContributions`. A repository with commits on more than 100 days of a year loses the rest. A truncated year is fetched again one quarter at a time, since a quarter spans at most 92 days. Each quarter is archived beside the year as `contributions/{year}-Q{n}/{fetched_at}.json`, and replay reads the quarters sharing the year's fetch timestamp.
+Each repository's `contributions` list, one node per day with commits, is capped at 100 the same way. Its `totalCount` is the repository's commit total for the window, not its number of days, so a repository whose listed `commitCount` sums short of that total lost days. A final guard compares every listed commit against `totalCommitContributions`. A repository with commits on more than 100 days of a year loses the rest. A truncated window is fetched again as narrower windows down the calendar: a year to quarters, a quarter to months, a month to days, a day to halves, and a half to hours. An hour still truncated is irreducible. Each window is archived under its own key, and replay lists the year's prefix, takes the newest fetch of each window, and combines them. A window from a day up lists whole days, so any window naming a repository's day holds its count. A window narrower than a day counts part of each day, so its siblings add up. Replay takes the larger of a window's own count and its children's sum, which covers both. A live run fetching part of a day replays that day from the archive for the same reason.
 
 The same query asks for the collection's own totals: `totalCommitContributions`, `totalPullRequestContributions`, `totalPullRequestReviewContributions`, `totalIssueContributions`, `totalRepositoriesWithContributedCommits`, and `restrictedContributionsCount`. Those are the cross-check. A year whose event table count disagrees with GitHub's own total means a search window truncated or a private contribution is being counted on one side and not the other.
 
@@ -216,7 +216,7 @@ Backfill and incremental sync are the same code with different windows, so there
 - Walk `contributionsCollection` per year over `contributionYears`.
 - Write every page to R2, then normalize.
 
-It runs from an admin route or a local script rather than from the cron, paged so a single invocation stays inside its wall clock and resumes from the sync state row on the next call.
+It runs from an admin route or a local script. A call enqueues root windows in `crawl_units` and drains the frontier until the rate budget's cap, so a single invocation stays inside its wall clock and the next call resumes from the frontier. The hourly cron drains what share its own work leaves, so a large backfill finishes unattended.
 
 Re-normalizing costs no GitHub requests, which is the point of writing raw pages first. The event tables can be rebuilt as many times as the schema changes.
 
@@ -237,7 +237,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 - The search cap drops results without an error. `issueCount` past 1,000 is the only signal, and monthly windows keep the real counts far below it.
 - GitHub's search index lags writes by an unspecified interval, so an `updated:>` window anchored exactly at the last sync can miss an event indexed late. The window overlaps the previous one, and upserts keyed on node ID make the overlap free.
-- `commitContributionsByRepository` returns a fixed-length list and reports no truncation beyond the totals beside it. The quarter refetch recovers a repository's overflowing days but does nothing for a quarter that touched more than 100 repositories, which stays flagged.
+- `commitContributionsByRepository` returns a fixed-length list and reports no truncation beyond the totals beside it. Calendar splitting recovers both overflowing days and repositories past the 100 cap, down to an hour. An hour that touched more than 100 repositories stays irreducible and flagged.
 - `restrictedContributionsCount` counts contributions hidden from the viewer. With a token that sees no private repository, that is every private contribution, so the cross-check reports it beside the gaps instead of subtracting it.
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.
 - A public repository that goes private drops out of every later search, and the raw bucket becomes the only copy of its events.

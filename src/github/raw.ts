@@ -46,6 +46,22 @@ export function contributionsKey(window: string, fetchedAt: string): string {
   return `${contributionsPrefix(window)}${fetchedAt}${OBJECT_SUFFIX}`;
 }
 
+// Every window key starts with its year, so one listing under the year finds
+// the year's windows at every depth, from `2015/` through the hour ranges.
+export function contributionsYearPrefix(year: string): string {
+  return `raw/contributions/${year}`;
+}
+
+// The window and fetch a key `contributionsKey` built, read back off a listing.
+export function contributionsObject(key: string): { window: string; fetchedAt: string } | null {
+  const match = /^raw\/contributions\/([^/]+)\/([^/]+)\.json$/.exec(key);
+  if (match === null) {
+    return null;
+  }
+  const [, window = "", fetchedAt = ""] = match;
+  return { window, fetchedAt };
+}
+
 // Re-running a window writes new pages under a new fetch timestamp rather
 // than replacing what a previous run saw, keeping a normalization bug
 // diagnosable against the bytes that caused it. A false return means the key
