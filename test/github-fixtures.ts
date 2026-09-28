@@ -131,6 +131,43 @@ export function searchResponse(nodes: readonly unknown[], overrides: SearchOverr
   return jsonResponse(searchPayload(nodes, overrides));
 }
 
+export type ContributionEventsField =
+  | "issueContributions"
+  | "pullRequestContributions"
+  | "pullRequestReviewContributions";
+
+export interface ContributionEventsOverrides {
+  // The whole connection's count, which a multi-page fixture has to state.
+  totalCount?: number;
+  endCursor?: string | null;
+}
+
+// One page of a contribution connection as GitHub returns it, each node wrapped
+// in the contribution object that counts it.
+export function contributionEventsPayload(
+  field: ContributionEventsField,
+  nodes: readonly unknown[],
+  overrides: ContributionEventsOverrides = {},
+) {
+  const item = field === "issueContributions" ? "issue" : "pullRequest";
+  const endCursor = overrides.endCursor ?? null;
+  return {
+    data: {
+      user: {
+        contributionsCollection: {
+          [field]: {
+            totalCount: overrides.totalCount ?? nodes.length,
+            pageInfo:
+              endCursor === null ? { hasNextPage: false } : { hasNextPage: true, endCursor },
+            nodes: nodes.map((node) => ({ [item]: node })),
+          },
+        },
+      },
+      rateLimit: rateLimit(),
+    },
+  };
+}
+
 const COMMITS_PER_DAY = 4;
 
 // A repository total no single listed day reaches, standing for a day list

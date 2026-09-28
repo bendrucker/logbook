@@ -86,6 +86,32 @@ export async function normalizeSearchPage(
   }
 }
 
+// The review connection counts reviews on the login's own pull requests, which
+// the reviews table leaves out: replying to a review thread submits a review,
+// so each reply on your own pull request would read as a review given. The
+// review search excludes them in its query, and these pages drop them here.
+export function normalizeContributionEvents(
+  db: D1Database,
+  page: SearchPageNodes,
+  login: string,
+  fetchedAt: string,
+): Promise<RowsChanged> {
+  return normalizeSearchPage(db, withoutOwnReviews(page, login), fetchedAt);
+}
+
+function withoutOwnReviews(page: SearchPageNodes, login: string): SearchPageNodes {
+  if (page.kind !== "pr-reviewed") {
+    return page;
+  }
+  return { kind: page.kind, nodes: page.nodes.filter((node) => !authoredBy(node, login)) };
+}
+
+// Logins are case-insensitive on GitHub, and the configured one need not match
+// the case GitHub returns.
+export function authoredBy(node: { author: { login: string } | null }, login: string): boolean {
+  return node.author?.login.toLowerCase() === login.toLowerCase();
+}
+
 export function normalizeContributions(
   db: D1Database,
   collection: ContributionsCollection,

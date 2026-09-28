@@ -1,5 +1,6 @@
 import type { z } from "zod";
-import { GitHubResponseError, graphql, validate, type GraphQLOptions } from "./client";
+import type { GraphQLOptions } from "./client";
+import { cursorPages } from "./pages";
 import { ISSUE_SEARCH, PULL_REQUEST_SEARCH, REVIEWED_PULL_REQUEST_SEARCH } from "./queries";
 import {
   issueSearchPage,
@@ -35,19 +36,6 @@ export interface SearchPageResult<T> {
   body: string;
 }
 
-// A page announcing a successor whose cursor the pager already sent would serve
-// the same results again for as long as it kept following it. The page is
-// thrown rather than yielded so the window fails with its bytes archived and
-// its watermark where it was.
-export class RepeatedCursorError extends GitHubResponseError {
-  readonly cursor: string;
-
-  constructor(cursor: string, body: string) {
-    super("RepeatedCursorError", `GitHub search returned cursor ${cursor} again`, body);
-    this.cursor = cursor;
-  }
-}
-
 export interface SearchOptions extends GraphQLOptions {
   token: string;
   searchQuery: string;
@@ -63,51 +51,29 @@ interface DocumentOptions<T> extends SearchOptions {
 }
 
 async function* searchPages<T>(options: DocumentOptions<T>): AsyncGenerator<SearchPageResult<T>> {
-  let after: string | null = null;
-  const sent = new Set<string>();
   const nodeTruncated = options.nodeTruncated ?? (() => false);
-  let page = 0;
-  let remaining = true;
 
-  // A cursor loop rather than for...of: each request depends on the cursor the
-  // response before it returned, so the pages cannot be issued together. The
-  // page bound is the second stop: GitHub rejects a cursor past the 1,000th
-  // result, so a window that keeps announcing successors ends here rather than
-  // on that error. A cursor that fails to advance ends it sooner, as an error.
-  while (remaining && page < SEARCH_MAX_PAGES) {
-    // eslint-disable-next-line no-await-in-loop
-    const response = await graphql(
-      options.token,
-      options.document,
-      {
-        ...options.variables,
-        searchQuery: options.searchQuery,
-        first: SEARCH_PAGE_SIZE,
-        after,
-      },
-      options,
-    );
+  // The page bound is a stop of its own: GitHub rejects a cursor past the
+  // 1,000th result, so a window that keeps announcing successors ends here
+  // rather than on that error.
+  const pages = cursorPages({
+    ...options,
+    variables: { ...options.variables, searchQuery: options.searchQuery },
+    pageInfo: (data) => data.search.pageInfo,
+    pageSize: SEARCH_PAGE_SIZE,
+    maxPages: SEARCH_MAX_PAGES,
+  });
 
-    const { search } = validate(options.schema, response.data, response.body);
-    if (search.pageInfo.hasNextPage && sent.has(search.pageInfo.endCursor)) {
-      throw new RepeatedCursorError(search.pageInfo.endCursor, response.body);
-    }
-    page += 1;
-
+  for await (const { page, data, rateLimit, body } of pages) {
+    const { search } = data;
     yield {
       page,
       nodes: search.nodes,
       issueCount: search.issueCount,
       truncated: searchTruncated(search.issueCount) || search.nodes.some(nodeTruncated),
-      rateLimit: response.rateLimit,
-      body: response.body,
+      rateLimit,
+      body,
     };
-
-    remaining = search.pageInfo.hasNextPage;
-    after = search.pageInfo.hasNextPage ? search.pageInfo.endCursor : null;
-    if (after !== null) {
-      sent.add(after);
-    }
   }
 }
 

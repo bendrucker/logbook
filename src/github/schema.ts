@@ -169,3 +169,49 @@ export type ContributionsCollection = z.infer<typeof contributionsCollection>;
 export const contributionsResponse = z.object({
   user: z.object({ contributionsCollection }).nullable(),
 });
+
+export interface ContributionConnectionPage<T> {
+  totalCount: number;
+  pageInfo: PageInfo;
+  nodes: T[];
+}
+
+function connection<T extends z.ZodType>(item: T) {
+  return z.object({ totalCount: z.number(), pageInfo, nodes: nodes(item) });
+}
+
+// Each connection wraps the node it counts in a contribution object. The
+// wrapper comes off here, so a connection page hands on the nodes a search page
+// does and normalization cannot tell which enumeration found them. A null user
+// stays null, since only the caller knows whose login it asked for.
+function contributionConnectionPage<Collection, Node>(
+  collection: z.ZodType<Collection>,
+  unwrap: (collection: Collection) => ContributionConnectionPage<Node>,
+) {
+  return z
+    .object({ user: z.object({ contributionsCollection: collection }).nullable() })
+    .transform(({ user }) => (user === null ? null : unwrap(user.contributionsCollection)));
+}
+
+export const issueContributionsPage = contributionConnectionPage(
+  z.object({ issueContributions: connection(z.object({ issue: issueNode })) }),
+  ({ issueContributions: page }) => ({ ...page, nodes: page.nodes.map((node) => node.issue) }),
+);
+
+export const pullRequestContributionsPage = contributionConnectionPage(
+  z.object({ pullRequestContributions: connection(z.object({ pullRequest: pullRequestNode })) }),
+  ({ pullRequestContributions: page }) => ({
+    ...page,
+    nodes: page.nodes.map((node) => node.pullRequest),
+  }),
+);
+
+export const reviewContributionsPage = contributionConnectionPage(
+  z.object({
+    pullRequestReviewContributions: connection(z.object({ pullRequest: reviewedPullRequestNode })),
+  }),
+  ({ pullRequestReviewContributions: page }) => ({
+    ...page,
+    nodes: page.nodes.map((node) => node.pullRequest),
+  }),
+);

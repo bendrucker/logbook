@@ -8,7 +8,8 @@ import {
 } from "../github/windows";
 import { backfillLimits, openBudget } from "./budget";
 import { type CrawlSource, drain, enqueue, frontierStatus, type UnitFetch } from "./frontier";
-import { SYNC_KINDS, type SyncKind } from "./kinds";
+import { syncContributionEventsWindow } from "./contribution-events";
+import { isContributionEventsKind, SYNC_KINDS, type SyncKind } from "./kinds";
 import {
   githubToken,
   type InvocationOptions,
@@ -106,10 +107,11 @@ export async function drainBackfill(env: Env, options: SyncOptions): Promise<voi
   }
 }
 
-// Search windows are months and contributions windows are years, both from the
-// month `from` names through the present.
+// Search windows are months, and the windows of anything read off the
+// contributions collection are years, all from the month `from` names through
+// the present.
 function roots(kind: SyncKind, from: Month, now: Date): string[] {
-  if (kind === "contributions") {
+  if (kind === "contributions" || isContributionEventsKind(kind)) {
     const last = now.getUTCFullYear();
     return last < from.year
       ? []
@@ -120,10 +122,20 @@ function roots(kind: SyncKind, from: Month, now: Date): string[] {
 
 function crawlSource(env: Env, kind: SyncKind, options: SyncOptions): CrawlSource {
   const now = options.now ?? new Date();
+  const split = (window: string) => splitContributions(window, now).map((child) => child.key);
   if (kind === "contributions") {
     return {
       fetch: async (window) => unitFetch(await syncContributionsWindow(env, window, options)),
-      split: (window) => splitContributions(window, now).map((child) => child.key),
+      split,
+    };
+  }
+  // A connection window narrows down the same calendar as the commit windows
+  // when it holds more than a unit's pages or reads short of its count.
+  if (isContributionEventsKind(kind)) {
+    return {
+      fetch: async (window) =>
+        unitFetch(await syncContributionEventsWindow(env, kind, window, options)),
+      split,
     };
   }
   return {

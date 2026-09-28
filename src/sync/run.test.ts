@@ -2,18 +2,20 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   commitDaysPayload,
+  contributionEventsPayload,
   contributionsPayload,
   TRUNCATED_COMMIT_TOTAL,
   jsonResponse,
   pullRequest,
   rateLimit,
   requestBody,
+  reviewedPullRequest,
   searchPayload,
   searchResponse,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
 import { stubFetch } from "../../test/fetch-stub";
-import { searchKey } from "../github/raw";
+import { contributionEventsKey, searchKey } from "../github/raw";
 import { Budget, type BudgetLimits } from "./budget";
 import { recentRuns } from "./runs";
 import { syncContributions, syncWindow } from "./run";
@@ -213,6 +215,33 @@ describe("syncContributions", () => {
     expect(result.note).toContain("pull requests 40 vs 0");
     const [run] = await recentRuns(env.DB, "contributions", 1);
     expect(run?.note).toBe(result.note);
+  });
+
+  it("counts the login's own pull requests off the year's archived review pages", async () => {
+    await env.RAW.put(
+      contributionEventsKey("pr-reviewed", "2026", "2026-09-09T09:00:00.000Z", 1),
+      JSON.stringify(
+        contributionEventsPayload("pullRequestReviewContributions", [
+          reviewedPullRequest(1),
+          reviewedPullRequest(2, { author: { login: "bendrucker" } }),
+          reviewedPullRequest(3, { author: { login: "bendrucker" } }),
+        ]),
+      ),
+    );
+    const { fetch } = sequence([
+      () =>
+        jsonResponse(
+          contributionsPayload(1, undefined, {
+            totalPullRequestContributions: 0,
+            totalIssueContributions: 0,
+            totalPullRequestReviewContributions: 3,
+          }),
+        ),
+    ]);
+
+    const result = await syncContributions(env, 2026, options(fetch));
+
+    expect(result.note).toBe("2026 totals disagree: reviews 3 (2 own) vs 0 PRs (restricted 0)");
   });
 
   it("fetches a truncated year again by quarter and keeps each quarter's days", async () => {

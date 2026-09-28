@@ -99,6 +99,9 @@ describe("GET /admin/sync", () => {
         "pr-reviewed": { watermark: null, lastRun: null },
         issue: { watermark: null, lastRun: null },
         contributions: { watermark: null, lastRun: null },
+        "issue-contributions": { watermark: null, lastRun: null },
+        "pr-contributions": { watermark: null, lastRun: null },
+        "review-contributions": { watermark: null, lastRun: null },
       },
       failures: [{ id, error: "502 from search" }],
     });

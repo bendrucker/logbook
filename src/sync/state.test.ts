@@ -48,6 +48,9 @@ describe("readWatermarks", () => {
       "pr-reviewed": { window: "2026-09-01..2026-09-08", updatedAt: "2026-09-09T18:00:00Z" },
       issue: null,
       contributions: null,
+      "issue-contributions": null,
+      "pr-contributions": null,
+      "review-contributions": null,
     });
   });
 

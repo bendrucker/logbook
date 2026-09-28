@@ -9,12 +9,7 @@ import {
 } from "../github/calendar";
 import { type ContributionsResult, fetchContributions } from "../github/contributions";
 import { archiveContributions, archiveSearchPage } from "../github/raw";
-import {
-  issuePages,
-  pullRequestPages,
-  reviewedPullRequestPages,
-  type SearchPageResult,
-} from "../github/search";
+import { issuePages, pullRequestPages, reviewedPullRequestPages } from "../github/search";
 import type { ContributionsCollection } from "../github/schema";
 import type { EventKind } from "../github/windows";
 import {
@@ -25,7 +20,7 @@ import {
   type SearchPageNodes,
 } from "../normalize";
 import { type Budget, BudgetRefused, type Clock } from "./budget";
-import { crossCheck } from "./cross-check";
+import { archivedYear, crossCheck } from "./cross-check";
 import { finishRun, type RunResult, startRun } from "./runs";
 import { advance } from "./state";
 
@@ -76,7 +71,7 @@ export interface SyncResult extends RunResult {
   resumeAt: string | null;
 }
 
-const CLEAN: RunResult = {
+export const CLEAN: RunResult = {
   pages: 0,
   rowsChanged: 0,
   truncated: false,
@@ -197,7 +192,7 @@ async function runContributions(
 
     const year = windowYear(root.key);
     if (year !== null) {
-      result = { ...result, note: await note(env.DB, year, fetched.collection) };
+      result = { ...result, note: await note(env, year, fetched.collection) };
     }
     // A crawl unit that came back truncated leaves its narrower windows to the
     // frontier, so nothing under it is synced until they land. One that cannot
@@ -222,14 +217,14 @@ async function runContributions(
 
 // The budget spans the invocation, so a run's cost is what it spent from the
 // point the run started.
-function charged(result: RunResult, budget: Budget, before: number): RunResult {
+export function charged(result: RunResult, budget: Budget, before: number): RunResult {
   const cost = budget.spent - before;
   return { ...result, cost, rateRemaining: cost > 0 ? budget.remaining : null };
 }
 
 // The cap has no reset to wait for, so a run it stopped resumes as soon as the
 // caller likes.
-function stoppedUntil(error: unknown, now: Date): string | null {
+export function stoppedUntil(error: unknown, now: Date): string | null {
   if (error instanceof BudgetRefused) {
     return error.resetAt ?? now.toISOString();
   }
@@ -279,12 +274,13 @@ async function contributionRowsChanged(
 // are already in D1, so a failure to compute it is something to read rather
 // than the run's error.
 async function note(
-  db: D1Database,
+  env: Env,
   year: number,
   collection: ContributionsCollection,
 ): Promise<string | null> {
   try {
-    return await crossCheck(db, year, collection);
+    const archived = await archivedYear(env.RAW, year, env.GITHUB_LOGIN);
+    return await crossCheck(env.DB, year, collection, archived);
   } catch (error) {
     return `${year} cross-check failed: ${describe(error)}`;
   }
@@ -298,7 +294,7 @@ export function syncedThrough(end: string, now: Date): string {
   return end < at ? end : at;
 }
 
-interface Page {
+export interface Page {
   page: number;
   body: string;
   truncated: boolean;
@@ -365,8 +361,16 @@ function searchPages(kind: EventKind, options: PagerOptions): AsyncGenerator<Pag
   }
 }
 
-async function* kinded<Node>(
-  source: AsyncGenerator<SearchPageResult<Node>>,
+// What a pager yields, whether it pages a search or a contribution connection.
+interface PagerResult<Node> {
+  page: number;
+  body: string;
+  truncated: boolean;
+  nodes: Node[];
+}
+
+export async function* kinded<Node>(
+  source: AsyncGenerator<PagerResult<Node>>,
   toNodes: (nodes: Node[]) => SearchPageNodes,
 ): AsyncGenerator<Page> {
   for await (const result of source) {
@@ -379,10 +383,10 @@ async function* kinded<Node>(
   }
 }
 
-function total(changed: RowsChanged): number {
+export function total(changed: RowsChanged): number {
   return Object.values(changed).reduce((sum, count) => sum + count, 0);
 }
 
-function describe(error: unknown): string {
+export function describe(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }

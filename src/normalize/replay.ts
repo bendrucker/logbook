@@ -4,16 +4,27 @@
 import { z } from "zod";
 import { splitContributions } from "../github/calendar";
 import {
+  CONTRIBUTION_EVENTS_MAX_PAGES,
+  contributionEventsTruncated,
+} from "../github/contribution-events";
+import {
+  contributionEventsObject,
+  contributionEventsYearPrefix,
   contributionsObject,
   contributionsYearPrefix,
   searchPageNumber,
   searchPrefix,
 } from "../github/raw";
 import {
+  type ContributionConnectionPage,
   type ContributionsCollection,
   contributionsResponse,
+  issueContributionsPage,
   issueSearchPage,
+  type PageInfo,
+  pullRequestContributionsPage,
   pullRequestSearchPage,
+  reviewContributionsPage,
   reviewedPullRequestSearchPage,
   reviewsTruncated,
   type SearchPage,
@@ -21,7 +32,12 @@ import {
 import { SEARCH_MAX_PAGES, searchTruncated } from "../github/search";
 import type { EventKind } from "../github/windows";
 import { combineWindows } from "./commit-windows";
-import { normalizeSearchPage, type RowsChanged, writeContributionRows } from "./page";
+import {
+  normalizeContributionEvents,
+  normalizeSearchPage,
+  type RowsChanged,
+  writeContributionRows,
+} from "./page";
 import type { SearchPageNodes } from "./page";
 
 export class RawObjectError extends Error {
@@ -68,7 +84,9 @@ export async function replaySearchWindow(
 ): Promise<Replay | null> {
   const prefix = searchPrefix(kind, window);
   const { prefixes } = await list(bucket, { prefix, delimiter: "/" });
-  const fetch = await selectFetch(bucket, kind, prefix, prefixes);
+  const fetch = await selectFetch(prefixes, (candidate) =>
+    readFetch(bucket, kind, prefix, candidate),
+  );
   if (fetch === null) {
     return null;
   }
@@ -148,6 +166,195 @@ function within<Value>(window: string, newest: ReadonlyMap<string, Value>): [str
   return reached;
 }
 
+export interface ContributionEventsFetch {
+  window: string;
+  fetchedAt: string;
+  nodes: SearchPageNodes;
+  truncated: boolean;
+  complete: boolean;
+}
+
+export interface ArchivedContributionEvents {
+  // The newest fetch of `window` and of each narrower window archived under it,
+  // oldest first.
+  fetches: ContributionEventsFetch[];
+  // Some window under the root dropped events that no archived narrower window
+  // recovers.
+  truncated: boolean;
+}
+
+// The connection pages `window` and the windows the crawl split it into
+// archived, read without writing anything. The cross-check reads a year's
+// pages through here to name the events behind a gap.
+export async function readContributionEvents(
+  bucket: R2Bucket,
+  kind: EventKind,
+  window: string,
+): Promise<ArchivedContributionEvents | null> {
+  const { keys } = await list(bucket, {
+    prefix: contributionEventsYearPrefix(kind, window.slice(0, 4)),
+  });
+
+  // Keys list in order, so each window's fetches arrive oldest first and each
+  // fetch's pages in the order they were read.
+  const archived = new Map<string, Map<string, string[]>>();
+  for (const key of keys) {
+    const object = contributionEventsObject(key);
+    if (object === null) {
+      continue;
+    }
+    const fetches = archived.get(object.window) ?? new Map<string, string[]>();
+    archived.set(object.window, fetches);
+    fetches.set(object.fetchedAt, [...(fetches.get(object.fetchedAt) ?? []), key]);
+  }
+
+  const reached = within(window, archived);
+  if (reached.length === 0) {
+    return null;
+  }
+
+  const selected = await Promise.all(
+    reached.map(([name, fetches]) =>
+      selectFetch([...fetches.keys()], async (fetchedAt) => ({
+        window: name,
+        fetchedAt,
+        ...contributionEventsFetch(kind, await read(bucket, fetches.get(fetchedAt) ?? [])),
+      })),
+    ),
+  );
+  const fetches = selected
+    .filter((fetch) => fetch !== null)
+    .toSorted((a, b) => a.fetchedAt.localeCompare(b.fetchedAt));
+  const byWindow = new Map(fetches.map((fetch) => [fetch.window, fetch]));
+
+  return { fetches, truncated: eventsTruncated(window, byWindow) };
+}
+
+// Replays the connection pages under `window`, oldest fetch first, so the
+// newest fetch of an event names its repository's `fetched_at`.
+export async function replayContributionEvents(
+  db: D1Database,
+  bucket: R2Bucket,
+  kind: EventKind,
+  window: string,
+  login: string,
+): Promise<Replay | null> {
+  const archived = await readContributionEvents(bucket, kind, window);
+  if (archived === null) {
+    return null;
+  }
+
+  let rows: RowsChanged = {
+    repositories: 0,
+    pullRequests: 0,
+    reviews: 0,
+    issues: 0,
+    commitDays: 0,
+  };
+  // One fetch after another, since a later fetch of the same event or
+  // repository has to land after the earlier one it supersedes.
+  const pending = [...archived.fetches];
+  let fetch = pending.shift();
+  while (fetch !== undefined) {
+    // eslint-disable-next-line no-await-in-loop
+    const changed = await normalizeContributionEvents(db, fetch.nodes, login, fetch.fetchedAt);
+    rows = {
+      repositories: rows.repositories + changed.repositories,
+      pullRequests: rows.pullRequests + changed.pullRequests,
+      reviews: rows.reviews + changed.reviews,
+      issues: rows.issues + changed.issues,
+      commitDays: rows.commitDays + changed.commitDays,
+    };
+    fetch = pending.shift();
+  }
+
+  return {
+    fetchedAt: archived.fetches.at(-1)?.fetchedAt ?? "",
+    truncated: archived.truncated,
+    rows,
+  };
+}
+
+// A window is covered when its own fetch finished whole, or when every window
+// it splits into was archived and is covered in turn. A window splits into the
+// children that had started by the time it was fetched.
+function eventsTruncated(
+  key: string,
+  fetches: ReadonlyMap<string, ContributionEventsFetch>,
+): boolean {
+  const fetch = fetches.get(key);
+  if (fetch !== undefined && fetch.complete && !fetch.truncated) {
+    return false;
+  }
+
+  const children = splitContributions(
+    key,
+    fetch === undefined ? LATEST : new Date(fetch.fetchedAt),
+  ).map((child) => child.key);
+  return (
+    children.length === 0 ||
+    children.some((child) => !fetches.has(child) || eventsTruncated(child, fetches))
+  );
+}
+
+function contributionEventsFetch(
+  kind: EventKind,
+  pages: readonly RawPage[],
+): Omit<ContributionEventsFetch, "window" | "fetchedAt"> {
+  switch (kind) {
+    case "pr-authored": {
+      const parsed = pages.map((page) => connectionPage(pullRequestContributionsPage, page));
+      return {
+        nodes: { kind, nodes: parsed.flatMap((page) => page.nodes) },
+        ...connectionCoverage(pages, parsed),
+      };
+    }
+    case "pr-reviewed": {
+      const parsed = pages.map((page) => connectionPage(reviewContributionsPage, page));
+      const nodes = parsed.flatMap((page) => page.nodes);
+      const { complete, truncated } = connectionCoverage(pages, parsed);
+      return {
+        nodes: { kind, nodes },
+        complete,
+        truncated: truncated || nodes.some(reviewsTruncated),
+      };
+    }
+    case "issue": {
+      const parsed = pages.map((page) => connectionPage(issueContributionsPage, page));
+      return {
+        nodes: { kind, nodes: parsed.flatMap((page) => page.nodes) },
+        ...connectionCoverage(pages, parsed),
+      };
+    }
+  }
+}
+
+function connectionPage<T>(
+  schema: z.ZodType<ContributionConnectionPage<T> | null>,
+  page: RawPage,
+): ContributionConnectionPage<T> {
+  const parsed = parse(schema, page);
+  if (parsed === null) {
+    throw new RawValidationError(page.key, "the response carries no user", null);
+  }
+  return parsed;
+}
+
+function connectionCoverage(
+  pages: readonly RawPage[],
+  parsed: readonly ContributionConnectionPage<unknown>[],
+): { complete: boolean; truncated: boolean } {
+  return {
+    complete:
+      contiguous(pages) &&
+      finished(
+        parsed.map((page) => page.pageInfo),
+        CONTRIBUTION_EVENTS_MAX_PAGES,
+      ),
+    truncated: contributionEventsTruncated(parsed),
+  };
+}
+
 function readCollection(page: RawPage): ContributionsCollection {
   const { user } = parse(contributionsResponse, page);
   if (user === null) {
@@ -174,25 +381,23 @@ interface SearchFetch {
 // newest fetch last. A newer fetch that stopped mid-pagination holds a fraction
 // of the window, so the search walks back to the last one that finished. When
 // none did, the newest is still the most that was ever archived.
-async function selectFetch(
-  bucket: R2Bucket,
-  kind: EventKind,
-  prefix: string,
-  prefixes: readonly string[],
-): Promise<SearchFetch | null> {
-  const candidates = [...prefixes];
-  let newest: SearchFetch | null = null;
-  let candidate = candidates.pop();
+async function selectFetch<Fetch extends { complete: boolean }>(
+  candidates: readonly string[],
+  readCandidate: (candidate: string) => Promise<Fetch>,
+): Promise<Fetch | null> {
+  const remaining = [...candidates];
+  let newest: Fetch | null = null;
+  let candidate = remaining.pop();
 
   while (candidate !== undefined) {
     // eslint-disable-next-line no-await-in-loop
-    const archived = await readFetch(bucket, kind, prefix, candidate);
+    const archived = await readCandidate(candidate);
     if (archived.complete) {
       return archived;
     }
 
     newest ??= archived;
-    candidate = candidates.pop();
+    candidate = remaining.pop();
   }
 
   return newest;
@@ -247,7 +452,12 @@ function coverage(
   parsed: readonly SearchPage<unknown>[],
 ): { complete: boolean; truncated: boolean } {
   return {
-    complete: contiguous(pages) && finished(parsed),
+    complete:
+      contiguous(pages) &&
+      finished(
+        parsed.map((page) => page.search.pageInfo),
+        SEARCH_MAX_PAGES,
+      ),
     truncated: parsed.some((page) => searchTruncated(page.search.issueCount)),
   };
 }
@@ -262,13 +472,13 @@ function contiguous(pages: readonly RawPage[]): boolean {
 
 // A fetch ends when GitHub announces no successor or when the paginator hits
 // the bound it stops at rather than following a cursor GitHub would reject.
-function finished(parsed: readonly SearchPage<unknown>[]): boolean {
-  const last = parsed.at(-1);
+function finished(pageInfo: readonly PageInfo[], maxPages: number): boolean {
+  const last = pageInfo.at(-1);
   if (last === undefined) {
     return false;
   }
 
-  return !last.search.pageInfo.hasNextPage || parsed.length >= SEARCH_MAX_PAGES;
+  return !last.hasNextPage || pageInfo.length >= maxPages;
 }
 
 interface Listing {

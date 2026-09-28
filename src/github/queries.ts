@@ -43,8 +43,90 @@ const RATE_LIMIT = gql`
   }
 `;
 
+// One selection per node type, shared by the search documents and the
+// contribution connections so both enumerations hand normalization the same
+// shape.
+const PULL_REQUEST_FRAGMENT = gql`
+  fragment PullRequestInfo on PullRequest {
+    __typename
+    id
+    number
+    title
+    author {
+      login
+    }
+    createdAt
+    mergedAt
+    closedAt
+    state
+    additions
+    deletions
+    changedFiles
+    comments {
+      totalCount
+    }
+    reviews {
+      totalCount
+    }
+    updatedAt
+    repository {
+      ...RepositoryInfo
+    }
+  }
+`;
+
+// The reviews come off the node's own connection filtered to one author, so
+// every document spreading this declares `$login`. A plain template rather than
+// `gql`, which keeps only the literal text and would drop the page size.
+const REVIEWED_PULL_REQUEST_FRAGMENT = `
+  fragment ReviewedPullRequestInfo on PullRequest {
+    __typename
+    id
+    number
+    title
+    author {
+      login
+    }
+    updatedAt
+    reviews(author: $login, first: ${NESTED_PAGE_SIZE}) {
+      totalCount
+      nodes {
+        id
+        state
+        submittedAt
+      }
+    }
+    repository {
+      ...RepositoryInfo
+    }
+  }
+`;
+
+const ISSUE_FRAGMENT = gql`
+  fragment IssueInfo on Issue {
+    __typename
+    id
+    number
+    title
+    author {
+      login
+    }
+    createdAt
+    closedAt
+    state
+    comments {
+      totalCount
+    }
+    updatedAt
+    repository {
+      ...RepositoryInfo
+    }
+  }
+`;
+
 export const PULL_REQUEST_SEARCH = `
   ${REPOSITORY_FRAGMENT}
+  ${PULL_REQUEST_FRAGMENT}
 
   query PullRequestSearch($searchQuery: String!, $first: Int!, $after: String) {
     search(query: $searchQuery, type: ISSUE, first: $first, after: $after) {
@@ -52,31 +134,7 @@ export const PULL_REQUEST_SEARCH = `
       ${PAGE_INFO}
       nodes {
         __typename
-        ... on PullRequest {
-          id
-          number
-          title
-          author {
-            login
-          }
-          createdAt
-          mergedAt
-          closedAt
-          state
-          additions
-          deletions
-          changedFiles
-          comments {
-            totalCount
-          }
-          reviews {
-            totalCount
-          }
-          updatedAt
-          repository {
-            ...RepositoryInfo
-          }
-        }
+        ...PullRequestInfo
       }
     }
 
@@ -88,6 +146,7 @@ export const PULL_REQUEST_SEARCH = `
 // node's own connection filtered to one author.
 export const REVIEWED_PULL_REQUEST_SEARCH = `
   ${REPOSITORY_FRAGMENT}
+  ${REVIEWED_PULL_REQUEST_FRAGMENT}
 
   query ReviewedPullRequestSearch(
     $searchQuery: String!
@@ -100,26 +159,7 @@ export const REVIEWED_PULL_REQUEST_SEARCH = `
       ${PAGE_INFO}
       nodes {
         __typename
-        ... on PullRequest {
-          id
-          number
-          title
-          author {
-            login
-          }
-          updatedAt
-          reviews(author: $login, first: ${NESTED_PAGE_SIZE}) {
-            totalCount
-            nodes {
-              id
-              state
-              submittedAt
-            }
-          }
-          repository {
-            ...RepositoryInfo
-          }
-        }
+        ...ReviewedPullRequestInfo
       }
     }
 
@@ -129,6 +169,7 @@ export const REVIEWED_PULL_REQUEST_SEARCH = `
 
 export const ISSUE_SEARCH = `
   ${REPOSITORY_FRAGMENT}
+  ${ISSUE_FRAGMENT}
 
   query IssueSearch($searchQuery: String!, $first: Int!, $after: String) {
     search(query: $searchQuery, type: ISSUE, first: $first, after: $after) {
@@ -136,22 +177,36 @@ export const ISSUE_SEARCH = `
       ${PAGE_INFO}
       nodes {
         __typename
-        ... on Issue {
-          id
-          number
-          title
-          author {
-            login
-          }
-          createdAt
-          closedAt
-          state
-          comments {
-            totalCount
-          }
-          updatedAt
-          repository {
-            ...RepositoryInfo
+        ...IssueInfo
+      }
+    }
+
+    ${RATE_LIMIT}
+  }
+`;
+
+// The contribution connections list what GitHub counts as a contribution, a
+// cursor at a time, including issues in repositories that later turned Issues
+// off, which search no longer finds.
+function contributionConnection(name: string, field: string, fragments: string, spread: string) {
+  return `
+  ${REPOSITORY_FRAGMENT}
+  ${fragments}
+
+  query ${name}(
+    $login: String!
+    $from: DateTime!
+    $to: DateTime!
+    $first: Int!
+    $after: String
+  ) {
+    user(login: $login) {
+      contributionsCollection(from: $from, to: $to) {
+        ${field}(first: $first, after: $after) {
+          totalCount
+          ${PAGE_INFO}
+          nodes {
+            ${spread}
           }
         }
       }
@@ -160,6 +215,30 @@ export const ISSUE_SEARCH = `
     ${RATE_LIMIT}
   }
 `;
+}
+
+export const ISSUE_CONTRIBUTIONS = contributionConnection(
+  "IssueContributions",
+  "issueContributions",
+  ISSUE_FRAGMENT,
+  "issue { ...IssueInfo }",
+);
+
+export const PULL_REQUEST_CONTRIBUTIONS = contributionConnection(
+  "PullRequestContributions",
+  "pullRequestContributions",
+  PULL_REQUEST_FRAGMENT,
+  "pullRequest { ...PullRequestInfo }",
+);
+
+// One node per pull request reviewed, so the node's pull request carries every
+// review the login left on it.
+export const PULL_REQUEST_REVIEW_CONTRIBUTIONS = contributionConnection(
+  "PullRequestReviewContributions",
+  "pullRequestReviewContributions",
+  REVIEWED_PULL_REQUEST_FRAGMENT,
+  "pullRequest { ...ReviewedPullRequestInfo }",
+);
 
 export const CONTRIBUTIONS = `
   ${REPOSITORY_FRAGMENT}
