@@ -22,6 +22,8 @@ import {
 } from "../normalize";
 import { type Budget, BudgetRefused, type Clock } from "./budget";
 import { archivedYear, crossCheck } from "./cross-check";
+import { recordIrreducible } from "./frontier";
+import type { SyncKind } from "./kinds";
 import { finishRun, type RunResult, startRun } from "./runs";
 import { advance } from "./state";
 
@@ -92,50 +94,91 @@ export async function syncWindow(
   window: SearchWindow,
   options: SyncOptions,
 ): Promise<SyncResult> {
-  const now = options.now ?? new Date();
-  const fetchedAt = now.toISOString();
-  const id = await startRun(env.DB, kind, window.key, fetchedAt);
-  const spent = options.budget.spent;
-  let result = CLEAN;
-  let resumeAt: string | null = null;
   let followUp: ReviewsFailure | null = null;
 
+  return recordRun(
+    env,
+    kind,
+    window.key,
+    options,
+    async (run) => {
+      const pages = searchPages(kind, {
+        ...options,
+        token: githubToken(env),
+        login: env.GITHUB_LOGIN,
+        searchQuery: window.query,
+      });
+
+      // The pages arrive one at a time because each request needs the cursor
+      // the response before it returned, and each one is archived before its
+      // rows are written so a normalization bug stays diagnosable against the
+      // bytes.
+      let page = await pages.next();
+      while (page.done !== true) {
+        // eslint-disable-next-line no-await-in-loop
+        run.result = await ingest(env, kind, window, run.fetchedAt, page.value, run.result);
+        followUp = page.value.failure;
+        // eslint-disable-next-line no-await-in-loop
+        page = await pages.next();
+      }
+
+      // Inside the run so a watermark that fails to move is the run's error
+      // rather than an exception out of the cron. A window that cannot narrow
+      // further is as synced as it gets.
+      if (run.result.truncated && !window.splits) {
+        await recordIrreducible(env.DB, kind, [window.key], run.fetchedAt);
+      }
+      if (!run.result.truncated || !window.splits) {
+        await advance(env.DB, kind, window.through);
+      }
+    },
+    (error, run) =>
+      archiveFailure(
+        env.RAW,
+        { kind, window: window.key, fetchedAt: run.fetchedAt },
+        run.result,
+        followUp,
+        error,
+      ),
+  );
+}
+
+export interface Run {
+  now: Date;
+  // When the run started, which names its pages in R2.
+  fetchedAt: string;
+  // What the run has landed so far, which a failure keeps.
+  result: RunResult;
+}
+
+// One `sync_runs` row around `body`: a failure becomes the run's error, and
+// the run records what it spent whether or not it finished.
+export async function recordRun(
+  env: Env,
+  kind: SyncKind,
+  window: string,
+  options: SyncOptions,
+  body: (run: Run) => Promise<void>,
+  onFailure: (error: unknown, run: Run) => Promise<unknown>,
+): Promise<SyncResult> {
+  const now = options.now ?? new Date();
+  const run: Run = { now, fetchedAt: now.toISOString(), result: CLEAN };
+  const id = await startRun(env.DB, kind, window, run.fetchedAt);
+  const spent = options.budget.spent;
+  let resumeAt: string | null = null;
+
   try {
-    const pages = searchPages(kind, {
-      ...options,
-      token: githubToken(env),
-      login: env.GITHUB_LOGIN,
-      searchQuery: window.query,
-    });
-
-    // The pages arrive one at a time because each request needs the cursor the
-    // response before it returned, and each one is archived before its rows are
-    // written so a normalization bug stays diagnosable against the bytes.
-    let page = await pages.next();
-    while (page.done !== true) {
-      // eslint-disable-next-line no-await-in-loop
-      result = await ingest(env, kind, window, fetchedAt, page.value, result);
-      followUp = page.value.failure;
-      // eslint-disable-next-line no-await-in-loop
-      page = await pages.next();
-    }
-
-    // Inside the run so a watermark that fails to move is the run's error
-    // rather than an exception out of the cron. A window that cannot narrow
-    // further is as synced as it gets.
-    if (!result.truncated || !window.splits) {
-      await advance(env.DB, kind, window.through);
-    }
+    await body(run);
   } catch (error) {
-    result = { ...result, error: describe(error) };
+    run.result = { ...run.result, error: describe(error) };
     resumeAt = stoppedUntil(error, now);
-    await archiveFailure(env.RAW, { kind, window: window.key, fetchedAt }, result, followUp, error);
+    await onFailure(error, run);
   } finally {
-    result = charged(result, options.budget, spent);
-    await finishRun(env.DB, id, result);
+    run.result = charged(run.result, options.budget, spent);
+    await finishRun(env.DB, id, run.result);
   }
 
-  return { ...result, fetchedAt, resumeAt };
+  return { ...run.result, fetchedAt: run.fetchedAt, resumeAt };
 }
 
 // A truncated window is fetched again a narrower window at a time, down the
@@ -164,65 +207,67 @@ async function runContributions(
   options: SyncOptions,
   walk: boolean,
 ): Promise<SyncResult> {
-  const now = options.now ?? new Date();
-  const fetchedAt = now.toISOString();
-  const id = await startRun(env.DB, "contributions", root.key, fetchedAt);
-  const spent = options.budget.spent;
-  let result = CLEAN;
-  let resumeAt: string | null = null;
   let current = root;
 
-  try {
-    const token = githubToken(env);
-    const fetched = await fetchContributions(token, env.GITHUB_LOGIN, root, options);
-    result = await ingestContributions(env, fetchedAt, fetched, result);
+  return recordRun(
+    env,
+    "contributions",
+    root.key,
+    options,
+    async (run) => {
+      const { now, fetchedAt } = run;
+      const token = githubToken(env);
+      const fetched = await fetchContributions(token, env.GITHUB_LOGIN, root, options);
+      run.result = await ingestContributions(env, fetchedAt, fetched, run.result);
 
-    // The narrower windows run in turn so the rate budget stops the walk, and
-    // the root stays truncated until every one has landed. Depth first, so a
-    // window's children run before its next sibling.
-    if (walk && fetched.truncated) {
-      const pending = splitContributions(root.key, now);
-      let irreducible = false;
-      let window = pending.shift();
-      while (window !== undefined) {
-        current = window;
-        // eslint-disable-next-line no-await-in-loop
-        const part = await fetchContributions(token, env.GITHUB_LOGIN, window, options);
-        // eslint-disable-next-line no-await-in-loop
-        result = await ingestContributions(env, fetchedAt, part, result);
-        if (part.truncated) {
-          const children = splitContributions(window.key, now);
-          irreducible ||= children.length === 0;
-          pending.unshift(...children);
+      // The narrower windows run in turn so the rate budget stops the walk, and
+      // the root stays truncated until every one has landed. Depth first, so a
+      // window's children run before its next sibling.
+      if (walk && fetched.truncated) {
+        const pending = splitContributions(root.key, now);
+        const irreducible: string[] = [];
+        let window = pending.shift();
+        while (window !== undefined) {
+          current = window;
+          // eslint-disable-next-line no-await-in-loop
+          const part = await fetchContributions(token, env.GITHUB_LOGIN, window, options);
+          // eslint-disable-next-line no-await-in-loop
+          run.result = await ingestContributions(env, fetchedAt, part, run.result);
+          if (part.truncated) {
+            const children = splitContributions(window.key, now);
+            if (children.length === 0) {
+              irreducible.push(window.key);
+            }
+            pending.unshift(...children);
+          }
+          window = pending.shift();
         }
-        window = pending.shift();
+        await recordIrreducible(env.DB, "contributions", irreducible, fetchedAt);
+        run.result = { ...run.result, truncated: irreducible.length > 0 };
       }
-      result = { ...result, truncated: irreducible };
-    }
 
-    const year = windowYear(root.key);
-    if (year !== null) {
-      result = { ...result, note: await note(env, year, fetched.collection) };
-    }
-    // A crawl unit that came back truncated leaves its narrower windows to the
-    // frontier, so nothing under it is synced until they land. One that cannot
-    // narrow further is as synced as it gets.
-    const settled = walk || !fetched.truncated || splitContributions(root.key, now).length === 0;
-    if (settled) {
-      await advance(env.DB, "contributions", syncedThrough(root.to.toISOString(), now));
-    }
-  } catch (error) {
-    result = { ...result, error: describe(error) };
-    resumeAt = stoppedUntil(error, now);
-    if (error instanceof GitHubResponseError) {
-      await archiveContributions(env.RAW, { window: current.key, fetchedAt, body: error.body });
-    }
-  } finally {
-    result = charged(result, options.budget, spent);
-    await finishRun(env.DB, id, result);
-  }
-
-  return { ...result, fetchedAt, resumeAt };
+      const year = windowYear(root.key);
+      if (year !== null) {
+        run.result = { ...run.result, note: await note(env, year, fetched.collection) };
+      }
+      // A crawl unit that came back truncated leaves its narrower windows to
+      // the frontier, so nothing under it is synced until they land. One that
+      // cannot narrow further is as synced as it gets.
+      const settled = walk || !fetched.truncated || splitContributions(root.key, now).length === 0;
+      if (settled) {
+        await advance(env.DB, "contributions", syncedThrough(root.to.toISOString(), now));
+      }
+    },
+    async (error, run) => {
+      if (error instanceof GitHubResponseError) {
+        await archiveContributions(env.RAW, {
+          window: current.key,
+          fetchedAt: run.fetchedAt,
+          body: error.body,
+        });
+      }
+    },
+  );
 }
 
 // The budget spans the invocation, so a run's cost is what it spent from the
@@ -276,8 +321,14 @@ async function contributionRowsChanged(
   if (day === null) {
     return normalizeContributions(env.DB, fetched.collection, fetchedAt);
   }
+  // The window was archived before this, so a replay finding nothing is a
+  // listing that missed it. Writing the window's own rows would overwrite the
+  // day's total with a part of it.
   const replayed = await replayContributions(env.DB, env.RAW, day);
-  return replayed?.rows ?? (await normalizeContributions(env.DB, fetched.collection, fetchedAt));
+  if (replayed === null) {
+    throw new Error(`${fetched.window.key} is missing from the archive of ${day}`);
+  }
+  return replayed.rows;
 }
 
 // The cross-check reports on a run whose pages are already in R2 and whose rows
