@@ -12,7 +12,7 @@ import {
   contributionEventsObject,
   contributionEventsYearPrefix,
   contributionsObject,
-  contributionsYearPrefix,
+  contributionsWithinPrefix,
   searchPageNumber,
   searchPrefix,
   searchReviewsPullRequest,
@@ -41,6 +41,7 @@ import {
   normalizeContributionEvents,
   normalizeSearchPage,
   type RowsChanged,
+  UNCHANGED,
   writeContributionRows,
 } from "./page";
 import type { SearchPageNodes } from "./page";
@@ -114,7 +115,7 @@ export async function replayContributions(
   // window's newest fetch last. A window is one object per fetch, so there is
   // no partial fetch to skip past.
   const newest = new Map<string, { key: string; fetchedAt: string }>();
-  for await (const key of keys(bucket, contributionsYearPrefix(window.slice(0, 4)))) {
+  for await (const key of keys(bucket, contributionsWithinPrefix(window))) {
     const object = contributionsObject(key);
     if (object !== null) {
       newest.set(object.window, { key, fetchedAt: object.fetchedAt });
@@ -154,8 +155,8 @@ export async function replayContributions(
 const LATEST = new Date(8.64e15);
 
 // The windows the replay reads: `window` and the archived windows the crawl
-// split it into, down to the finest. A listing under the year also holds the
-// year's other quarters and months, which a narrower replay leaves alone.
+// split it into, down to the finest. A quarter's listing under the year also
+// holds the year's other quarters and months, which the replay leaves alone.
 function within<Value>(window: string, newest: ReadonlyMap<string, Value>): [string, Value][] {
   const reached: [string, Value][] = [];
   const pending = [window];
@@ -557,14 +558,6 @@ function finished(last: PageInfo | undefined, pages: number, maxPages: number): 
 
   return !last.hasNextPage || pages >= maxPages;
 }
-
-const UNCHANGED: RowsChanged = {
-  repositories: 0,
-  pullRequests: 0,
-  reviews: 0,
-  issues: 0,
-  commitDays: 0,
-};
 
 function added(rows: RowsChanged, changed: RowsChanged): RowsChanged {
   return {

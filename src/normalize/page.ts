@@ -29,7 +29,7 @@ export interface RowsChanged {
   commitDays: number;
 }
 
-const UNCHANGED: RowsChanged = {
+export const UNCHANGED: RowsChanged = {
   repositories: 0,
   pullRequests: 0,
   reviews: 0,

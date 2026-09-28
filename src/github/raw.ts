@@ -106,10 +106,14 @@ export function contributionsKey(window: string, fetchedAt: string): string {
   return `${contributionsPrefix(window)}${fetchedAt}${OBJECT_SUFFIX}`;
 }
 
-// Every window key starts with its year, so one listing under the year finds
-// the year's windows at every depth, from `2015/` through the hour ranges.
-export function contributionsYearPrefix(year: string): string {
-  return `raw/contributions/${year}`;
+// One listing finds a window and every narrower window the crawl split it
+// into. Each key starts with its parent's, except a quarter's months, which
+// start with the year, and a sub-day range's hours, which start with the day.
+export function contributionsWithinPrefix(window: string): string {
+  if (/^\d{4}-Q\d$/.test(window)) {
+    return `raw/contributions/${window.slice(0, 4)}`;
+  }
+  return `raw/contributions/${window.includes("--") ? window.slice(0, 10) : window}`;
 }
 
 export function contributionsObject(key: string): { window: string; fetchedAt: string } | null {
