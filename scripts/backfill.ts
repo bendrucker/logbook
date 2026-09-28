@@ -25,7 +25,7 @@ const BackfillResult = z.object({
   rowsChanged: z.number(),
   pending: z.number(),
   irreducible: z.array(z.string()),
-  resumeAt: z.string().nullable(),
+  resumeAt: z.iso.datetime().nullable(),
   error: z.string().nullable(),
 });
 

@@ -48,7 +48,7 @@ One call enqueues the kind's windows from `from` onward in the `crawl_units` fro
 
 `issue-contributions`, `pr-contributions`, and `review-contributions` page the cursor connections on `contributionsCollection`, which list what GitHub counts as a contribution, including issues search hides in repositories that later turned Issues off. They upsert into the same event tables as search, archive under `raw/contribution-events/{event kind}/{window}/`, and run only as frontier units, so they have no watermark. A unit reads at most ten pages. One that holds more, or reads fewer nodes than the connection's `totalCount`, splits. Review nodes on the login's own pull requests are dropped, matching migration `0006`. The contributions cross-check reads the year's archived connection pages to name the node IDs behind an issue or pull request gap and to count own-PR reviews.
 
-`bun run backfill` repeats the call until nothing is pending, one line printed per call, and sleeps until `resumeAt` when the route reports one. Backfill requests go out at least a second apart. Naming no kind walks every kind in `SYNC_KINDS` in order. It stops on the first non-2xx and on a window the route reports as failed. Rerunning it retries that window.
+`bun run backfill` repeats the call until nothing is pending, one line printed per call, and sleeps until `resumeAt` when the route reports one. Backfill requests go out at least two seconds apart. Naming no kind walks every kind in `SYNC_KINDS` in order. It stops on the first non-2xx and on a window the route reports as failed. Rerunning it retries that window.
 
 ## Secrets
 

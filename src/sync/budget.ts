@@ -10,7 +10,7 @@ const EXPECTED_COST = 1;
 
 // GitHub documents 30 searches a minute for REST search and doesn't document a
 // limit for GraphQL search. A backfill assumes the same limit applies.
-export const BACKFILL_SPACING_MS = 1000;
+export const BACKFILL_SPACING_MS = 2000;
 
 export interface BudgetLimits {
   // The provider's reported remaining quota never goes below this.

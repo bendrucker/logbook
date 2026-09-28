@@ -4,7 +4,7 @@ import { z } from "zod";
 export const rateLimit = z.object({
   cost: z.number(),
   remaining: z.number(),
-  resetAt: z.string(),
+  resetAt: z.iso.datetime(),
 });
 
 export type RateLimit = z.infer<typeof rateLimit>;
