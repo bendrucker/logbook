@@ -1,10 +1,9 @@
--- One row per crawl window. A backfill enqueues roots and the frontier drains
--- them, splitting any window whose response dropped data.
+-- One row per crawl window.
 CREATE TABLE crawl_units (
   kind TEXT NOT NULL,
   window TEXT NOT NULL,
   parent TEXT,
-  -- pending, done, split, irreducible. No CHECK, matching sync_runs.kind.
+  -- pending, done, split, irreducible. No CHECK constraint enforces it.
   status TEXT NOT NULL,
   fetched_at TEXT,
   pages INTEGER NOT NULL DEFAULT 0,

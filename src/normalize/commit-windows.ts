@@ -1,12 +1,13 @@
 import { splitContributions } from "../github/calendar";
 import { contributionsTruncated } from "../github/contributions";
 import type { ContributionsCollection } from "../github/schema";
-import type { CommitDay } from "../store";
+import type { CommitDay, Repository } from "../store";
 import { type ContributionRows, contributionRows } from "./rows";
 
-export interface ArchivedWindow {
+interface ArchivedWindow {
   fetchedAt: string;
-  collection: ContributionsCollection;
+  commitDays: readonly CommitDay[];
+  truncated: boolean;
 }
 
 export interface CombinedWindows {
@@ -16,39 +17,57 @@ export interface CombinedWindows {
   truncated: boolean;
 }
 
-// `archived` holds `root` and the windows under it, which form the tree the
-// crawl split them into, with the newest fetch standing for each. A window from a day up lists whole days, so
-// its children hold the same count for a repository's day and any of them is
-// the day's count. A window narrower than a day counts part of each day, so its
-// siblings add up to the day. Taking the larger of a window's own count and its
-// children's sum covers both: a parent that listed the day wins over children
-// still partly fetched, and children that recovered a repository the parent
-// dropped supply it.
-export function combineWindows(
-  root: string,
-  archived: ReadonlyMap<string, ArchivedWindow>,
-): CombinedWindows {
-  const fetches = [...archived.values()].map((window) => window.fetchedAt).toSorted();
-  const fallback = new Date(fetches.at(-1) ?? 0);
+// A year's archived windows, folded in one response at a time. Each keeps only
+// the rows the combination reads, so the collection it came from can go as
+// soon as it is added.
+export class ArchivedWindows {
+  readonly #windows = new Map<string, ArchivedWindow>();
+  readonly #repositories = new Map<string, Repository>();
 
-  // A window clipped at the instant it was fetched split into the children that
-  // had started by then.
-  const children = (key: string): string[] => {
-    const at = archived.get(key)?.fetchedAt;
-    return splitContributions(key, at === undefined ? fallback : new Date(at)).map(
-      (child) => child.key,
-    );
-  };
+  add(window: string, collection: ContributionsCollection, fetchedAt: string): void {
+    const rows = contributionRows(collection, fetchedAt);
+    this.#windows.set(window, {
+      fetchedAt,
+      commitDays: rows.commitDays,
+      truncated: contributionsTruncated(collection),
+    });
+    // The newest fetch of a repository names its row, and of two windows
+    // fetched together the one added later does.
+    for (const repository of rows.repositories) {
+      const held = this.#repositories.get(repository.id);
+      if (held === undefined || held.fetchedAt <= repository.fetchedAt) {
+        this.#repositories.set(repository.id, repository);
+      }
+    }
+  }
 
-  return {
-    rows: {
-      repositories: [...archived.values()]
-        .toSorted((a, b) => a.fetchedAt.localeCompare(b.fetchedAt))
-        .flatMap((window) => contributionRows(window.collection, window.fetchedAt).repositories),
-      commitDays: [...totals(root, archived, children).values()],
-    },
-    truncated: truncated(root, archived, children),
-  };
+  // A window from a day up lists whole days, so its children hold the same
+  // count for a repository's day and any of them is the day's count. A window
+  // narrower than a day counts part of each day, so its siblings add up to the
+  // day. Taking the larger of a window's own count and its children's sum
+  // covers both: a parent that listed the day wins over children still partly
+  // fetched, and children that recovered a repository the parent dropped
+  // supply it.
+  combine(root: string): CombinedWindows {
+    const archived = this.#windows;
+    const fetches = [...archived.values()].map((window) => window.fetchedAt).toSorted();
+    const fallback = new Date(fetches.at(-1) ?? 0);
+
+    const children = (key: string): string[] => {
+      const at = archived.get(key)?.fetchedAt;
+      return splitContributions(key, at === undefined ? fallback : new Date(at)).map(
+        (child) => child.key,
+      );
+    };
+
+    return {
+      rows: {
+        repositories: [...this.#repositories.values()],
+        commitDays: [...totals(root, archived, children).values()],
+      },
+      truncated: truncated(root, archived, children),
+    };
+  }
 }
 
 type Children = (key: string) => string[];
@@ -66,10 +85,7 @@ function totals(
     }
   }
 
-  const window = archived.get(key);
-  const own =
-    window === undefined ? [] : contributionRows(window.collection, window.fetchedAt).commitDays;
-  for (const day of own) {
+  for (const day of archived.get(key)?.commitDays ?? []) {
     const id = `${day.repositoryId}/${day.day}`;
     const recovered = summed.get(id)?.commitCount ?? 0;
     summed.set(id, { ...day, commitCount: Math.max(day.commitCount, recovered) });
@@ -84,7 +100,7 @@ function truncated(
   children: Children,
 ): boolean {
   const window = archived.get(key);
-  if (window !== undefined && !contributionsTruncated(window.collection)) {
+  if (window !== undefined && !window.truncated) {
     return false;
   }
 

@@ -24,6 +24,8 @@ export interface CursorPagesOptions<T> extends GraphQLOptions {
   pageSize: number;
   // A connection that keeps announcing successors ends here.
   maxPages: number;
+  // Where a connection another response already started picks up.
+  after?: string;
 }
 
 export interface CursorPage<T> {
@@ -36,15 +38,14 @@ export interface CursorPage<T> {
 export async function* cursorPages<T>(
   options: CursorPagesOptions<T>,
 ): AsyncGenerator<CursorPage<T>> {
-  let after: string | null = null;
-  const sent = new Set<string>();
+  let after: string | null = options.after ?? null;
+  const sent = new Set<string>(after === null ? [] : [after]);
   let page = 0;
   let remaining = true;
 
-  // A cursor loop rather than for...of: each request depends on the cursor the
-  // response before it returned, so the pages cannot be issued together. A
-  // cursor that fails to advance ends it sooner than the page bound, as an
-  // error.
+  // Each request depends on the cursor the previous response returned, so the
+  // pages are requested one at a time. A cursor that fails to advance ends the
+  // loop before the page bound, as an error.
   while (remaining && page < options.maxPages) {
     // eslint-disable-next-line no-await-in-loop
     const response = await graphql(

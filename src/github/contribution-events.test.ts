@@ -134,7 +134,9 @@ describe("issueContributionPages", () => {
 
   it("throws for a login GitHub does not know", async () => {
     const stub = staged([
-      { data: { user: null, rateLimit: { cost: 1, remaining: 1, resetAt: "" } } },
+      {
+        data: { user: null, rateLimit: { cost: 1, remaining: 1, resetAt: "2026-09-09T13:00:00Z" } },
+      },
     ]);
 
     await expect(collect(issueContributionPages(options(stub)))).rejects.toBeInstanceOf(

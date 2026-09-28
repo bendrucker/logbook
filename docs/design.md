@@ -64,9 +64,10 @@ Every response page is written to R2 before it is parsed, keyed by what produced
 
 ```text
 raw/
-  search/{kind}/{window}/{fetched_at}/{page}.json   # kind is pr-authored, pr-reviewed, or issue
-  contributions/{window}/{fetched_at}.json          # 2015, 2015-Q3, 2015-07, 2015-07-14, or 2015-07-14T00--2015-07-14T12
-  contribution-events/{kind}/{window}/{fetched_at}/{page}.json   # kind as in search, window as in contributions
+  search/{kind}/{window}/{fetched_at}/{page}.json                               # kind is pr-authored, pr-reviewed, or issue
+  search/{kind}/{window}/{fetched_at}/reviews/{pull request ID}/{page}.json     # review follow-up pages
+  contributions/{window}/{fetched_at}.json                                      # 2015, 2015-Q3, 2015-07, 2015-07-14, 2015-07-14T00--2015-07-14T12, or 2015-07-14T00--2015-07-14T01
+  contribution-events/{kind}/{window}/{fetched_at}/{page}.json                  # kind as in search, window as in contributions
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -133,13 +134,15 @@ The review search excludes my own pull requests. Replying to a review thread sub
 
 The upper bound is the month's real last day. A literal `-31` against a thirty-day month is a date GitHub's parser has to reinterpret, and these boundaries are what the whole cap mitigation rests on.
 
-The review search reads each pull request's reviews through a nested `reviews(author:, first: 100)` connection with no cursor. A pull request whose `reviews.totalCount` exceeds the nodes returned flags its page as truncated, live and on replay. The search pager also stops with a `RepeatedCursorError` when a page announces a cursor it already sent, which would otherwise serve the same page until the page bound.
+A month matching more than 1,000 splits in the backfill frontier. It halves into day ranges named for their ends, such as `2026-08-01--2026-08-15`, which halve again down to single days. A day splits into halves and a half into hours, named like the contributions windows (`2026-08-14T00--2026-08-14T12`) and queried on instants. An hour still past the cap is irreducible. Each window archives under its own key in `raw/search/{kind}/{window}/`.
 
-Walking those back to 2012 is 166 windows per event type for the whole history. The incremental run is the same code path with a different window: one `updated:>{last successful sync}` query per type. Backfill and incremental differ only in what dates go into the string.
+The review search reads each pull request's reviews through a nested `reviews(author:, first: 100)` connection. A pull request whose nested page announces a successor gets a follow-up `node(id:)` query that pages the rest. Those pages archive beside the search page under `reviews/{pull request ID}/`, and replay merges them back in. A follow-up that fails still leaves its search page and the earlier follow-ups archived and normalized. The failed response lands as that pull request's next follow-up page rather than as a search page. A pull request whose `reviews.totalCount` still exceeds the nodes read flags its page as truncated, live and on replay. The search pager also stops with a `RepeatedCursorError` when a page announces a cursor it already sent, which would otherwise serve the same page until the page bound.
+
+Walking those back to 2012 is 166 windows per event type for the whole history. The incremental run is the same code path with a different window: one `updated:{since}..{now}` query per type, where `since` sits an hour behind the watermark. The upper bound is what lets a range past 1,000 after an outage split: it halves at its midpoint, earliest half first, and the watermark climbs through each half as it lands. Backfill and incremental differ only in what dates go into the string.
 
 #### Contributions Collection
 
-`user.contributionsCollection(from, to)` takes at most a year per request. Its [`to` argument](https://docs.github.com/en/graphql/reference/users#object-user) defaults to the earlier of now and a year past `from`. The reference documents that default and says nothing about what a wider window does, so the client never sends one. A full history is one request per year. `user.contributionsCollection.contributionYears` lists which years to walk.
+`user.contributionsCollection(from, to)` takes at most a year per request. Its [`to` argument](https://docs.github.com/en/graphql/reference/users#object-user) defaults to the earlier of now and a year past `from`. The reference documents that default and says nothing about what a wider window does, so the client never sends one. A full history is one request per year. The backfill walks every calendar year from its first month, since a year with nothing in it costs a single request.
 
 `commitContributionsByRepository` returns a plain list rather than a paginated connection, and its `maxRepositories` argument defaults to 25. Anything past the value it is given is dropped with no error and no cursor to follow. The query asks for 100. A window is truncated when it lists fewer repositories than `totalRepositoriesWithContributedCommits`, which the same response reports, so a window holding exactly 100 of 100 is complete.
 
@@ -157,15 +160,15 @@ Issues and pull requests compare as sets when the year's archived connection pag
 
 Each node carries its `Issue` or `PullRequest` with the fields the matching search selects, through a shared fragment, so normalization reuses the search row builders. A review node names one pull request, and the query reads that pull request's `reviews(author:, first: 100)`, so every review on it lands. Review nodes on my own pull requests are dropped, as the review search excludes them.
 
-The windows are the contributions calendar windows, rooted at years. A unit reads at most ten pages of 100. One that ends its cursor having read fewer nodes than the connection's `totalCount`, or stops at ten pages with a successor announced, is truncated and splits down the calendar like a commit window. The pager shares the search pager's cursor loop and its repeated-cursor guard.
+The windows are the contributions calendar windows, rooted at years. A unit reads at most ten pages of 100. One that exhausts its pages having read fewer nodes than the connection's `totalCount`, or stops at ten pages with a successor announced, is truncated and splits down the calendar like a commit window. The pager shares the search pager's cursor loop and its repeated-cursor guard.
 
-Search stays. Connections enumerate by creation, so only an `updated:>` search finds an old event whose state changed, and search also finds events GitHub declines to count as contributions. The union of both is the most complete set either source sees.
+Search stays. Connections enumerate by creation, so only an `updated:` search finds an old event whose state changed, and search also finds events GitHub declines to count as contributions. The union of both is the most complete set either source sees.
 
 #### Rate Budget
 
 The GraphQL API allows [5,000 points per hour](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api#primary-rate-limit) for a personal access token, and it scores a query on how many nodes it asks for. A search page of 100 nodes with no nested connection under it is one point. Nested connections multiply rather than add. A query that grows a sub-connection costs more than its node count reads on the surface. Every archived request so far has cost 1 point, including the reviewed-PR search with its nested `reviews(first: 100)`. The full backfill is a few hundred requests, which the share below spreads over a few rate windows. The incremental run is noise against it.
 
-Each response carries `rateLimit.remaining`, `rateLimit.cost`, and `rateLimit.resetAt`. Only this field reflects the point budget. The REST `GET /rate_limit` endpoint undercounts GraphQL spend.
+Each response carries `rateLimit.remaining`, `rateLimit.cost`, and `rateLimit.resetAt`. Only `rateLimit` reflects the point budget. The REST `GET /rate_limit` endpoint undercounts GraphQL spend.
 
 The budget is shared with every other tool on the token, and those tools spent about 900 points in 18 minutes on one sampled hour. Logbook therefore spends within three limits, set as Worker vars:
 
@@ -175,7 +178,7 @@ The budget is shared with every other tool on the token, and those tools spent a
 
 The ledger is derived. Each `sync_runs` row records the points it spent and the last `remaining` it saw, and the spend in the current window is the sum of `cost` over runs started since `resetAt` minus an hour. A request goes out when the last `remaining` minus its expected cost stays at or above the floor, the window's spend stays within the share, and the invocation's spend stays within the cap. The first request of an invocation is what learns the window, so it goes out on the cap alone. A refusal ends the invocation on a watermark it can resume from, and reports the reset to wait for.
 
-GitHub also documents secondary limits: 100 concurrent requests and 2,000 points a minute for GraphQL. Logbook sends one request at a time. A backfill spaces requests at least a second apart, which keeps search within the 30 a minute GitHub documents for REST search in case GraphQL search shares it. A 403 or 429 carrying `retry-after` or a secondary-limit message stops the invocation the way a refusal does, and reports the wait.
+GitHub also documents secondary limits: 100 concurrent requests and 2,000 points a minute for GraphQL. Logbook sends one request at a time. A backfill spaces requests at least two seconds apart, which keeps search within the 30 a minute GitHub documents for REST search in case GraphQL search shares it. A 403 or 429 carrying `retry-after` or a secondary-limit message stops the invocation the way a refusal does, and reports the wait.
 
 #### Validation
 
@@ -226,7 +229,7 @@ The feed exists to answer these without a bespoke table per question:
 Backfill and incremental sync are the same code with different windows, so there is no second implementation to keep correct.
 
 - Walk monthly search windows back to 2012 for each event type. I created my first repository on 2012-12-27, and nothing earlier will match.
-- Walk `contributionsCollection` per year over `contributionYears`.
+- Walk `contributionsCollection` per calendar year from the backfill's first month.
 - Page the three contribution connections per year, which recovers events the search index hides.
 - Write every page to R2, then normalize.
 
@@ -238,19 +241,19 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 ## Operations
 
-- The hourly cron runs one `updated:>` search per event type plus one `contributionsCollection` call for the current year.
+- The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year.
 - A second cron rebuilds the lake at 09:30 UTC. It sits off the hour so it never shares an instant with a sync invocation, and `scheduled` tells the two apart by the cron expression.
 - `GITHUB_TOKEN` is a Worker secret, set with `wrangler secret put`. It is the only credential the hub holds.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
-- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off, which search hides and the totals still count. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
-- The backfill is roughly 500 search requests plus one per contribution year, well inside the 10,000 subrequests a paid Workers invocation gets. Paging it across invocations answers the wall clock rather than a platform ceiling. The free tier's 50 subrequests would bind first.
+- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off. Search hides it, and the totals still count it. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
+- The backfill is roughly 500 search requests plus one per year, well inside the 10,000 subrequests a paid Workers invocation gets. Paging it across invocations answers the wall clock rather than a platform ceiling. The free tier's 50 subrequests would bind first.
 - The [rate budget](#rate-budget) reads `rateLimit` off each response and refuses a request before it crosses a limit, rather than waiting for a 403.
 
 ## Risks
 
-- The search cap drops results without an error. `issueCount` past 1,000 is the only signal, and monthly windows keep the real counts far below it.
-- GitHub's search index lags writes by an unspecified interval, so an `updated:>` window anchored exactly at the last sync can miss an event indexed late. The window overlaps the previous one, and upserts keyed on node ID make the overlap free.
+- The search cap drops results without an error. `issueCount` past 1,000 is the only signal. Monthly windows keep the real counts far below it, and a window past it splits down to hours.
+- GitHub's search index lags writes by an unspecified interval, so an `updated:` window anchored exactly at the last sync can miss an event indexed late. The window overlaps the previous one, and upserts keyed on node ID make the overlap free.
 - `commitContributionsByRepository` returns a fixed-length list and reports no truncation beyond the totals beside it. Calendar splitting recovers both overflowing days and repositories past the 100 cap, down to an hour. An hour that touched more than 100 repositories stays irreducible and flagged.
 - `restrictedContributionsCount` counts contributions hidden from the viewer. With a token that sees no private repository, that is every private contribution, so the cross-check reports it beside the gaps instead of subtracting it.
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.

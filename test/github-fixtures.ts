@@ -131,6 +131,27 @@ export function searchResponse(nodes: readonly unknown[], overrides: SearchOverr
   return jsonResponse(searchPayload(nodes, overrides));
 }
 
+// One page of the follow-up that reads a pull request's reviews past the page
+// its search result nested.
+export function reviewsPayload(
+  nodes: readonly unknown[],
+  overrides: { totalCount?: number; endCursor?: string | null } = {},
+) {
+  const endCursor = overrides.endCursor ?? null;
+  return {
+    data: {
+      node: {
+        reviews: {
+          totalCount: overrides.totalCount ?? nodes.length,
+          pageInfo: endCursor === null ? { hasNextPage: false } : { hasNextPage: true, endCursor },
+          nodes,
+        },
+      },
+      rateLimit: rateLimit(),
+    },
+  };
+}
+
 export type ContributionEventsField =
   | "issueContributions"
   | "pullRequestContributions"

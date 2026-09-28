@@ -10,8 +10,8 @@ export interface UnitFetch {
   pages: number;
   rowsChanged: number;
   cost: number;
-  // The response said it dropped data. Its rows still land, because truncation
-  // drops whole items and never corrupts the ones returned.
+  // A truncated response's rows still land, because truncation drops whole
+  // items and never corrupts the ones returned.
   truncated: boolean;
   error: string | null;
   // Set when the rate budget or a secondary limit stopped the fetch: the
@@ -48,10 +48,30 @@ export async function enqueue(
   if (windows.length === 0) {
     return;
   }
-  const insert = db.prepare(
-    "INSERT OR IGNORE INTO crawl_units (kind, window, parent, status, updated_at) VALUES (?1, ?2, ?3, 'pending', ?4)",
+  const insert = insertUnit(db);
+  await db.batch(windows.map((window) => insert.bind(kind, window, null, "pending", at)));
+}
+
+// A window outside the frontier still truncated at its finest split, recorded
+// so the sync status reports it the way it reports one the crawl reached. A
+// window already in the frontier keeps the status its own crawl gives it.
+export async function recordIrreducible(
+  db: D1Database,
+  kind: string,
+  windows: readonly string[],
+  at: string,
+): Promise<void> {
+  if (windows.length === 0) {
+    return;
+  }
+  const insert = insertUnit(db);
+  await db.batch(windows.map((window) => insert.bind(kind, window, null, "irreducible", at)));
+}
+
+function insertUnit(db: D1Database): D1PreparedStatement {
+  return db.prepare(
+    "INSERT OR IGNORE INTO crawl_units (kind, window, parent, status, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
   );
-  await db.batch(windows.map((window) => insert.bind(kind, window, null, at)));
 }
 
 // Units drain in window order. A split's children sort right after their
@@ -107,9 +127,7 @@ async function settle(
   const status: UnitStatus =
     children === null ? "done" : children.length === 0 ? "irreducible" : "split";
   const at = new Date().toISOString();
-  const insert = db.prepare(
-    "INSERT OR IGNORE INTO crawl_units (kind, window, parent, status, updated_at) VALUES (?1, ?2, ?3, 'pending', ?4)",
-  );
+  const insert = insertUnit(db);
 
   await db.batch([
     db
@@ -118,7 +136,7 @@ async function settle(
           " WHERE kind = ?1 AND window = ?2",
       )
       .bind(kind, window, status, fetched.fetchedAt, fetched.pages, fetched.cost, at),
-    ...(children ?? []).map((child) => insert.bind(kind, child, window, at)),
+    ...(children ?? []).map((child) => insert.bind(kind, child, window, "pending", at)),
   ]);
 }
 
@@ -129,7 +147,7 @@ export interface FrontierStatus {
   irreducible: string[];
 }
 
-// Every kind in two reads, keyed by kind. A kind with no units reads as absent.
+// A kind with no units reads as absent.
 export async function frontierStatus(db: D1Database): Promise<Map<string, FrontierStatus>> {
   const [pending, irreducible] = await Promise.all([
     db

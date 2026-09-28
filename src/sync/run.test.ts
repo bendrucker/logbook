@@ -9,13 +9,15 @@ import {
   pullRequest,
   rateLimit,
   requestBody,
+  review,
   reviewedPullRequest,
+  reviewsPayload,
   searchPayload,
   searchResponse,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
 import { stubFetch } from "../../test/fetch-stub";
-import { contributionEventsKey, searchKey } from "../github/raw";
+import { contributionEventsKey, searchKey, searchReviewsKey } from "../github/raw";
 import { Budget, type BudgetLimits } from "./budget";
 import { recentRuns } from "./runs";
 import { syncContributions, syncWindow } from "./run";
@@ -27,6 +29,7 @@ const WINDOW = {
   key: "2026-09",
   query: "is:pr author:bendrucker",
   through: "2026-09-30T23:59:59Z",
+  splits: false,
 };
 
 // Loose enough that only a test reporting a low `remaining` reaches a limit.
@@ -57,8 +60,6 @@ function count(table: string): Promise<{ total: number } | null> {
   return readRow<{ total: number }>(env.DB, `SELECT COUNT(*) AS total FROM ${table}`);
 }
 
-// A page whose reading leaves the budget under its floor, so the request after
-// it is refused.
 function lastAffordable(nodes: readonly unknown[]): Response {
   const payload = searchPayload(nodes, { endCursor: "cursor" });
   return jsonResponse({
@@ -103,6 +104,69 @@ describe("syncWindow", () => {
       searchKey("pr-authored", WINDOW.key, FETCHED_AT, 1),
       searchKey("pr-authored", WINDOW.key, FETCHED_AT, 2),
     ]);
+  });
+
+  it("archives a review follow-up beside its page and holds a truncated window", async () => {
+    const node = reviewedPullRequest(7, {
+      reviews: {
+        totalCount: 2,
+        pageInfo: { hasNextPage: true, endCursor: "cmV2" },
+        nodes: [review(7)],
+      },
+    });
+    const { fetch } = sequence([
+      () => searchResponse([node], { issueCount: 1001 }),
+      () => jsonResponse(reviewsPayload([review(8)], { totalCount: 2 })),
+    ]);
+
+    const result = await syncWindow(
+      env,
+      "pr-reviewed",
+      { ...WINDOW, splits: true },
+      options(fetch),
+    );
+
+    expect(result).toMatchObject({ pages: 1, truncated: true, error: null });
+    const listed = await env.RAW.list();
+    expect(listed.objects.map((object) => object.key)).toContain(
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_7", 1),
+    );
+    expect(await count("reviews")).toEqual({ total: 2 });
+    expect(await readWatermark(env.DB, "pr-reviewed")).toBeNull();
+  });
+
+  it("keeps a page and its follow-ups when a later follow-up fails", async () => {
+    const outran = (id: number) =>
+      reviewedPullRequest(id, {
+        reviews: {
+          totalCount: 2,
+          pageInfo: { hasNextPage: true, endCursor: `cmV2-${id}` },
+          nodes: [review(id)],
+        },
+      });
+    const failure = { errors: [{ message: "Something went wrong" }], data: null };
+    const { fetch } = sequence([
+      () => searchResponse([outran(7), outran(9)]),
+      () => jsonResponse(reviewsPayload([review(8)], { totalCount: 2 })),
+      () => jsonResponse(failure),
+    ]);
+
+    const result = await syncWindow(env, "pr-reviewed", WINDOW, options(fetch));
+
+    expect(result).toMatchObject({ pages: 1, truncated: true, resumeAt: null });
+    expect(result.error).toContain("GraphQLQueryError");
+    const listed = await env.RAW.list();
+    expect(listed.objects.map((object) => object.key)).toEqual([
+      searchKey("pr-reviewed", WINDOW.key, FETCHED_AT, 1),
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_7", 1),
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_9", 1),
+    ]);
+    const failed = await env.RAW.get(
+      searchReviewsKey("pr-reviewed", WINDOW.key, FETCHED_AT, "PR_9", 1),
+    );
+    await expect(failed?.json()).resolves.toEqual(failure);
+    expect(await count("reviews")).toEqual({ total: 3 });
+    expect(await readWatermark(env.DB, "pr-reviewed")).toBeNull();
   });
 
   it("keeps the bytes of a page it could not parse and writes no rows", async () => {

@@ -16,32 +16,30 @@ export interface ArchivedYear {
   reviews?: { pullRequests: number; own: number };
 }
 
-// The connection pages the crawl archived for `year`, each kind's windows
-// combined. The connection backfill already fetched them, so the check sends
-// no request.
+// The connection backfill already fetched these pages, so this check sends no
+// request.
 export async function archivedYear(
   bucket: R2Bucket,
   year: number,
   login: string,
 ): Promise<ArchivedYear> {
-  const [issues, pullRequests, reviewed] = await Promise.all([
-    archivedNodes(bucket, "issue", year),
-    archivedNodes(bucket, "pr-authored", year),
-    archivedNodes(bucket, "pr-reviewed", year),
-  ]);
-
-  return {
-    ...(issues === null ? {} : { issues: new Set(issues.keys()) }),
-    ...(pullRequests === null ? {} : { pullRequests: new Set(pullRequests.keys()) }),
-    ...(reviewed === null
-      ? {}
-      : {
-          reviews: {
-            pullRequests: reviewed.size,
-            own: [...reviewed.values()].filter((node) => authoredBy(node, login)).length,
-          },
-        }),
-  };
+  // One kind at a time, each reduced to what the check compares before the
+  // next is read, so the reads stay within one stream's concurrency and only
+  // one kind's nodes are held at once.
+  const issues = await archivedNodes(bucket, "issue", year);
+  const archived: ArchivedYear = issues === null ? {} : { issues: new Set(issues.keys()) };
+  const pullRequests = await archivedNodes(bucket, "pr-authored", year);
+  if (pullRequests !== null) {
+    archived.pullRequests = new Set(pullRequests.keys());
+  }
+  const reviewed = await archivedNodes(bucket, "pr-reviewed", year);
+  if (reviewed !== null) {
+    archived.reviews = {
+      pullRequests: reviewed.size,
+      own: [...reviewed.values()].filter((node) => authoredBy(node, login)).length,
+    };
+  }
+  return archived;
 }
 
 type Authored = { id: string; author: { login: string } | null };
@@ -69,20 +67,20 @@ async function archivedNodes(
   return nodes;
 }
 
-// GitHub's own yearly totals against what the event tables hold. A search
-// window that lost rows shows up here and nowhere else. It is recorded rather
-// than failed on: `restrictedContributionsCount` counts contributions the token
-// cannot see, so a gap can be a visibility difference instead of lost rows.
+// A search window that lost rows shows up here and nowhere else. It is
+// recorded rather than failed on: `restrictedContributionsCount` counts
+// contributions the token cannot see, so a gap can be a visibility
+// difference instead of lost rows.
 //
-// Each total is compared like with like. GitHub counts a pull request once
-// however many reviews it drew, including reviews on the login's own pull
-// requests, which the reviews table leaves out. So the review total is set
-// against distinct pull requests by the year of their first review, after
-// taking off the own ones the archived review pages count.
+// GitHub counts a pull request once however many reviews it drew, including
+// reviews on the login's own pull requests, which the reviews table leaves
+// out. So the review total is set against distinct pull requests by the year
+// of their first review, after taking off the own ones the archived review
+// pages count.
 //
-// An archive listing exactly as many events as GitHub reports is GitHub's own
-// list, so issues and pull requests compare as sets of node IDs and the note
-// names the events behind a gap. An archive of another size is stale or
+// An archive listing exactly as many events as GitHub reports is GitHub's
+// own list, so issues and pull requests compare as sets of node IDs and the
+// note names the events behind a gap. An archive of another size is stale or
 // partial, and the comparison falls back to the totals alone.
 export async function crossCheck(
   db: D1Database,

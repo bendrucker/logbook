@@ -4,7 +4,7 @@ import { z } from "zod";
 export const rateLimit = z.object({
   cost: z.number(),
   remaining: z.number(),
-  resetAt: z.string(),
+  resetAt: z.iso.datetime(),
 });
 
 export type RateLimit = z.infer<typeof rateLimit>;
@@ -102,6 +102,16 @@ const review = z.object({
   submittedAt: z.string().nullable(),
 });
 
+export type Review = z.infer<typeof review>;
+
+// Pages archived before the sub-connection selected its cursor carry no
+// `pageInfo`, and replay still reads them.
+const reviewConnection = z.object({
+  totalCount: z.number(),
+  pageInfo: pageInfo.optional(),
+  nodes: nodes(review),
+});
+
 // A `reviewed-by:` search matches the pull request rather than the review, so
 // the reviews themselves come off a sub-connection filtered to one author.
 const reviewedPullRequestNode = z.object({
@@ -111,19 +121,26 @@ const reviewedPullRequestNode = z.object({
   title: z.string(),
   author,
   updatedAt: z.string(),
-  reviews: z.object({ totalCount: z.number(), nodes: nodes(review) }),
+  reviews: reviewConnection,
   repository,
 });
 
 export type ReviewedPullRequestNode = z.infer<typeof reviewedPullRequestNode>;
 
-// The reviews sub-connection returns one page and carries no cursor the outer
-// paginator could follow, so a pull request with more reviews than that page
-// holds has lost the rest. `nodes()` drops null entries, which can only make a
+// The reviews sub-connection returns one page inside the outer one, so a pull
+// request with more reviews than that page holds has lost the rest until a
+// follow-up reads them. `nodes()` drops null entries, which can only make a
 // complete page read as short: the check errs toward flagging.
 export function reviewsTruncated(node: ReviewedPullRequestNode): boolean {
   return node.reviews.totalCount > node.reviews.nodes.length;
 }
+
+// A null node is a pull request GitHub no longer returns.
+export const pullRequestReviewsPage = z.object({
+  node: z.object({ reviews: reviewConnection }).nullable(),
+});
+
+export type PullRequestReviewsPage = z.infer<typeof pullRequestReviewsPage>;
 
 const issueNode = z.object({
   __typename: z.literal("Issue"),
@@ -180,10 +197,10 @@ function connection<T extends z.ZodType>(item: T) {
   return z.object({ totalCount: z.number(), pageInfo, nodes: nodes(item) });
 }
 
-// Each connection wraps the node it counts in a contribution object. The
-// wrapper comes off here, so a connection page hands on the nodes a search page
-// does and normalization cannot tell which enumeration found them. A null user
-// stays null, since only the caller knows whose login it asked for.
+// The wrapper comes off here, so a connection page hands on the nodes a
+// search page does and normalization cannot tell which enumeration found
+// them. A null user stays null, since only the caller knows whose login it
+// asked for.
 function contributionConnectionPage<Collection, Node>(
   collection: z.ZodType<Collection>,
   unwrap: (collection: Collection) => ContributionConnectionPage<Node>,

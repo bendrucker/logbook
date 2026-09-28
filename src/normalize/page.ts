@@ -29,7 +29,7 @@ export interface RowsChanged {
   commitDays: number;
 }
 
-const UNCHANGED: RowsChanged = {
+export const UNCHANGED: RowsChanged = {
   repositories: 0,
   pullRequests: 0,
   reviews: 0,
@@ -138,8 +138,6 @@ function writeRepositories(
   return upsertRepositories(db, dedupe(rows.map((row) => row.repository)));
 }
 
-// A page of a hundred nodes usually names far fewer repositories, and the same
-// id twice in one batch is a statement that writes what the one before it did.
 // The last row for an id wins.
 function dedupe(rows: readonly Repository[]): Repository[] {
   return [...new Map(rows.map((row) => [row.id, row])).values()];

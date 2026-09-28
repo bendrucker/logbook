@@ -22,9 +22,9 @@ import {
 
 export const CONTRIBUTION_EVENTS_PAGE_SIZE = 100;
 
-// A crawl unit reads at most ten pages. A window holding more comes back
-// truncated and the frontier narrows it down the calendar, which bounds what a
-// unit interrupted by the budget costs to restart.
+// A window holding more comes back truncated and the frontier narrows it
+// down the calendar, which bounds what a unit interrupted by the budget
+// costs to restart.
 export const CONTRIBUTION_EVENTS_MAX_PAGES = 10;
 
 export interface ContributionEventsPageResult<T> {

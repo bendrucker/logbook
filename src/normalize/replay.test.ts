@@ -10,11 +10,18 @@ import {
   repository,
   review,
   reviewedPullRequest,
+  reviewsPayload,
   type SearchOverrides,
   searchPayload,
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
-import { contributionEventsKey, contributionsKey, searchKey } from "../github/raw";
+import {
+  contributionEventsKey,
+  contributionsKey,
+  searchKey,
+  searchReviewsKey,
+} from "../github/raw";
+import { OPEN_CONNECTIONS } from "../concurrency";
 import { SEARCH_MAX_RESULTS } from "../github/search";
 import type { EventKind } from "../github/windows";
 import {
@@ -49,8 +56,7 @@ function archive(
   );
 }
 
-// One day node per entry. `repositories` above the number listed stands for
-// repositories the window dropped.
+// `repositories` above the number listed stands for repositories the window dropped.
 function commitsPayload(
   entries: readonly (readonly [string, string, number])[],
   repositories?: number,
@@ -69,6 +75,31 @@ function commitsPayload(
     totalRepositoriesWithContributedCommits: repositories ?? names.length,
     commitContributionsByRepository: listed,
   });
+}
+
+// The most reads `bucket` had open at once, counted from each get to the
+// object it resolves with.
+function watchReads(bucket: R2Bucket): { bucket: R2Bucket; most: () => number } {
+  let open = 0;
+  let most = 0;
+  const watched = new Proxy(bucket, {
+    get(target, property) {
+      if (property === "get") {
+        return async (key: string) => {
+          open += 1;
+          most = Math.max(most, open);
+          try {
+            return await target.get(key);
+          } finally {
+            open -= 1;
+          }
+        };
+      }
+      const value: unknown = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { bucket: watched, most: () => most };
 }
 
 function commitDays() {
@@ -137,6 +168,18 @@ describe("replaySearchWindow", () => {
     // The last write wins only because a padded 10 sorts after 1 rather than
     // between 1 and 2.
     expect(stored?.title).toBe("the tenth page");
+  });
+
+  it("reads a long fetch a few pages at a time", async () => {
+    const pages = Array.from({ length: 20 }, (_, index) => index + 1);
+    await Promise.all(pages.map((page) => archive("issue", LATER, page, [issue(page)])));
+    const reads = watchReads(env.RAW);
+
+    await replaySearchWindow(env.DB, reads.bucket, "issue", WINDOW);
+
+    expect(await count("issues")).toEqual({ total: 20 });
+    expect(reads.most()).toBeGreaterThan(1);
+    expect(reads.most()).toBeLessThanOrEqual(OPEN_CONNECTIONS);
   });
 
   it("writes one repository for a window that names it on every page", async () => {
@@ -237,6 +280,27 @@ describe("replaySearchWindow", () => {
     const replayed = await replaySearchWindow(env.DB, env.RAW, "pr-reviewed", WINDOW);
 
     expect(replayed?.truncated).toBe(true);
+  });
+
+  it("completes a pull request's reviews from its archived follow-up", async () => {
+    const node = reviewedPullRequest(7, {
+      id: "MDExOlB1bGxSZXF1ZXN0/w==",
+      reviews: {
+        totalCount: 2,
+        pageInfo: { hasNextPage: true, endCursor: "cmV2" },
+        nodes: [review(7)],
+      },
+    });
+    await archive("pr-reviewed", LATER, 1, [node]);
+    await env.RAW.put(
+      searchReviewsKey("pr-reviewed", WINDOW, LATER, node.id, 1),
+      JSON.stringify(reviewsPayload([review(8)], { totalCount: 2 })),
+    );
+
+    const replayed = await replaySearchWindow(env.DB, env.RAW, "pr-reviewed", WINDOW);
+
+    expect(replayed).toMatchObject({ fetchedAt: LATER, truncated: false });
+    expect(replayed?.rows.reviews).toBe(2);
   });
 
   it("reports a window GitHub returned whole", async () => {
@@ -363,8 +427,6 @@ describe("replayContributions", () => {
   it("adds up the parts of a day fetched in halves", async () => {
     const put = (window: string, payload: unknown) =>
       env.RAW.put(contributionsKey(window, LATER), JSON.stringify(payload));
-    // The day listed repo-0 whole and dropped repo-1, which committed in both
-    // halves.
     await put("2015-07-14", commitsPayload([["repo-0", "2015-07-14", 6]], 2));
     await put(
       "2015-07-14T00--2015-07-14T12",

@@ -49,11 +49,20 @@ export async function buildLake(
   try {
     // Every table encodes before any is written, so a table that throws leaves
     // the bucket on the last complete build rather than mixing a rebuilt table
-    // with a stale one that a reader joining them could not tell apart.
-    const encoded = await Promise.all(LAKE_TABLES.map((table) => encodeOne(env.DB, table)));
-    await Promise.all(encoded.map((table) => writeTable(env.LAKE, table)));
+    // with a stale one that a reader joining them could not tell apart. They
+    // encode one at a time, so only one table's rows are held beside the
+    // compressed files already built.
+    const encoded: EncodedLakeTable[] = [];
+    const pending = [...LAKE_TABLES];
+    let table = pending.shift();
+    while (table !== undefined) {
+      // eslint-disable-next-line no-await-in-loop
+      encoded.push(await encodeOne(env.DB, table));
+      table = pending.shift();
+    }
+    await Promise.all(encoded.map((each) => writeTable(env.LAKE, each)));
 
-    const rowCounts = Object.fromEntries(encoded.map((table) => [table.table.name, table.rows]));
+    const rowCounts = Object.fromEntries(encoded.map((each) => [each.table.name, each.rows]));
     const finishedAt = new Date().toISOString();
     await finishBuild(env.DB, id, rowCounts, finishedAt);
 

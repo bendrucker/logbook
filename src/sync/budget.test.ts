@@ -45,7 +45,7 @@ function endlessSearch(readings: readonly RateLimitOverrides[]) {
 }
 
 function window(key: string) {
-  return { key, query: "is:pr author:bendrucker", through: "2026-09-30T23:59:59Z" };
+  return { key, query: "is:pr author:bendrucker", through: "2026-09-30T23:59:59Z", splits: false };
 }
 
 async function seedRun(startedAt: string, cost: number): Promise<void> {

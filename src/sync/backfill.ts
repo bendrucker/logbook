@@ -1,10 +1,11 @@
 import { splitContributions } from "../github/calendar";
 import {
   backfillSearch,
+  createdWindow,
   type EventKind,
   type Month,
   monthlyWindows,
-  monthWindow,
+  splitCreatedWindow,
 } from "../github/windows";
 import { backfillLimits, openBudget } from "./budget";
 import { type CrawlSource, drain, enqueue, frontierStatus, type UnitFetch } from "./frontier";
@@ -59,7 +60,6 @@ export function parseMonth(value: string): Month {
   return { year, month };
 }
 
-// Enqueues the roots from `from` to the present and drains the kind's frontier.
 // Roots already in the frontier keep their status, so calling again with the
 // same `from` carries on where the last call stopped.
 export async function backfill(
@@ -107,9 +107,6 @@ export async function drainBackfill(env: Env, options: SyncOptions): Promise<voi
   }
 }
 
-// Search windows are months, and the windows of anything read off the
-// contributions collection are years, all from the month `from` names through
-// the present.
 function roots(kind: SyncKind, from: Month, now: Date): string[] {
   if (kind === "contributions" || isContributionEventsKind(kind)) {
     const last = now.getUTCFullYear();
@@ -129,8 +126,6 @@ function crawlSource(env: Env, kind: SyncKind, options: SyncOptions): CrawlSourc
       split,
     };
   }
-  // A connection window narrows down the same calendar as the commit windows
-  // when it holds more than a unit's pages or reads short of its count.
   if (isContributionEventsKind(kind)) {
     return {
       fetch: async (window) =>
@@ -139,21 +134,19 @@ function crawlSource(env: Env, kind: SyncKind, options: SyncOptions): CrawlSourc
     };
   }
   return {
-    fetch: async (window) => unitFetch(await searchMonth(env, kind, window, options)),
-    // A month is the narrowest search window yet, so a truncated one stays
-    // irreducible.
-    split: () => [],
+    fetch: async (window) => unitFetch(await searchCreated(env, kind, window, options)),
+    split: (window) => splitCreatedWindow(window, now),
   };
 }
 
-function searchMonth(
+function searchCreated(
   env: Env,
   kind: EventKind,
   key: string,
   options: SyncOptions,
 ): Promise<SyncResult> {
   const now = options.now ?? new Date();
-  const window = monthWindow(parseMonth(key));
+  const window = createdWindow(key);
   return syncWindow(
     env,
     kind,
@@ -161,9 +154,10 @@ function searchMonth(
       key: window.key,
       query: backfillSearch(kind, env.GITHUB_LOGIN, window),
       // A `created:` window says nothing about events updated after it
-      // closed. It leaves the watermark at the month's end and the
+      // closed. It leaves the watermark at the window's end and the
       // incremental sync picks up whatever moved since.
-      through: syncedThrough(`${window.end}T23:59:59.999Z`, now),
+      through: syncedThrough(window.through, now),
+      splits: splitCreatedWindow(key, now).length > 0,
     },
     options,
   );

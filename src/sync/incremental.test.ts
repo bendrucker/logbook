@@ -64,7 +64,10 @@ describe("syncIncremental", () => {
       updatedAt: expect.any(String),
     });
     const [run] = await recentRuns(env.DB, "pr-authored", 1);
-    expect(run).toMatchObject({ window: "updated:2026-09-09T09:00:00.000Z", pages: 2 });
+    expect(run).toMatchObject({
+      window: "updated:2026-09-09T09:00:00.000Z..2026-09-09T12:00:00.000Z",
+      pages: 2,
+    });
   });
 
   it("opens the window an hour behind the watermark", async () => {
@@ -76,7 +79,48 @@ describe("syncIncremental", () => {
 
     await syncIncremental(env, { fetch, now: NOW });
 
-    expect(queries[0]).toBe("is:pr author:bendrucker updated:>2026-09-09T09:00:00.000Z");
+    expect(queries[0]).toBe(
+      "is:pr author:bendrucker updated:2026-09-09T09:00:00.000Z..2026-09-09T12:00:00.000Z",
+    );
+  });
+
+  it("splits a window matching more than the cap into halves, earliest first", async () => {
+    await advance(env.DB, "pr-authored", WATERMARK, WATERMARK);
+    const { fetch, queries } = stubGitHub([
+      () => jsonResponse(searchPayload([pullRequest(1)], { issueCount: 1001 })),
+      () => jsonResponse(searchPayload([pullRequest(2)])),
+      () => jsonResponse(searchPayload([pullRequest(3)])),
+      () => jsonResponse(contributionsPayload(1)),
+    ]);
+
+    await syncIncremental(env, { fetch, now: NOW });
+
+    expect(queries.slice(0, 3)).toEqual([
+      "is:pr author:bendrucker updated:2026-09-09T09:00:00.000Z..2026-09-09T12:00:00.000Z",
+      "is:pr author:bendrucker updated:2026-09-09T09:00:00.000Z..2026-09-09T10:30:00.000Z",
+      "is:pr author:bendrucker updated:2026-09-09T10:30:00.000Z..2026-09-09T12:00:00.000Z",
+    ]);
+    expect(await count("pull_requests")).toEqual({ total: 3 });
+    expect(await readWatermark(env.DB, "pr-authored")).toMatchObject({
+      window: NOW.toISOString(),
+    });
+  });
+
+  it("holds the watermark at the last half that landed", async () => {
+    await advance(env.DB, "pr-authored", WATERMARK, WATERMARK);
+    const { fetch, requests } = stubGitHub([
+      () => jsonResponse(searchPayload([], { issueCount: 1001 })),
+      () => jsonResponse(searchPayload([])),
+      () => jsonResponse({ errors: [{ message: "boom" }] }),
+      () => jsonResponse(contributionsPayload(1)),
+    ]);
+
+    await syncIncremental(env, { fetch, now: NOW });
+
+    expect(await readWatermark(env.DB, "pr-authored")).toMatchObject({
+      window: "2026-09-09T10:30:00.000Z",
+    });
+    expect(requests).toHaveLength(4);
   });
 
   it("skips a kind with no watermark and still reads the current year", async () => {

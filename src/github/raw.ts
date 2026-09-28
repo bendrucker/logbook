@@ -26,6 +26,32 @@ export function searchKey(
   return `${searchFetchPrefix(kind, window, fetchedAt)}${name}${OBJECT_SUFFIX}`;
 }
 
+// A follow-up that read a pull request's reviews past the nested page lands
+// under the fetch it completes, beside the search pages rather than numbered
+// among them. Legacy node IDs are base64 and can hold a slash, so the ID is
+// encoded to stay one path segment.
+function searchReviewsPrefix(kind: EventKind, window: string, fetchedAt: string): string {
+  return `${searchFetchPrefix(kind, window, fetchedAt)}reviews/`;
+}
+
+export function searchReviewsKey(
+  kind: EventKind,
+  window: string,
+  fetchedAt: string,
+  pullRequest: string,
+  page: number,
+): string {
+  const name = String(page).padStart(PAGE_DIGITS, "0");
+  const id = encodeURIComponent(pullRequest);
+  return `${searchReviewsPrefix(kind, window, fetchedAt)}${id}/${name}${OBJECT_SUFFIX}`;
+}
+
+// Null for a search page.
+export function searchReviewsPullRequest(fetchPrefix: string, key: string): string | null {
+  const match = /^reviews\/([^/]+)\/\d+\.json$/.exec(key.slice(fetchPrefix.length));
+  return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
+}
+
 // Replay counts a fetch's pages against the highest one it archived, so the
 // number `searchKey` padded has to read back off a listed key.
 export function searchPageNumber(key: string): number | null {
@@ -61,8 +87,6 @@ export function contributionEventsYearPrefix(kind: EventKind, year: string): str
   return `raw/contribution-events/${kind}/${year}`;
 }
 
-// The window, fetch, and page a key `contributionEventsKey` built, read back
-// off a listing.
 export function contributionEventsObject(
   key: string,
 ): { window: string; fetchedAt: string; page: number } | null {
@@ -82,13 +106,16 @@ export function contributionsKey(window: string, fetchedAt: string): string {
   return `${contributionsPrefix(window)}${fetchedAt}${OBJECT_SUFFIX}`;
 }
 
-// Every window key starts with its year, so one listing under the year finds
-// the year's windows at every depth, from `2015/` through the hour ranges.
-export function contributionsYearPrefix(year: string): string {
-  return `raw/contributions/${year}`;
+// One listing finds a window and every narrower window the crawl split it
+// into. Each key starts with its parent's, except a quarter's months, which
+// start with the year, and a sub-day range's hours, which start with the day.
+export function contributionsWithinPrefix(window: string): string {
+  if (/^\d{4}-Q\d$/.test(window)) {
+    return `raw/contributions/${window.slice(0, 4)}`;
+  }
+  return `raw/contributions/${window.includes("--") ? window.slice(0, 10) : window}`;
 }
 
-// The window and fetch a key `contributionsKey` built, read back off a listing.
 export function contributionsObject(key: string): { window: string; fetchedAt: string } | null {
   const match = /^raw\/contributions\/([^/]+)\/([^/]+)\.json$/.exec(key);
   if (match === null) {
@@ -122,6 +149,23 @@ export interface SearchArchive {
 export function archiveSearchPage(bucket: R2Bucket, archive: SearchArchive): Promise<boolean> {
   const { kind, window, fetchedAt, page, body } = archive;
   return writeOnce(bucket, searchKey(kind, window, fetchedAt, page), body);
+}
+
+export interface SearchReviewsArchive {
+  kind: EventKind;
+  window: string;
+  fetchedAt: string;
+  pullRequest: string;
+  page: number;
+  body: string;
+}
+
+export function archiveSearchReviews(
+  bucket: R2Bucket,
+  archive: SearchReviewsArchive,
+): Promise<boolean> {
+  const { kind, window, fetchedAt, pullRequest, page, body } = archive;
+  return writeOnce(bucket, searchReviewsKey(kind, window, fetchedAt, pullRequest, page), body);
 }
 
 export interface ContributionsArchive {

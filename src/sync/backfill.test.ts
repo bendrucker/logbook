@@ -139,17 +139,61 @@ describe("backfill", () => {
     });
   });
 
-  it("marks a search month that truncates irreducible", async () => {
-    const { fetch } = stubGitHub(() => jsonResponse(searchPayload([], { issueCount: 1001 })));
+  it("splits a search month past the cap into day ranges", async () => {
+    const month = "is:issue author:bendrucker created:2014-05-01..2014-05-31";
+    const queries: unknown[] = [];
+    const { fetch } = stubFetch(async (request) => {
+      const { variables } = await requestBody(request.clone());
+      queries.push(variables.searchQuery);
+      return jsonResponse(
+        searchPayload([], { issueCount: variables.searchQuery === month ? 1001 : 0 }),
+      );
+    });
 
     const result = await backfill(
       env,
       "issue",
-      { year: 2014, month: 6 },
+      { year: 2014, month: 5 },
       { fetch, now: NOW, clock: fakeClock().clock },
     );
 
-    expect(result).toMatchObject({ pending: 0, irreducible: ["2014-06"] });
+    expect(result).toMatchObject({ pending: 0, irreducible: [], error: null });
+    expect(result.windows).toEqual([
+      "2014-05",
+      "2014-05-01--2014-05-15",
+      "2014-05-16--2014-05-31",
+      "2014-06",
+    ]);
+    expect(queries.slice(1, 3)).toEqual([
+      "is:issue author:bendrucker created:2014-05-01..2014-05-15",
+      "is:issue author:bendrucker created:2014-05-16..2014-05-31",
+    ]);
+    expect(await unitStatus()).toContainEqual({
+      window: "2014-05-16--2014-05-31",
+      parent: "2014-05",
+      status: "done",
+    });
+    expect(await unitStatus()).toContainEqual({ window: "2014-05", parent: null, status: "split" });
+  });
+
+  it("marks a search hour that still truncates irreducible", async () => {
+    const hour = "2014-05-14T05--2014-05-14T06";
+    await enqueue(env.DB, "issue", [hour]);
+    const { fetch, queries } = stubGitHub(() =>
+      jsonResponse(searchPayload([], { issueCount: 1001 })),
+    );
+
+    const result = await backfill(
+      env,
+      "issue",
+      { year: 2014, month: 7 },
+      { fetch, now: NOW, clock: fakeClock().clock },
+    );
+
+    expect(queries).toEqual([
+      "is:issue author:bendrucker created:2014-05-14T05:00:00Z..2014-05-14T05:59:59Z",
+    ]);
+    expect(result).toMatchObject({ pending: 0, irreducible: [hour] });
   });
 
   it("leaves the in-progress month's watermark at the present, not at the month's end", async () => {
@@ -185,9 +229,9 @@ describe("backfill", () => {
   });
 });
 
-// Commits the fake source knows about. A window wider than `WIDEST_WHOLE_DAYS`
-// lists only its first repository, the way a window past `maxRepositories`
-// drops the rest, and reports the totals that give the loss away.
+// A window wider than `WIDEST_WHOLE_DAYS` lists only its first repository, the
+// way a window past `maxRepositories` drops the rest, and reports the totals
+// that give the loss away.
 const COMMITS = [
   { name: "repo-0", day: "2014-02-10", count: 2 },
   { name: "repo-1", day: "2014-02-20", count: 3 },
@@ -316,8 +360,6 @@ describe("backfill contributions", () => {
     expect(result.pending).toBe(0);
     expect(result.irreducible).toHaveLength(24);
     expect(result.irreducible.at(0)).toBe("2014-02-10T00--2014-02-10T01");
-    // The day, its first half, and its 07:00 hour each report the same two
-    // commits, which the day counts once.
     expect(await commitDays()).toEqual([
       { repository_id: "R_repo-0", day: "2014-02-10", commit_count: 2 },
     ]);

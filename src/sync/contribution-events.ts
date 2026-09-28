@@ -11,71 +11,62 @@ import type { EventKind } from "../github/windows";
 import { normalizeContributionEvents } from "../normalize";
 import { CONTRIBUTION_EVENTS, type ContributionEventsKind } from "./kinds";
 import {
-  charged,
-  CLEAN,
-  describe,
   githubToken,
   kinded,
   type Page,
-  stoppedUntil,
+  recordRun,
   type SyncOptions,
   type SyncResult,
   total,
 } from "./run";
-import { finishRun, type RunResult, startRun } from "./runs";
+import type { RunResult } from "./runs";
 
 // One crawl unit of a contribution connection: the window read to the end of
 // its cursor, each page archived before its rows are written. The connections
 // run only as frontier units and leave the watermarks alone, since the
 // incremental sync finds changed events through search.
-export async function syncContributionEventsWindow(
+export function syncContributionEventsWindow(
   env: Env,
   kind: ContributionEventsKind,
   key: string,
   options: SyncOptions,
 ): Promise<SyncResult> {
-  const now = options.now ?? new Date();
-  const fetchedAt = now.toISOString();
   const event = CONTRIBUTION_EVENTS[kind];
-  const id = await startRun(env.DB, kind, key, fetchedAt);
-  const spent = options.budget.spent;
-  let result = CLEAN;
-  let resumeAt: string | null = null;
 
-  try {
-    const pages = contributionEventPages(event, {
-      ...options,
-      token: githubToken(env),
-      login: env.GITHUB_LOGIN,
-      window: contributionsWindow(key, now),
-    });
-
-    let page = await pages.next();
-    while (page.done !== true) {
-      // eslint-disable-next-line no-await-in-loop
-      result = await ingest(env, event, key, fetchedAt, page.value, result);
-      // eslint-disable-next-line no-await-in-loop
-      page = await pages.next();
-    }
-  } catch (error) {
-    result = { ...result, error: describe(error) };
-    resumeAt = stoppedUntil(error, now);
-    // The page it would have been is the next one the window never got to.
-    if (error instanceof GitHubResponseError) {
-      await archiveContributionEventsPage(env.RAW, {
-        kind: event,
-        window: key,
-        fetchedAt,
-        page: result.pages + 1,
-        body: error.body,
+  return recordRun(
+    env,
+    kind,
+    key,
+    options,
+    async (run) => {
+      const pages = contributionEventPages(event, {
+        ...options,
+        token: githubToken(env),
+        login: env.GITHUB_LOGIN,
+        window: contributionsWindow(key, run.now),
       });
-    }
-  } finally {
-    result = charged(result, options.budget, spent);
-    await finishRun(env.DB, id, result);
-  }
 
-  return { ...result, fetchedAt, resumeAt };
+      let page = await pages.next();
+      while (page.done !== true) {
+        // eslint-disable-next-line no-await-in-loop
+        run.result = await ingest(env, event, key, run.fetchedAt, page.value, run.result);
+        // eslint-disable-next-line no-await-in-loop
+        page = await pages.next();
+      }
+    },
+    // The page it would have been is the next one the window never got to.
+    async (error, run) => {
+      if (error instanceof GitHubResponseError) {
+        await archiveContributionEventsPage(env.RAW, {
+          kind: event,
+          window: key,
+          fetchedAt: run.fetchedAt,
+          page: run.result.pages + 1,
+          body: error.body,
+        });
+      }
+    },
+  );
 }
 
 async function ingest(

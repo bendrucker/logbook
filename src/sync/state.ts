@@ -3,7 +3,7 @@ import { byKind, SYNC_KINDS, type SyncKind } from "./kinds";
 export interface Watermark {
   // An ISO instant meaning synced through. Every kind is caught up to it, so an
   // incremental window anchors on it and a month key never reaches
-  // `incrementalSearch`, where `updated:>2013-04` would match a decade of
+  // `incrementalSearch`, where `updated:2013-04..{now}` would match a decade of
   // events against a 1,000-result cap.
   window: string;
   updatedAt: string;
