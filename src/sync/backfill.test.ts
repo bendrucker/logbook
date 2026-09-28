@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { fakeClock } from "../../test/clock";
 import { stubFetch } from "../../test/fetch-stub";
 import {
   contributionsPayload,
@@ -8,6 +9,7 @@ import {
   searchPayload,
 } from "../../test/github-fixtures";
 import { backfill, InvalidMonthError, parseMonth } from "./backfill";
+import { BACKFILL_SPACING_MS } from "./budget";
 import { readWatermark } from "./state";
 
 // Far enough past the 2012-12 start that a single call cannot reach it, so the
@@ -49,7 +51,7 @@ describe("backfill", () => {
       env,
       "pr-authored",
       { year: 2012, month: 12 },
-      { fetch, now: NOW },
+      { fetch, now: NOW, clock: fakeClock().clock },
     );
 
     expect(result.windows).toHaveLength(env.BACKFILL_WINDOWS);
@@ -63,17 +65,63 @@ describe("backfill", () => {
   it("resumes on the window that failed", async () => {
     const { fetch, requests } = stubGitHub(() => jsonResponse({ errors: [{ message: "boom" }] }));
 
-    const result = await backfill(env, "issue", { year: 2012, month: 12 }, { fetch, now: NOW });
+    const result = await backfill(
+      env,
+      "issue",
+      { year: 2012, month: 12 },
+      { fetch, now: NOW, clock: fakeClock().clock },
+    );
 
     expect(requests).toHaveLength(1);
     expect(result.next).toBe("2012-12");
+    expect(result.resumeAt).toBeNull();
     expect(result.error).toContain("GraphQLQueryError");
+  });
+
+  it("spaces its requests a second apart", async () => {
+    const { fetch, requests } = stubGitHub(() => jsonResponse(searchPayload([])));
+    const { clock, waits } = fakeClock();
+
+    await backfill(env, "issue", { year: 2014, month: 1 }, { fetch, now: NOW, clock });
+
+    expect(requests).toHaveLength(6);
+    expect(waits).toEqual(Array.from({ length: 5 }, () => BACKFILL_SPACING_MS));
+  });
+
+  it("resumes on a window a secondary limit stopped, after the wait", async () => {
+    let served = 0;
+    const { fetch } = stubGitHub(() => {
+      served += 1;
+      return served === 1
+        ? jsonResponse(searchPayload([]))
+        : new Response("You have exceeded a secondary rate limit", {
+            status: 429,
+            headers: { "Retry-After": "60" },
+          });
+    });
+
+    const result = await backfill(
+      env,
+      "issue",
+      { year: 2014, month: 1 },
+      { fetch, now: NOW, clock: fakeClock().clock },
+    );
+
+    expect(result.windows).toEqual(["2014-01", "2014-02"]);
+    expect(result.next).toBe("2014-02");
+    expect(result.resumeAt).toBe("2014-06-15T00:01:00.000Z");
+    expect(result.error).toContain("SecondaryRateLimited");
   });
 
   it("ends the walk when the months run out", async () => {
     const { fetch } = stubGitHub(() => jsonResponse(searchPayload([])));
 
-    const result = await backfill(env, "issue", { year: 2014, month: 1 }, { fetch, now: NOW });
+    const result = await backfill(
+      env,
+      "issue",
+      { year: 2014, month: 1 },
+      { fetch, now: NOW, clock: fakeClock().clock },
+    );
 
     expect(result.windows).toEqual([
       "2014-01",
@@ -89,7 +137,12 @@ describe("backfill", () => {
   it("leaves the in-progress month's watermark at the present, not at the month's end", async () => {
     const { fetch } = stubGitHub(() => jsonResponse(searchPayload([])));
 
-    await backfill(env, "issue", { year: 2014, month: 6 }, { fetch, now: NOW });
+    await backfill(
+      env,
+      "issue",
+      { year: 2014, month: 6 },
+      { fetch, now: NOW, clock: fakeClock().clock },
+    );
 
     // 2014-06-30 has not happened yet. A watermark there outranks every later
     // advance the monotonic guard sees, so the hourly sync would go quiet for
@@ -108,7 +161,7 @@ describe("backfill", () => {
       env,
       "contributions",
       { year: 2012, month: 1 },
-      { fetch, now: NOW },
+      { fetch, now: NOW, clock: fakeClock().clock },
     );
 
     expect(requests).toHaveLength(3);

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { stubFetch, type FetchStub } from "../../test/fetch-stub";
 import {
-  jsonResponse,
   pullRequest,
   rateLimit,
   requestBody,
@@ -9,7 +8,7 @@ import {
   reviewedPullRequest,
   searchResponse,
 } from "../../test/github-fixtures";
-import { RateLimitExhausted, ResponseValidationError } from "./client";
+import { type RequestBudget, ResponseValidationError } from "./client";
 import { type PullRequestNode } from "./schema";
 import {
   pullRequestPages,
@@ -22,13 +21,13 @@ import {
 
 const ENDPOINT = "https://api.github.test/graphql";
 
-function pages(stub: FetchStub, floor?: number) {
+function pages(stub: FetchStub, budget?: RequestBudget) {
   return pullRequestPages({
     token: "t0ken",
     searchQuery: "is:pr author:bendrucker created:2026-08-01..2026-08-31",
     fetch: stub.fetch,
     endpoint: ENDPOINT,
-    floor,
+    budget,
   });
 }
 
@@ -132,29 +131,28 @@ describe("searchPages", () => {
     expect(error).toMatchObject({ cursor: "Y3Vy" });
   });
 
-  it("stops paging when the rate limit drops under the floor", async () => {
-    let served = 0;
-    const stub = stubFetch(() => {
-      served += 1;
-      if (served === 1) {
-        return searchResponse([pullRequest(1)], { endCursor: "Y3Vy" });
-      }
-      return jsonResponse({
-        data: {
-          search: { issueCount: 2, pageInfo: { hasNextPage: false }, nodes: [pullRequest(2)] },
-          rateLimit: rateLimit({ remaining: 4, resetAt: "2026-09-09T12:00:00Z" }),
-        },
-      });
-    });
+  it("stops paging when the budget refuses the next request", async () => {
+    const stub = stubFetch(() => searchResponse([pullRequest(1)], { endCursor: "Y3Vy" }));
+    const refusal = new Error("over budget");
+    let admitted = 0;
+    const budget: RequestBudget = {
+      admit: async () => {
+        admitted += 1;
+        if (admitted > 1) {
+          throw refusal;
+        }
+      },
+      spend: () => {},
+    };
 
-    const iterator = pages(stub, 10);
+    const iterator = pages(stub, budget);
 
     const first = await iterator.next();
     expect(first.value?.page).toBe(1);
 
     const error = await iterator.next().catch((thrown: unknown) => thrown);
-    expect(error).toBeInstanceOf(RateLimitExhausted);
-    expect(error).toMatchObject({ remaining: 4, resetAt: "2026-09-09T12:00:00Z" });
+    expect(error).toBe(refusal);
+    expect(stub.requests).toHaveLength(1);
   });
 });
 

@@ -87,7 +87,7 @@ describe("syncIncremental", () => {
     expect(await recentRuns(env.DB, "pr-authored", 1)).toEqual([]);
   });
 
-  it("stops the invocation when a kind hits the rate limit floor", async () => {
+  it("stops the invocation when the budget refuses a kind", async () => {
     await advance(env.DB, "pr-authored", WATERMARK, WATERMARK);
     await advance(env.DB, "issue", WATERMARK, WATERMARK);
     const { fetch, requests } = stubGitHub([
@@ -95,7 +95,7 @@ describe("syncIncremental", () => {
         jsonResponse({
           data: {
             search: { issueCount: 0, pageInfo: { hasNextPage: false }, nodes: [] },
-            rateLimit: rateLimit({ remaining: 5 }),
+            rateLimit: rateLimit({ remaining: env.RATE_FLOOR_SYNC - 1 }),
           },
         }),
     ]);
@@ -103,8 +103,13 @@ describe("syncIncremental", () => {
     await syncIncremental(env, { fetch, now: NOW });
 
     expect(requests).toHaveLength(1);
-    expect(await recentRuns(env.DB, "issue", 1)).toEqual([]);
+    expect(await readWatermark(env.DB, "pr-authored")).toMatchObject({
+      window: NOW.toISOString(),
+    });
+    const [refused] = await recentRuns(env.DB, "issue", 1);
+    expect(refused).toMatchObject({ pages: 0, cost: 0 });
+    expect(refused?.error).toContain("BudgetRefused");
+    expect(await readWatermark(env.DB, "issue")).toMatchObject({ window: WATERMARK });
     expect(await recentRuns(env.DB, "contributions", 1)).toEqual([]);
-    expect(await readWatermark(env.DB, "pr-authored")).toMatchObject({ window: WATERMARK });
   });
 });

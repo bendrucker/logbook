@@ -17,6 +17,17 @@
     // subrequests a paid invocation gets. The walk is paged to stay inside the
     // wall clock rather than a platform ceiling.
     "BACKFILL_WINDOWS": 12,
+    // The GraphQL rate budget, 5,000 points an hour, is shared with every other
+    // tool on the token. The hourly sync costs about 4 points and still runs on
+    // a busy hour. A backfill yields half the budget to the other tools.
+    "RATE_FLOOR_SYNC": 1000,
+    "RATE_FLOOR_BACKFILL": 2500,
+    // The most Logbook spends between one reset and the next, whatever is left.
+    "RATE_SHARE": 300,
+    // Points one invocation spends at most, which bounds its wall clock and its
+    // subrequests.
+    "RATE_CAP_CRON": 40,
+    "RATE_CAP_BACKFILL": 150,
   },
   "triggers": {
     // Hourly incremental sync. GitHub's search API is windowed by date rather

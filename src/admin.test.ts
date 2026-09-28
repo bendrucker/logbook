@@ -63,7 +63,15 @@ describe("GET /admin/sync", () => {
     await finishRun(
       env.DB,
       id,
-      { pages: 2, rowsChanged: 9, truncated: true, error: "502 from search", note: null },
+      {
+        pages: 2,
+        rowsChanged: 9,
+        truncated: true,
+        error: "502 from search",
+        note: null,
+        cost: 2,
+        rateRemaining: 4100,
+      },
       "2026-09-09T18:03:00Z",
     );
 
@@ -205,6 +213,7 @@ describe("POST /admin/backfill", () => {
       pages: 0,
       rowsChanged: 0,
       next: null,
+      resumeAt: null,
       error: null,
     });
   });

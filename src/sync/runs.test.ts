@@ -1,8 +1,24 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it, test } from "vitest";
-import { finishRun, lastRuns, recentFailures, recentRuns, startRun, type RunResult } from "./runs";
+import {
+  finishRun,
+  lastRuns,
+  recentFailures,
+  recentRuns,
+  spendSince,
+  startRun,
+  type RunResult,
+} from "./runs";
 
-const ok = { pages: 3, rowsChanged: 12, truncated: false, error: null, note: null };
+const ok: RunResult = {
+  pages: 3,
+  rowsChanged: 12,
+  truncated: false,
+  error: null,
+  note: null,
+  cost: 3,
+  rateRemaining: 4200,
+};
 
 describe("startRun", () => {
   it("records a run that has not finished", async () => {
@@ -25,6 +41,8 @@ describe("startRun", () => {
         truncated: false,
         error: null,
         note: null,
+        cost: 0,
+        rateRemaining: null,
       },
     ]);
   });
@@ -36,7 +54,15 @@ describe("finishRun", () => {
   test.each<{ name: string; result: RunResult }>([
     {
       name: "a clean run",
-      result: { pages: 2, rowsChanged: 7, truncated: true, error: null, note: null },
+      result: {
+        pages: 2,
+        rowsChanged: 7,
+        truncated: true,
+        error: null,
+        note: null,
+        cost: 2,
+        rateRemaining: 4100,
+      },
     },
     {
       name: "a run that gave up partway",
@@ -46,6 +72,8 @@ describe("finishRun", () => {
         truncated: false,
         error: "secondary rate limit",
         note: null,
+        cost: 1,
+        rateRemaining: null,
       },
     },
   ])("closes $name with what it wrote", async ({ result }) => {
@@ -131,5 +159,24 @@ describe("recentFailures", () => {
     }
 
     expect(await recentFailures(env.DB, 2)).toHaveLength(2);
+  });
+});
+
+describe("spendSince", () => {
+  it("reads what every kind spent from the instant on", async () => {
+    for (const [kind, started, cost] of [
+      ["issue", "2026-09-09T17:00:00.000Z", 5],
+      ["pr-authored", "2026-09-09T18:00:00.000Z", 3],
+      ["contributions", "2026-09-09T18:30:00.000Z", 2],
+      ["issue", "2026-09-09T18:40:00.000Z", 0],
+    ] as const) {
+      const id = await startRun(env.DB, kind, started.slice(0, 10), started);
+      await finishRun(env.DB, id, { ...ok, cost }, started);
+    }
+
+    expect(await spendSince(env.DB, "2026-09-09T18:00:00.000Z")).toEqual([
+      { startedAt: "2026-09-09T18:00:00.000Z", cost: 3 },
+      { startedAt: "2026-09-09T18:30:00.000Z", cost: 2 },
+    ]);
   });
 });
