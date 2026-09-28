@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   commitDaysPayload,
   contributionsPayload,
+  TRUNCATED_COMMIT_TOTAL,
   jsonResponse,
   pullRequest,
   rateLimit,
@@ -11,7 +12,6 @@ import {
 } from "../../test/github-fixtures";
 import { readRow } from "../../test/tables";
 import { stubFetch } from "../../test/fetch-stub";
-import { NESTED_PAGE_SIZE } from "../github/queries";
 import { searchKey } from "../github/raw";
 import { recentRuns } from "./runs";
 import { syncContributions, syncWindow } from "./run";
@@ -103,6 +103,20 @@ describe("syncWindow", () => {
     await expect(object?.json()).resolves.toEqual(body);
   });
 
+  it("fails a window whose cursor repeats and archives the repeated page", async () => {
+    const { fetch } = sequence([
+      () => searchResponse([pullRequest(1)], { endCursor: "cursor" }),
+      () => searchResponse([pullRequest(2)], { endCursor: "cursor" }),
+    ]);
+
+    const result = await syncWindow(env, "pr-authored", WINDOW, { fetch, now: NOW });
+
+    expect(result).toMatchObject({ pages: 1, exhausted: false });
+    expect(result.error).toContain("RepeatedCursorError");
+    expect(await readWatermark(env.DB, "pr-authored")).toBeNull();
+    expect(await env.RAW.head(searchKey("pr-authored", WINDOW.key, FETCHED_AT, 2))).not.toBeNull();
+  });
+
   it("stops on the rate limit floor without moving the watermark", async () => {
     const { fetch } = sequence([
       () => searchResponse([pullRequest(1)], { endCursor: "cursor" }),
@@ -146,7 +160,7 @@ describe("syncContributions", () => {
 
   it("fetches a truncated year again by quarter and keeps each quarter's days", async () => {
     const { fetch, requests } = sequence([
-      () => jsonResponse(contributionsPayload(1, NESTED_PAGE_SIZE + 1)),
+      () => jsonResponse(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL)),
       () => jsonResponse(commitDaysPayload(["2026-02-10"])),
       () => jsonResponse(commitDaysPayload(["2026-05-10"])),
       () => jsonResponse(commitDaysPayload(["2026-08-10"])),
@@ -169,7 +183,7 @@ describe("syncContributions", () => {
 
   it("reports the quarters it landed when the rate limit stops the walk", async () => {
     const { fetch } = sequence([
-      () => jsonResponse(contributionsPayload(1, NESTED_PAGE_SIZE + 1)),
+      () => jsonResponse(contributionsPayload(1, TRUNCATED_COMMIT_TOTAL)),
       () => jsonResponse(commitDaysPayload(["2026-02-10"])),
       () => {
         const payload = commitDaysPayload(["2026-05-10"]);

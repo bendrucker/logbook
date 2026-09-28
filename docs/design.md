@@ -122,7 +122,7 @@ The search connection is the workhorse because it pages without bound when windo
 
 #### Search Windows
 
-The `search` query returns [a maximum of 1,000 results](https://docs.github.com/en/graphql/reference/search#query-search) no matter how many matched, and hitting that ceiling is silent. Monthly windows keep every query well underneath it:
+The `search` query returns [a maximum of 1,000 results](https://docs.github.com/en/graphql/reference/search#query-search) no matter how many matched. Its `issueCount` still reports the full match, so a window is truncated exactly when `issueCount` exceeds 1,000, and one matching exactly 1,000 is complete. Monthly windows keep every query well underneath it:
 
 - `is:pr author:bendrucker created:2012-12-01..2012-12-31`
 - `is:pr reviewed-by:bendrucker -author:bendrucker created:2012-12-01..2012-12-31`
@@ -132,17 +132,21 @@ The review search excludes my own pull requests. Replying to a review thread sub
 
 The upper bound is the month's real last day. A literal `-31` against a thirty-day month is a date GitHub's parser has to reinterpret, and these boundaries are what the whole cap mitigation rests on.
 
+The review search reads each pull request's reviews through a nested `reviews(author:, first: 100)` connection with no cursor. A pull request whose `reviews.totalCount` exceeds the nodes returned flags its page as truncated, live and on replay. The search pager also stops with a `RepeatedCursorError` when a page announces a cursor it already sent, which would otherwise serve the same page until the page bound.
+
 Walking those back to 2012 is 166 windows per event type for the whole history. The incremental run is the same code path with a different window: one `updated:>{last successful sync}` query per type. Backfill and incremental differ only in what dates go into the string.
 
 #### Contributions Collection
 
 `user.contributionsCollection(from, to)` takes at most a year per request. Its [`to` argument](https://docs.github.com/en/graphql/reference/users#object-user) defaults to the earlier of now and a year past `from`. The reference documents that default and says nothing about what a wider window does, so the client never sends one. A full history is one request per year. `user.contributionsCollection.contributionYears` lists which years to walk.
 
-`commitContributionsByRepository` returns a plain list rather than a paginated connection, and its `maxRepositories` argument defaults to 25. Anything past the value it is given is dropped with no error and no cursor to follow. The site's existing query asks for 100 across every one of these fields and warns when a list comes back exactly that long. That shape carries over: a year holding exactly the maximum is treated as truncated the same way a search window holding exactly 1,000 is.
+`commitContributionsByRepository` returns a plain list rather than a paginated connection, and its `maxRepositories` argument defaults to 25. Anything past the value it is given is dropped with no error and no cursor to follow. The query asks for 100. A window is truncated when it lists fewer repositories than `totalRepositoriesWithContributedCommits`, which the same response reports, so a window holding exactly 100 of 100 is complete.
 
-Each repository's `contributions` list, one node per day with commits, is capped at 100 the same way. A repository with commits on more than 100 days of a year loses the rest. A truncated year is fetched again one quarter at a time, since a quarter spans at most 92 days. Each quarter is archived beside the year as `contributions/{year}-Q{n}/{fetched_at}.json`, and replay reads the quarters sharing the year's fetch timestamp.
+Each repository's `contributions` list, one node per day with commits, is capped at 100 the same way. Its `totalCount` is the repository's commit total for the window, not its number of days, so a repository whose listed `commitCount` sums short of that total lost days. A final guard compares every listed commit against `totalCommitContributions`. A repository with commits on more than 100 days of a year loses the rest. A truncated year is fetched again one quarter at a time, since a quarter spans at most 92 days. Each quarter is archived beside the year as `contributions/{year}-Q{n}/{fetched_at}.json`, and replay reads the quarters sharing the year's fetch timestamp.
 
 The same query asks for the collection's own totals: `totalCommitContributions`, `totalPullRequestContributions`, `totalPullRequestReviewContributions`, `totalIssueContributions`, `totalRepositoriesWithContributedCommits`, and `restrictedContributionsCount`. Those are the cross-check. A year whose event table count disagrees with GitHub's own total means a search window truncated or a private contribution is being counted on one side and not the other.
+
+`totalPullRequestReviewContributions` counts pull requests rather than reviews, and it includes reviews on my own pull requests, which the `reviews` table excludes. The cross-check therefore sets it against distinct pull requests by the year of their first review and reports the pair as `reviews 75 (38 own) vs 37 PRs`, with the own count taken off GitHub's figure when it is known.
 
 #### Rate Budget
 
@@ -215,15 +219,15 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - `GITHUB_TOKEN` is a Worker secret, set with `wrangler secret put`. It is the only credential the hub holds.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
-- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that a window truncated, and there is no other way to notice a silent 1,000-result cap.
+- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off, which search hides and the totals still count.
 - The backfill is roughly 500 search requests plus one per contribution year, well inside the 10,000 subrequests a paid Workers invocation gets. Paging it across invocations answers the wall clock rather than a platform ceiling. The free tier's 50 subrequests would bind first.
 - Backoff reads `rateLimit` off each response rather than waiting for a 403. The existing `rateLimitBackoff` in the site's `scripts/backfill-github-activity.ts` is the shape to follow.
 
 ## Risks
 
-- The search cap is silent. A window that returns exactly 1,000 results has probably lost rows and says nothing about it. Monthly windows keep the real counts far below, and the totals cross-check is the detector rather than the prevention.
+- The search cap drops results without an error. `issueCount` past 1,000 is the only signal, and monthly windows keep the real counts far below it.
 - GitHub's search index lags writes by an unspecified interval, so an `updated:>` window anchored exactly at the last sync can miss an event indexed late. The window overlaps the previous one, and upserts keyed on node ID make the overlap free.
-- `commitContributionsByRepository` returns a fixed-length list and reports no truncation. A year coming back exactly as long as the `maxRepositories` it was given has probably lost commit rows for everything past it, and `totalRepositoriesWithContributedCommits` from the same query is the count to check that against. The quarter refetch recovers a repository's overflowing days but does nothing for a quarter that touched more than 100 repositories.
+- `commitContributionsByRepository` returns a fixed-length list and reports no truncation beyond the totals beside it. The quarter refetch recovers a repository's overflowing days but does nothing for a quarter that touched more than 100 repositories, which stays flagged.
 - `restrictedContributionsCount` counts contributions hidden from the viewer. With a token that sees no private repository, that is every private contribution, so the cross-check reports it beside the gaps instead of subtracting it.
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.
 - A public repository that goes private drops out of every later search, and the raw bucket becomes the only copy of its events.

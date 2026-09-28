@@ -1,0 +1,98 @@
+{
+  "data": {
+    "user": {
+      "contributionsCollection": {
+        "totalCommitContributions": 724,
+        "totalPullRequestContributions": 28,
+        "totalPullRequestReviewContributions": 0,
+        "totalIssueContributions": 10,
+        "totalRepositoriesWithContributedCommits": 165,
+        "restrictedContributionsCount": 1371,
+        "contributionYears": [
+          2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012,
+          2011
+        ],
+        "commitContributionsByRepository": [
+          {
+            "repository": {
+              "id": "MDEwOlJlcG9zaXRvcnkzODk3NTg1Mg==",
+              "name": "weakmap-event",
+              "owner": { "login": "bendrucker" },
+              "description": "Associate geval events with an object",
+              "url": "https://github.com/bendrucker/weakmap-event",
+              "stargazerCount": 11,
+              "primaryLanguage": { "name": "JavaScript", "color": "#f1e05a" },
+              "createdAt": "2015-07-12T19:58:22Z",
+              "isFork": false,
+              "visibility": "PUBLIC"
+            },
+            "contributions": {
+              "totalCount": 36,
+              "nodes": [
+                { "commitCount": 1, "occurredAt": "2015-09-06T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2015-08-31T07:00:00Z" },
+                { "commitCount": 6, "occurredAt": "2015-08-17T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2015-08-11T07:00:00Z" },
+                { "commitCount": 12, "occurredAt": "2015-08-10T07:00:00Z" },
+                { "commitCount": 3, "occurredAt": "2015-08-07T07:00:00Z" },
+                { "commitCount": 8, "occurredAt": "2015-07-29T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2015-07-12T07:00:00Z" }
+              ]
+            }
+          },
+          {
+            "repository": {
+              "id": "MDEwOlJlcG9zaXRvcnkzOTU5NDMyNw==",
+              "name": "sour",
+              "owner": { "login": "bendrucker" },
+              "description": "Router for functional rendering UIs",
+              "url": "https://github.com/bendrucker/sour",
+              "stargazerCount": 6,
+              "primaryLanguage": { "name": "JavaScript", "color": "#f1e05a" },
+              "createdAt": "2015-07-23T21:35:00Z",
+              "isFork": false,
+              "visibility": "PUBLIC"
+            },
+            "contributions": {
+              "totalCount": 34,
+              "nodes": [
+                { "commitCount": 2, "occurredAt": "2015-09-26T07:00:00Z" },
+                { "commitCount": 4, "occurredAt": "2015-09-25T07:00:00Z" },
+                { "commitCount": 12, "occurredAt": "2015-09-24T07:00:00Z" },
+                { "commitCount": 1, "occurredAt": "2015-09-22T07:00:00Z" },
+                { "commitCount": 3, "occurredAt": "2015-07-25T07:00:00Z" },
+                { "commitCount": 8, "occurredAt": "2015-07-24T07:00:00Z" },
+                { "commitCount": 4, "occurredAt": "2015-07-23T07:00:00Z" }
+              ]
+            }
+          },
+          {
+            "repository": {
+              "id": "MDEwOlJlcG9zaXRvcnkzOTk4OTQxOQ==",
+              "name": "thermometer",
+              "owner": { "login": "bendrucker" },
+              "description": "Concisely test Observable + virtual-dom components",
+              "url": "https://github.com/bendrucker/thermometer",
+              "stargazerCount": 1,
+              "primaryLanguage": { "name": "JavaScript", "color": "#f1e05a" },
+              "createdAt": "2015-07-31T06:03:51Z",
+              "isFork": false,
+              "visibility": "PUBLIC"
+            },
+            "contributions": {
+              "totalCount": 25,
+              "nodes": [
+                { "commitCount": 4, "occurredAt": "2015-09-19T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2015-09-17T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2015-09-12T07:00:00Z" },
+                { "commitCount": 2, "occurredAt": "2015-08-11T07:00:00Z" },
+                { "commitCount": 15, "occurredAt": "2015-07-31T07:00:00Z" }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "rateLimit": { "cost": 1, "remaining": 3833, "resetAt": "2026-09-27T20:31:47Z" }
+  }
+}

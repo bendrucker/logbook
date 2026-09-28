@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { graphql, validate, type GraphQLOptions } from "./client";
+import { GitHubResponseError, graphql, validate, type GraphQLOptions } from "./client";
 import { ISSUE_SEARCH, PULL_REQUEST_SEARCH, REVIEWED_PULL_REQUEST_SEARCH } from "./queries";
 import {
   issueSearchPage,
@@ -9,15 +9,20 @@ import {
   type PullRequestNode,
   type RateLimit,
   type ReviewedPullRequestNode,
+  reviewsTruncated,
   type SearchPage,
 } from "./schema";
 
 export const SEARCH_PAGE_SIZE = 100;
 
-// The search connection caps at 1,000 results and says nothing when a query
-// matched more. A window reporting the cap has probably lost rows, and the flag
-// is the only signal there is short of the contributions cross-check.
+// The search connection returns at most 1,000 results, but `issueCount` still
+// reports everything the query matched. A window counting more than the cap has
+// lost the rest, and one counting exactly the cap is complete.
 export const SEARCH_MAX_RESULTS = 1000;
+
+export function searchTruncated(issueCount: number): boolean {
+  return issueCount > SEARCH_MAX_RESULTS;
+}
 
 export const SEARCH_MAX_PAGES = SEARCH_MAX_RESULTS / SEARCH_PAGE_SIZE;
 
@@ -30,6 +35,19 @@ export interface SearchPageResult<T> {
   body: string;
 }
 
+// A page announcing a successor whose cursor the pager already sent would serve
+// the same results again for as long as it kept following it. The page is
+// thrown rather than yielded so the window fails with its bytes archived and
+// its watermark where it was.
+export class RepeatedCursorError extends GitHubResponseError {
+  readonly cursor: string;
+
+  constructor(cursor: string, body: string) {
+    super("RepeatedCursorError", `GitHub search returned cursor ${cursor} again`, body);
+    this.cursor = cursor;
+  }
+}
+
 export interface SearchOptions extends GraphQLOptions {
   token: string;
   searchQuery: string;
@@ -39,10 +57,15 @@ interface DocumentOptions<T> extends SearchOptions {
   document: string;
   schema: z.ZodType<SearchPage<T>>;
   variables?: Record<string, unknown>;
+  // Whether a node lost part of a nested connection, which the page's own
+  // count cannot see.
+  nodeTruncated?: (node: T) => boolean;
 }
 
 async function* searchPages<T>(options: DocumentOptions<T>): AsyncGenerator<SearchPageResult<T>> {
   let after: string | null = null;
+  const sent = new Set<string>();
+  const nodeTruncated = options.nodeTruncated ?? (() => false);
   let page = 0;
   let remaining = true;
 
@@ -50,7 +73,7 @@ async function* searchPages<T>(options: DocumentOptions<T>): AsyncGenerator<Sear
   // response before it returned, so the pages cannot be issued together. The
   // page bound is the second stop: GitHub rejects a cursor past the 1,000th
   // result, so a window that keeps announcing successors ends here rather than
-  // on that error.
+  // on that error. A cursor that fails to advance ends it sooner, as an error.
   while (remaining && page < SEARCH_MAX_PAGES) {
     // eslint-disable-next-line no-await-in-loop
     const response = await graphql(
@@ -66,19 +89,25 @@ async function* searchPages<T>(options: DocumentOptions<T>): AsyncGenerator<Sear
     );
 
     const { search } = validate(options.schema, response.data, response.body);
+    if (search.pageInfo.hasNextPage && sent.has(search.pageInfo.endCursor)) {
+      throw new RepeatedCursorError(search.pageInfo.endCursor, response.body);
+    }
     page += 1;
 
     yield {
       page,
       nodes: search.nodes,
       issueCount: search.issueCount,
-      truncated: search.issueCount >= SEARCH_MAX_RESULTS,
+      truncated: searchTruncated(search.issueCount) || search.nodes.some(nodeTruncated),
       rateLimit: response.rateLimit,
       body: response.body,
     };
 
     remaining = search.pageInfo.hasNextPage;
     after = search.pageInfo.hasNextPage ? search.pageInfo.endCursor : null;
+    if (after !== null) {
+      sent.add(after);
+    }
   }
 }
 
@@ -100,6 +129,7 @@ export function reviewedPullRequestPages(
     document: REVIEWED_PULL_REQUEST_SEARCH,
     schema: reviewedPullRequestSearchPage,
     variables: { login: options.login },
+    nodeTruncated: reviewsTruncated,
   });
 }
 

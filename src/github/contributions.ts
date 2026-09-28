@@ -1,8 +1,6 @@
 import { GitHubResponseError, graphql, validate, type GraphQLOptions } from "./client";
-import { CONTRIBUTIONS, MAX_REPOSITORIES, NESTED_PAGE_SIZE } from "./queries";
+import { CONTRIBUTIONS } from "./queries";
 import { contributionsResponse, type ContributionsCollection, type RateLimit } from "./schema";
-
-export { MAX_REPOSITORIES } from "./queries";
 
 export class UnknownUserError extends GitHubResponseError {
   readonly login: string;
@@ -64,19 +62,28 @@ export interface ContributionsResult {
 }
 
 // Two fixed lists with no cursor between them: anything past the limit each was
-// given is dropped with no error and nothing to follow. The repository list is
-// checked against that limit, and each repository's daily contributions against
-// the total the same response reports, since a repository committed to on more
-// than a page of days in one year returns only the first page.
-// `totalRepositoriesWithContributedCommits` is the count to cross-check the
-// first against.
+// given is dropped with no error and nothing to follow. The same response
+// reports what each list should hold, so the check is exact rather than a guess
+// from a list arriving full. A repository's `contributions.totalCount` is its
+// commit total for the window, not its number of day nodes, so the days it lost
+// show as listed commits short of that total. The collection's own commit total
+// catches a loss neither list accounts for.
 export function contributionsTruncated(collection: ContributionsCollection): boolean {
+  const repositories = collection.commitContributionsByRepository;
+  const listed = repositories.map(({ contributions }) => ({
+    commits: sum(contributions.nodes.map((day) => day.commitCount)),
+    reported: contributions.totalCount,
+  }));
+
   return (
-    collection.commitContributionsByRepository.length >= MAX_REPOSITORIES ||
-    collection.commitContributionsByRepository.some(
-      ({ contributions }) => contributions.totalCount > NESTED_PAGE_SIZE,
-    )
+    repositories.length < collection.totalRepositoriesWithContributedCommits ||
+    listed.some(({ commits, reported }) => commits < reported) ||
+    sum(listed.map(({ commits }) => commits)) < collection.totalCommitContributions
   );
+}
+
+function sum(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
 }
 
 export async function fetchContributions(

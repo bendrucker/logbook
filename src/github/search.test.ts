@@ -5,12 +5,15 @@ import {
   pullRequest,
   rateLimit,
   requestBody,
+  review,
+  reviewedPullRequest,
   searchResponse,
 } from "../../test/github-fixtures";
 import { RateLimitExhausted, ResponseValidationError } from "./client";
 import { type PullRequestNode } from "./schema";
 import {
   pullRequestPages,
+  RepeatedCursorError,
   reviewedPullRequestPages,
   SEARCH_MAX_RESULTS,
   SEARCH_PAGE_SIZE,
@@ -96,21 +99,37 @@ describe("searchPages", () => {
     expect(JSON.parse(result!.body)).toMatchObject({ data: { rateLimit: rateLimit() } });
   });
 
-  it("leaves a window under the cap unflagged", async () => {
-    const stub = stubFetch(() => searchResponse([pullRequest(1)], { issueCount: 999 }));
-
-    const [result] = await collect(pages(stub));
-
-    expect(result?.truncated).toBe(false);
-    expect(result?.issueCount).toBe(999);
-  });
-
-  it("flags a window that came back on the cap", async () => {
+  it("leaves a window matching exactly the cap unflagged", async () => {
     const stub = stubFetch(() => searchResponse([pullRequest(1)], { issueCount: 1000 }));
 
     const [result] = await collect(pages(stub));
 
+    expect(result?.truncated).toBe(false);
+    expect(result?.issueCount).toBe(1000);
+  });
+
+  it("flags a window matching more than the cap", async () => {
+    const stub = stubFetch(() => searchResponse([pullRequest(1)], { issueCount: 1001 }));
+
+    const [result] = await collect(pages(stub));
+
     expect(result?.truncated).toBe(true);
+  });
+
+  it("stops after one page when the cursor repeats", async () => {
+    const stub = stubFetch(() => searchResponse([pullRequest(1)], { endCursor: "Y3Vy" }));
+
+    const results: SearchPageResult<PullRequestNode>[] = [];
+    const error = await (async () => {
+      for await (const result of pages(stub)) {
+        results.push(result);
+      }
+    })().catch((thrown: unknown) => thrown);
+
+    expect(results.map((result) => result.page)).toEqual([1]);
+    expect(stub.requests).toHaveLength(2);
+    expect(error).toBeInstanceOf(RepeatedCursorError);
+    expect(error).toMatchObject({ cursor: "Y3Vy" });
   });
 
   it("stops paging when the rate limit drops under the floor", async () => {
@@ -157,10 +176,32 @@ describe("search entry points", () => {
     });
   });
 
-  it("stops at the result cap rather than following a cursor GitHub will reject", async () => {
+  it("flags a reviewed pull request whose reviews outran their page", async () => {
     const stub = stubFetch(() =>
-      searchResponse([pullRequest(1)], { issueCount: SEARCH_MAX_RESULTS, endCursor: "Y3Vy" }),
+      searchResponse([reviewedPullRequest(7, { reviews: { totalCount: 2, nodes: [review(7)] } })]),
     );
+
+    const iterator = reviewedPullRequestPages({
+      token: "t0ken",
+      searchQuery: "is:pr reviewed-by:bendrucker created:2026-08-01..2026-08-31",
+      login: "bendrucker",
+      fetch: stub.fetch,
+      endpoint: ENDPOINT,
+    });
+    const first = await iterator.next();
+
+    expect(first.value?.truncated).toBe(true);
+  });
+
+  it("stops at the result cap rather than following a cursor GitHub will reject", async () => {
+    let served = 0;
+    const stub = stubFetch(() => {
+      served += 1;
+      return searchResponse([pullRequest(served)], {
+        issueCount: SEARCH_MAX_RESULTS + 1,
+        endCursor: `cursor-${served}`,
+      });
+    });
 
     const results = await collect(pages(stub));
 
