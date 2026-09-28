@@ -77,7 +77,7 @@ A call enqueues the kind's windows from `from` to the present in the `crawl_unit
 
 A window whose response says it dropped data is split into narrower windows and marked `split`. Contributions and the connection kinds narrow down the calendar from a year to quarters, months, days, half days, and hours. A search month past 1,000 results halves into day ranges such as `2026-08-01--2026-08-15`, then days, half days, and hours. A window still truncated at an hour is marked `irreducible`. Its rows still land, since truncation drops whole items and leaves the returned ones intact.
 
-### Rate Budget
+## Rate Budget
 
 GitHub's 5,000 GraphQL points an hour are shared with every other tool on the token, so Logbook spends within limits set as Worker vars:
 
@@ -91,7 +91,7 @@ GitHub's 5,000 GraphQL points an hour are shared with every other tool on the to
 
 Each `sync_runs` row records the points it spent and the last `remaining` GitHub reported. The spend in the current rate window is the sum of `cost` over the runs started in it, so the ledger needs no table of its own. The budget checks every request before it goes out and refuses one that would cross a limit, which ends the invocation with the watermark where it was. A 403 or 429 naming a secondary limit ends it the same way.
 
-Search misses some events GitHub counts: it hides issues in repositories that later turned Issues off. Three more backfill kinds, `issue-contributions`, `pr-contributions`, and `review-contributions`, page the cursor connections on `contributionsCollection` that list exactly what GitHub counts, and upsert into the same tables by node ID. Search stays, since only an `updated:` search finds an old event whose state changed. A connection window reads at most ten pages and splits when it holds more or reads fewer nodes than the connection's `totalCount`. Reviews on my own pull requests are dropped, as the review search excludes them.
+Search misses some events GitHub counts: it hides issues in repositories that later turned Issues off. Three more backfill kinds, `issue-contributions`, `pr-contributions`, and `review-contributions`, page the cursor connections on `contributionsCollection` that list exactly what GitHub counts, and upsert into the same tables by node ID. Search stays, since only an `updated:` search finds an old event whose state changed. A connection window reads at most ten pages. It splits when the tenth page still announces more, or when it ends with fewer nodes than the connection's `totalCount`. Reviews on my own pull requests are dropped, as the review search excludes them.
 
 Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a search gap and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. GitHub counts reviews once per pull request, including my own, so the note sets that figure against distinct pull requests: `reviews 75 (38 own) vs 37 PRs`, with the own count read from the year's archived review connection pages. When the archived issue or pull request pages list exactly as many events as GitHub reports, the note names the node IDs behind a gap: `issues 186 vs 101 (missing I_a, I_b and 83 more)`. `GET /admin/sync` reports it alongside the watermarks, each kind's pending and irreducible frontier windows, the last ten failures, and the most recent lake build.
 

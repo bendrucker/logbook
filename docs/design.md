@@ -64,9 +64,10 @@ Every response page is written to R2 before it is parsed, keyed by what produced
 
 ```text
 raw/
-  search/{kind}/{window}/{fetched_at}/{page}.json   # kind is pr-authored, pr-reviewed, or issue
-  contributions/{window}/{fetched_at}.json          # 2015, 2015-Q3, 2015-07, 2015-07-14, or 2015-07-14T00--2015-07-14T12
-  contribution-events/{kind}/{window}/{fetched_at}/{page}.json   # kind as in search, window as in contributions
+  search/{kind}/{window}/{fetched_at}/{page}.json                               # kind is pr-authored, pr-reviewed, or issue
+  search/{kind}/{window}/{fetched_at}/reviews/{pull request ID}/{page}.json     # review follow-up pages
+  contributions/{window}/{fetched_at}.json                                      # 2015, 2015-Q3, 2015-07, 2015-07-14, 2015-07-14T00--2015-07-14T12, or 2015-07-14T00--2015-07-14T01
+  contribution-events/{kind}/{window}/{fetched_at}/{page}.json                  # kind as in search, window as in contributions
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -135,7 +136,7 @@ The upper bound is the month's real last day. A literal `-31` against a thirty-d
 
 A month matching more than 1,000 splits in the backfill frontier. It halves into day ranges named for their ends, such as `2026-08-01--2026-08-15`, which halve again down to single days. A day splits into halves and a half into hours, named like the contributions windows (`2026-08-14T00--2026-08-14T12`) and queried on instants. An hour still past the cap is irreducible. Each window archives under its own key in `raw/search/{kind}/{window}/`.
 
-The review search reads each pull request's reviews through a nested `reviews(author:, first: 100)` connection. A pull request whose nested page announces a successor gets a follow-up `node(id:)` query that pages the rest, archived beside the search page under `reviews/{pull request ID}/`, and replay merges those pages back in. A follow-up that fails still leaves its search page and the follow-ups read before it archived and normalized, and the failed response lands as that pull request's next follow-up page rather than as a search page. A pull request whose `reviews.totalCount` still exceeds the nodes read flags its page as truncated, live and on replay. The search pager also stops with a `RepeatedCursorError` when a page announces a cursor it already sent, which would otherwise serve the same page until the page bound.
+The review search reads each pull request's reviews through a nested `reviews(author:, first: 100)` connection. A pull request whose nested page announces a successor gets a follow-up `node(id:)` query that pages the rest. Those pages archive beside the search page under `reviews/{pull request ID}/`, and replay merges them back in. A follow-up that fails still leaves its search page and the earlier follow-ups archived and normalized. The failed response lands as that pull request's next follow-up page rather than as a search page. A pull request whose `reviews.totalCount` still exceeds the nodes read flags its page as truncated, live and on replay. The search pager also stops with a `RepeatedCursorError` when a page announces a cursor it already sent, which would otherwise serve the same page until the page bound.
 
 Walking those back to 2012 is 166 windows per event type for the whole history. The incremental run is the same code path with a different window: one `updated:{since}..{now}` query per type, where `since` sits an hour behind the watermark. The upper bound is what lets a range past 1,000 after an outage split: it halves at its midpoint, earliest half first, and the watermark climbs through each half as it lands. Backfill and incremental differ only in what dates go into the string.
 
@@ -159,7 +160,7 @@ Issues and pull requests compare as sets when the year's archived connection pag
 
 Each node carries its `Issue` or `PullRequest` with the fields the matching search selects, through a shared fragment, so normalization reuses the search row builders. A review node names one pull request, and the query reads that pull request's `reviews(author:, first: 100)`, so every review on it lands. Review nodes on my own pull requests are dropped, as the review search excludes them.
 
-The windows are the contributions calendar windows, rooted at years. A unit reads at most ten pages of 100. One that ends its cursor having read fewer nodes than the connection's `totalCount`, or stops at ten pages with a successor announced, is truncated and splits down the calendar like a commit window. The pager shares the search pager's cursor loop and its repeated-cursor guard.
+The windows are the contributions calendar windows, rooted at years. A unit reads at most ten pages of 100. One that exhausts its pages having read fewer nodes than the connection's `totalCount`, or stops at ten pages with a successor announced, is truncated and splits down the calendar like a commit window. The pager shares the search pager's cursor loop and its repeated-cursor guard.
 
 Search stays. Connections enumerate by creation, so only an `updated:` search finds an old event whose state changed, and search also finds events GitHub declines to count as contributions. The union of both is the most complete set either source sees.
 
@@ -167,7 +168,7 @@ Search stays. Connections enumerate by creation, so only an `updated:` search fi
 
 The GraphQL API allows [5,000 points per hour](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api#primary-rate-limit) for a personal access token, and it scores a query on how many nodes it asks for. A search page of 100 nodes with no nested connection under it is one point. Nested connections multiply rather than add. A query that grows a sub-connection costs more than its node count reads on the surface. Every archived request so far has cost 1 point, including the reviewed-PR search with its nested `reviews(first: 100)`. The full backfill is a few hundred requests, which the share below spreads over a few rate windows. The incremental run is noise against it.
 
-Each response carries `rateLimit.remaining`, `rateLimit.cost`, and `rateLimit.resetAt`. Only this field reflects the point budget. The REST `GET /rate_limit` endpoint undercounts GraphQL spend.
+Each response carries `rateLimit.remaining`, `rateLimit.cost`, and `rateLimit.resetAt`. Only `rateLimit` reflects the point budget. The REST `GET /rate_limit` endpoint undercounts GraphQL spend.
 
 The budget is shared with every other tool on the token, and those tools spent about 900 points in 18 minutes on one sampled hour. Logbook therefore spends within three limits, set as Worker vars:
 
@@ -245,7 +246,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - `GITHUB_TOKEN` is a Worker secret, set with `wrangler secret put`. It is the only credential the hub holds.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
-- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off, which search hides and the totals still count. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
+- The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off. Search hides it, and the totals still count it. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
 - The backfill is roughly 500 search requests plus one per year, well inside the 10,000 subrequests a paid Workers invocation gets. Paging it across invocations answers the wall clock rather than a platform ceiling. The free tier's 50 subrequests would bind first.
 - The [rate budget](#rate-budget) reads `rateLimit` off each response and refuses a request before it crosses a limit, rather than waiting for a 403.
 
