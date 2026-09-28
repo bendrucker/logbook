@@ -23,24 +23,23 @@ export async function archivedYear(
   year: number,
   login: string,
 ): Promise<ArchivedYear> {
-  const [issues, pullRequests, reviewed] = await Promise.all([
-    archivedNodes(bucket, "issue", year),
-    archivedNodes(bucket, "pr-authored", year),
-    archivedNodes(bucket, "pr-reviewed", year),
-  ]);
-
-  return {
-    ...(issues === null ? {} : { issues: new Set(issues.keys()) }),
-    ...(pullRequests === null ? {} : { pullRequests: new Set(pullRequests.keys()) }),
-    ...(reviewed === null
-      ? {}
-      : {
-          reviews: {
-            pullRequests: reviewed.size,
-            own: [...reviewed.values()].filter((node) => authoredBy(node, login)).length,
-          },
-        }),
-  };
+  // One kind at a time, each reduced to what the check compares before the
+  // next is read, so the reads stay within one stream's concurrency and only
+  // one kind's nodes are held at once.
+  const issues = await archivedNodes(bucket, "issue", year);
+  const archived: ArchivedYear = issues === null ? {} : { issues: new Set(issues.keys()) };
+  const pullRequests = await archivedNodes(bucket, "pr-authored", year);
+  if (pullRequests !== null) {
+    archived.pullRequests = new Set(pullRequests.keys());
+  }
+  const reviewed = await archivedNodes(bucket, "pr-reviewed", year);
+  if (reviewed !== null) {
+    archived.reviews = {
+      pullRequests: reviewed.size,
+      own: [...reviewed.values()].filter((node) => authoredBy(node, login)).length,
+    };
+  }
+  return archived;
 }
 
 type Authored = { id: string; author: { login: string } | null };
