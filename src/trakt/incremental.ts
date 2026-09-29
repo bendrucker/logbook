@@ -1,3 +1,4 @@
+import { frontierStatus } from "../sync/frontier";
 import type { TraktKind } from "../sync/kinds";
 import { MissingSecretError, type SyncResult } from "../sync/run";
 import { readWatermark } from "../sync/state";
@@ -75,6 +76,13 @@ async function syncHistory(
   if (watermark === null) {
     // Anchoring at now would declare every earlier play synced.
     console.log("trakt-history has no watermark, so a backfill owns its first window");
+    return null;
+  }
+  // A backfill that stopped partway leaves the watermark at the end of the last
+  // year it finished, and a window from there to now can outgrow the cap every
+  // hour. The drain reads those years one at a time instead.
+  if (((await frontierStatus(env.DB)).get("trakt-history")?.pending ?? 0) > 0) {
+    console.log("trakt-history years are still enqueued, so the drain reads them");
     return null;
   }
   const since = new Date(Date.parse(watermark.window) - OVERLAP_MS).toISOString();

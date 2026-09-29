@@ -73,10 +73,6 @@ export class RequestCap {
     this.#cap = cap;
   }
 
-  get sent(): number {
-    return this.#sent;
-  }
-
   admit(): void {
     if (this.#sent >= this.#cap) {
       throw new RequestCapReached(this.#cap);
@@ -89,23 +85,18 @@ export class RequestCap {
 // layer answers may carry none.
 const DEFAULT_RETRY_SECONDS = 60;
 
+// The two headers paging reads. Trakt also sends a limit and an item count,
+// which nothing here needs to see before trusting the page count.
 export interface Pagination {
   page: number;
-  limit: number;
   pageCount: number;
-  itemCount: number;
 }
 
 // Null when the endpoint answered unpaginated, which Trakt's ratings list may.
 export function readPagination(headers: Headers): Pagination | null {
   const page = header(headers, "x-pagination-page");
-  const limit = header(headers, "x-pagination-limit");
   const pageCount = header(headers, "x-pagination-page-count");
-  const itemCount = header(headers, "x-pagination-item-count");
-  if (page === null || limit === null || pageCount === null || itemCount === null) {
-    return null;
-  }
-  return { page, limit, pageCount, itemCount };
+  return page === null || pageCount === null ? null : { page, pageCount };
 }
 
 function header(headers: Headers, name: string): number | null {

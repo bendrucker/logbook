@@ -80,6 +80,22 @@ describe("syncTrakt", () => {
     expect(trakt.urls()[1]?.searchParams.get("start_at")).toBe("2019-01-01T00:00:00.000Z");
     expect((await frontierStatus(env.DB)).get("trakt-history")).toBeUndefined();
   });
+
+  it("leaves history to the drain while backfill years are pending", async () => {
+    await advance(env.DB, "trakt-history", "2020-01-01T00:00:00.000Z", WATERMARK);
+    await enqueue(env.DB, "trakt-history", ["2020"], NOW.toISOString());
+    const trakt = stubTrakt([
+      () => traktResponse([], null),
+      () => traktResponse([moviePlay(1, "2020-05-01T20:00:00.000Z")]),
+    ]);
+
+    await syncTrakt(env, { fetch: trakt.fetch, now: NOW });
+
+    const [ratings, drained] = trakt.urls();
+    expect(ratings?.pathname).toBe("/users/bendrucker/ratings");
+    expect(drained?.searchParams.get("start_at")).toBe("2020-01-01T00:00:00.000Z");
+    expect(trakt.requests).toHaveLength(2);
+  });
 });
 
 describe("rewalkTraktYear", () => {

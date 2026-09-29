@@ -103,7 +103,7 @@ Each contributions year is checked against the event tables for that year. A dis
 
 ## Trakt
 
-The same hourly cron reads my public Trakt profile with the application's client ID, no OAuth. History reads from a day behind its watermark to now, and ratings re-read in full every run. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_TRAKT` caps the requests one invocation sends, and a 429 stops it with `resumeAt` from `Retry-After`.
+The same hourly cron reads my public Trakt profile with the application's client ID, no OAuth. History reads from a day behind its watermark to now, and waits for the drain while backfill years are still enqueued. Ratings re-read in full every run. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_TRAKT` caps the requests one invocation sends, and a 429 stops it with `resumeAt` from `Retry-After`.
 
 Backfill history by year. Without `from` it starts at the year of the oldest play:
 

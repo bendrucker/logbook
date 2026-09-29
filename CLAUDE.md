@@ -52,7 +52,7 @@ One call enqueues the kind's windows from `from` onward in the `crawl_units` fro
 
 ## Trakt
 
-The hourly cron runs Trakt after GitHub settles, independently of it: history from a day behind its watermark to now, then all ratings, then leftover cap on enqueued history years. `RATE_CAP_TRAKT` caps requests per invocation, and a 429 reports `resumeAt` from `Retry-After`. Trakt runs record `cost` 0 so `spendSince` stays a GitHub ledger. History backfills in yearly `crawl_units` windows. Ratings backfill as one full read. The nightly lake cron re-reads the current year of history first. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`, with the pagination headers in R2 custom metadata.
+The hourly cron runs Trakt after GitHub settles, independently of it: history from a day behind its watermark to now (skipped while backfill years are still enqueued), then all ratings, then leftover cap on enqueued history years. `RATE_CAP_TRAKT` caps requests per invocation, and a 429 reports `resumeAt` from `Retry-After`. Trakt runs record `cost` 0 so `spendSince` stays a GitHub ledger. History backfills in yearly `crawl_units` windows. Ratings backfill as one full read. The nightly lake cron re-reads the current year of history first. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`, with the pagination headers in R2 custom metadata.
 
 ## Secrets
 

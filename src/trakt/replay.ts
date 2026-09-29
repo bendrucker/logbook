@@ -3,7 +3,8 @@
 import type { z } from "zod";
 import { MissingRawObjectError, RawValidationError } from "../normalize";
 import type { TraktKind } from "../sync/kinds";
-import { readMetadata, traktPageNumber, traktPrefix } from "./raw";
+import { pageNumber } from "../raw-object";
+import { readMetadata, traktPrefix } from "./raw";
 import {
   addRows,
   normalizeHistory,
@@ -106,7 +107,7 @@ async function listFetches(bucket: R2Bucket, prefix: string): Promise<ArchivedFe
       const last = answered.at(-1);
       const contiguous =
         answered.length === read.length &&
-        answered.every((object, index) => traktPageNumber(object.key) === index + 1);
+        answered.every((object, index) => pageNumber(object.key) === index + 1);
       const reported = last?.pagination?.pageCount ?? 1;
       return {
         fetchedAt,

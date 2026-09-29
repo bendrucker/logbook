@@ -1,10 +1,5 @@
+import { OBJECT_SUFFIX, pageName, writeOnce } from "../raw-object";
 import type { EventKind } from "./windows";
-
-// R2 lists lexicographically, so a page number is padded to keep one fetch's
-// pages in the order they were read.
-const PAGE_DIGITS = 4;
-
-export const OBJECT_SUFFIX = ".json";
 
 // Replay lists these prefixes to find what a window archived, so the layout has
 // one definition here rather than a listing that has to match a key builder.
@@ -22,8 +17,7 @@ export function searchKey(
   fetchedAt: string,
   page: number,
 ): string {
-  const name = String(page).padStart(PAGE_DIGITS, "0");
-  return `${searchFetchPrefix(kind, window, fetchedAt)}${name}${OBJECT_SUFFIX}`;
+  return `${searchFetchPrefix(kind, window, fetchedAt)}${pageName(page)}`;
 }
 
 // A follow-up that read a pull request's reviews past the nested page lands
@@ -41,27 +35,14 @@ export function searchReviewsKey(
   pullRequest: string,
   page: number,
 ): string {
-  const name = String(page).padStart(PAGE_DIGITS, "0");
   const id = encodeURIComponent(pullRequest);
-  return `${searchReviewsPrefix(kind, window, fetchedAt)}${id}/${name}${OBJECT_SUFFIX}`;
+  return `${searchReviewsPrefix(kind, window, fetchedAt)}${id}/${pageName(page)}`;
 }
 
 // Null for a search page.
 export function searchReviewsPullRequest(fetchPrefix: string, key: string): string | null {
   const match = /^reviews\/([^/]+)\/\d+\.json$/.exec(key.slice(fetchPrefix.length));
   return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
-}
-
-// Replay counts a fetch's pages against the highest one it archived, so the
-// number `searchKey` padded has to read back off a listed key.
-export function searchPageNumber(key: string): number | null {
-  if (!key.endsWith(OBJECT_SUFFIX)) {
-    return null;
-  }
-
-  const name = key.slice(key.lastIndexOf("/") + 1, -OBJECT_SUFFIX.length);
-
-  return /^\d+$/.test(name) ? Number(name) : null;
 }
 
 // The contribution connections page like search, so their pages mirror the
@@ -77,8 +58,7 @@ export function contributionEventsKey(
   fetchedAt: string,
   page: number,
 ): string {
-  const name = String(page).padStart(PAGE_DIGITS, "0");
-  return `${contributionEventsWindowPrefix(kind, window)}${fetchedAt}/${name}${OBJECT_SUFFIX}`;
+  return `${contributionEventsWindowPrefix(kind, window)}${fetchedAt}/${pageName(page)}`;
 }
 
 // Window keys start with their year, as the contributions windows do, so one
@@ -123,19 +103,6 @@ export function contributionsObject(key: string): { window: string; fetchedAt: s
   }
   const [, window = "", fetchedAt = ""] = match;
   return { window, fetchedAt };
-}
-
-// Re-running a window writes new pages under a new fetch timestamp rather
-// than replacing what a previous run saw, keeping a normalization bug
-// diagnosable against the bytes that caused it. A false return means the key
-// was already there.
-export async function writeOnce(bucket: R2Bucket, key: string, body: string): Promise<boolean> {
-  const written = await bucket.put(key, body, {
-    onlyIf: { etagDoesNotMatch: "*" },
-    httpMetadata: { contentType: "application/json" },
-  });
-
-  return written !== null;
 }
 
 export interface SearchArchive {

@@ -47,11 +47,14 @@ export async function backfillTrakt(
       (await enqueuedFrom(env.DB)) ??
       (await oldestPlayYear(env, clientId, { ...options, requests }, now));
   } catch (error) {
-    const resumeAt = stoppedUntil(error, now);
-    if (resumeAt === null) {
-      throw error;
-    }
-    return { ...(await result(env, kind, [], 0, 0)), pending: 1, resumeAt, error: describe(error) };
+    // Answered like a failed window, so a looping caller stops and reruns
+    // rather than reading a 500.
+    return {
+      ...(await result(env, kind, [], 0, 0)),
+      pending: 1,
+      resumeAt: stoppedUntil(error, now),
+      error: describe(error),
+    };
   }
 
   if (first !== null) {

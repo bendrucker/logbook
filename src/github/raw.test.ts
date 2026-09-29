@@ -1,13 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { emptyBucket } from "../../test/r2";
-import {
-  archiveContributions,
-  archiveSearchPage,
-  contributionsKey,
-  searchKey,
-  writeOnce,
-} from "./raw";
+import { archiveContributions, archiveSearchPage, contributionsKey, searchKey } from "./raw";
 
 const FETCHED_AT = "2026-09-09T12:00:00.000Z";
 
@@ -33,32 +27,6 @@ describe("keys", () => {
 
   it("keys a contributions window by year and fetch", () => {
     expect(contributionsKey("2025", FETCHED_AT)).toBe(`raw/contributions/2025/${FETCHED_AT}.json`);
-  });
-});
-
-describe("writeOnce", () => {
-  it("writes the body as received", async () => {
-    const body = '{"data":{"search":{}}}';
-
-    await writeOnce(env.RAW, "raw/search/issue/2026-08/fetch/0001.json", body);
-
-    const stored = await env.RAW.get("raw/search/issue/2026-08/fetch/0001.json");
-    await expect(stored?.text()).resolves.toBe(body);
-  });
-
-  it("reports the write", async () => {
-    await expect(writeOnce(env.RAW, "raw/contributions/2025/fetch.json", "{}")).resolves.toBe(true);
-  });
-
-  it("refuses to overwrite an existing key", async () => {
-    await writeOnce(env.RAW, "raw/contributions/2025/fetch.json", '{"first":true}');
-
-    await expect(
-      writeOnce(env.RAW, "raw/contributions/2025/fetch.json", '{"second":true}'),
-    ).resolves.toBe(false);
-
-    const stored = await env.RAW.get("raw/contributions/2025/fetch.json");
-    await expect(stored?.text()).resolves.toBe('{"first":true}');
   });
 });
 

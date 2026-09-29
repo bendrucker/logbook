@@ -287,6 +287,8 @@ History pages 250 items at a time, following `X-Pagination-Page-Count` from each
 
 The hourly cron reads history from a day behind the watermark to now, then the whole ratings list. Trakt filters on both bounds inclusively and to the instant, though its reference names a date format. The day of overlap catches plays logged a little late, and upserts on the history ID make it free. Ratings have no window filter, and the list is small, so each run re-reads it and upserts every row. The ratings watermark records the last full read.
 
+A backfill that stopped partway leaves the history watermark at the end of the last year it finished. A window from there to now could need more requests than the cap every hour and never advance, starving ratings and the drain behind it. So the hourly history read waits while any history year is still enqueued, and the drain finishes those years first. The current year is the last unit, and it carries the watermark to now.
+
 The nightly lake cron re-reads the whole current year of history before it builds, which catches plays logged late with a date earlier in the year. It leaves the watermark alone.
 
 #### Rate Limit

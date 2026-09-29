@@ -68,7 +68,7 @@ describe("syncHistoryWindow", () => {
     const first = await env.RAW.head(`${prefix}/0001.json`);
     expect(readMetadata(first?.customMetadata)).toEqual({
       status: 200,
-      pagination: { page: 1, limit: 250, pageCount: 2, itemCount: 1 },
+      pagination: { page: 1, pageCount: 2 },
       failure: null,
     });
     expect(await count("trakt_plays")).toEqual({ total: 2 });

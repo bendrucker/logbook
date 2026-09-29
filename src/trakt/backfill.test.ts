@@ -90,6 +90,18 @@ describe("backfillTrakt", () => {
     expect(result).toMatchObject({ pending: 1, resumeAt: "2026-09-10T12:00:30.000Z" });
   });
 
+  it("answers a failed discovery with its error rather than throwing", async () => {
+    const trakt = stubTrakt([() => new Response("down", { status: 503 })]);
+
+    const result = await backfillTrakt(env, "trakt-history", null, {
+      fetch: trakt.fetch,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ pending: 1, resumeAt: null });
+    expect(result.error).toContain("503");
+  });
+
   it("reads ratings in one pass", async () => {
     const trakt = stubTrakt([
       () => traktResponse([movieRating(7, "2026-01-01T00:00:00.000Z")], null),

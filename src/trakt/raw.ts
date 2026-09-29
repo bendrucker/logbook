@@ -1,24 +1,13 @@
+import { pageName, writeOnce } from "../raw-object";
 import type { TraktKind } from "../sync/kinds";
 import type { Pagination } from "./client";
-
-// R2 lists lexicographically, so a page number is padded to keep one fetch's
-// pages in the order they were read.
-const PAGE_DIGITS = 4;
-
-const OBJECT_SUFFIX = ".json";
 
 export function traktPrefix(kind: TraktKind, window: string): string {
   return `raw/trakt/${kind}/${window}/`;
 }
 
 export function traktKey(kind: TraktKind, window: string, fetchedAt: string, page: number): string {
-  const name = String(page).padStart(PAGE_DIGITS, "0");
-  return `${traktPrefix(kind, window)}${fetchedAt}/${name}${OBJECT_SUFFIX}`;
-}
-
-export function traktPageNumber(key: string): number | null {
-  const match = /\/(\d+)\.json$/.exec(key);
-  return match?.[1] === undefined ? null : Number(match[1]);
+  return `${traktPrefix(kind, window)}${fetchedAt}/${pageName(page)}`;
 }
 
 export interface TraktArchive {
@@ -43,27 +32,15 @@ export interface ArchivedMetadata {
   failure: string | null;
 }
 
-// Written once and never replaced: a rerun lands under a new fetch timestamp.
-// A false return means the key was already there.
-export async function archiveTraktPage(bucket: R2Bucket, archive: TraktArchive): Promise<boolean> {
+export function archiveTraktPage(bucket: R2Bucket, archive: TraktArchive): Promise<boolean> {
   const { kind, window, fetchedAt, page, body, status, pagination, failure } = archive;
-  const written = await bucket.put(traktKey(kind, window, fetchedAt, page), body, {
-    onlyIf: { etagDoesNotMatch: "*" },
-    httpMetadata: { contentType: "application/json" },
-    customMetadata: {
-      status: String(status),
-      ...(failure === undefined ? {} : { failure }),
-      ...(pagination === null
-        ? {}
-        : {
-            page: String(pagination.page),
-            limit: String(pagination.limit),
-            pageCount: String(pagination.pageCount),
-            itemCount: String(pagination.itemCount),
-          }),
-    },
+  return writeOnce(bucket, traktKey(kind, window, fetchedAt, page), body, {
+    status: String(status),
+    ...(failure === undefined ? {} : { failure }),
+    ...(pagination === null
+      ? {}
+      : { page: String(pagination.page), pageCount: String(pagination.pageCount) }),
   });
-  return written !== null;
 }
 
 export function readMetadata(metadata: Record<string, string> | undefined): ArchivedMetadata {
@@ -71,15 +48,11 @@ export function readMetadata(metadata: Record<string, string> | undefined): Arch
     const value = Number(metadata?.[name] ?? Number.NaN);
     return Number.isInteger(value) ? value : null;
   };
-  const [page, limit, pageCount, itemCount] = ["page", "limit", "pageCount", "itemCount"].map(
-    number,
-  );
+  const page = number("page");
+  const pageCount = number("pageCount");
   return {
     status: number("status") ?? 0,
     failure: metadata?.["failure"] ?? null,
-    pagination:
-      page == null || limit == null || pageCount == null || itemCount == null
-        ? null
-        : { page, limit, pageCount, itemCount },
+    pagination: page === null || pageCount === null ? null : { page, pageCount },
   };
 }

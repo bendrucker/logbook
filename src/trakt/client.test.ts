@@ -39,9 +39,22 @@ describe("traktGet", () => {
 
     const response = await traktGet("id", "/x", {}, historyPage, { fetch });
 
-    expect(response.pagination).toEqual({ page: 2, limit: 250, pageCount: 3, itemCount: 501 });
+    expect(response.pagination).toEqual({ page: 2, pageCount: 3 });
     expect(JSON.parse(response.body)).toHaveLength(1);
     expect(response.data[0]?.id).toBe(1);
+  });
+
+  it("pages on the page count alone, without the limit or item count", async () => {
+    const { fetch } = stubFetch(
+      () =>
+        new Response("[]", {
+          headers: { "X-Pagination-Page": "1", "X-Pagination-Page-Count": "4" },
+        }),
+    );
+
+    const response = await traktGet("id", "/x", {}, anything, { fetch });
+
+    expect(response.pagination).toEqual({ page: 1, pageCount: 4 });
   });
 
   it("stops on a 429 with the wait Retry-After names", async () => {
