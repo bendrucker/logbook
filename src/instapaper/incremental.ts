@@ -72,7 +72,7 @@ async function syncBookmarks(
   }
 
   const remaining = await listings(env.DB);
-  const changed: number[] = [];
+  const changed = new Set<number>();
   let failed = false;
   let stopped = false;
   for (const listing of remaining) {
@@ -87,7 +87,7 @@ async function syncBookmarks(
     }
   }
 
-  await requeueHighlights(env.DB, changed, started.toISOString());
+  await requeueHighlights(env.DB, [...changed], started.toISOString());
   if (!failed) {
     await advance(env.DB, "instapaper-bookmarks", started.toISOString());
   }
@@ -99,10 +99,12 @@ async function syncDelta(
   env: Env,
   listing: Listing,
   options: InstapaperSyncOptions,
-  changed: number[],
+  changed: Set<number>,
 ): Promise<ListingResult> {
   const result = await syncListing(env, listing, "delta", options);
-  changed.push(...result.bookmarkIds.filter((id) => !changed.includes(id)));
+  for (const id of result.bookmarkIds) {
+    changed.add(id);
+  }
   return result;
 }
 

@@ -297,7 +297,7 @@ Every bookmark the pass returned has its highlights unit put back to pending. Wh
 
 #### Highlights
 
-`POST /api/1.1/bookmarks/{id}/highlights` returns a bookmark's complete highlight list, so a highlight D1 holds that the list omits was deleted. Error 1241 on that read means the bookmark itself is gone, and it sets `deleted_at`. `instapaper-highlights` runs only as frontier units and has no watermark. The listing's own `highlights` array lands too, but the documentation does not say which highlights it carries.
+`POST /api/1.1/bookmarks/{id}/highlights` returns a bookmark's complete highlight list, so a highlight D1 holds that the list omits was deleted. Error 1241 on that read means the bookmark itself is gone, and it sets `deleted_at`. `instapaper-highlights` runs only as frontier units and has no watermark. The listing's own `highlights` array lands too, but the documentation does not say which highlights it carries. A read that fails without a limit behind it settles its unit `irreducible`, so one bookmark cannot hold the frontier. The unit goes back to pending when the bookmark next comes back changed.
 
 #### Backfill
 
@@ -318,11 +318,11 @@ The documentation names error 1040 for a rate limit and gives no number. `RATE_C
 
 #### Gaps
 
-- A folder past 500 bookmarks shows its newest 500. Older archived bookmarks are out of reach unless `have` pages, and the backfill marks such a folder `irreducible` so the gap shows in `/admin/sync`.
+- A folder past 500 bookmarks shows its newest 500. Older archived bookmarks are out of reach unless `have` pages, and the backfill marks such a folder `irreducible` so the gap shows in `/admin/sync`. A folder of exactly 500 reads the same way, since its second page comes back just as empty.
 - No endpoint lists deletions. A deleted bookmark drops into `delete_ids` and reads as `unlisted_at`, the same as one moved to a folder the pass hasn't reached or one that aged out of the 500. `deleted_at` is set only when a highlights read answers 1241.
-- A note edited on a bookmark whose hash is unchanged waits for the next highlights read of that bookmark, unless the listing's `highlights` array carries it.
+- A highlight added, or a note edited, on a bookmark whose hash is unchanged waits for the next highlights read of that bookmark, unless the listing's `highlights` array carries it.
 - With more than 500 starred bookmarks, an unstar goes undetected.
-- The free tier limits highlight creation to five a month. The documentation does not limit reading the archive or the API on the free tier. A Premium-only answer would arrive as error 1041 and fail the run.
+- The free tier limits highlight creation to five a month. The documentation does not limit reading the archive or the API on the free tier. A Premium-only answer would arrive as error 1041. It fails a listing run and settles each highlights unit it answers `irreducible`.
 - Each hourly pass archives a page per listing, about 40,000 small objects a year with a few folders. The bucket stays small in bytes.
 
 These wait on a live check with the real token: whether `have` pages, what the listing's `highlights` array covers, how 1040 arrives, and whether the free tier answers 1041 anywhere the sync reads.

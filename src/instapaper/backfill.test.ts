@@ -135,6 +135,35 @@ describe("backfillInstapaper", () => {
     });
   });
 
+  it("settles a bookmark whose highlights read fails and reads the rest", async () => {
+    const seed = stubInstapaper(() => listing([bookmark(1), bookmark(2)]));
+    await syncListing(env, { folder: "unread" }, "full", {
+      fetch: seed.fetch,
+      now: new Date(EARLIER),
+      requests: new RequestCap(1),
+    });
+    const stub = stubInstapaper((call) =>
+      call.path === "/api/1.1/bookmarks/1/highlights"
+        ? new Response("upstream down", { status: 500 })
+        : json([highlight(20, 2)]),
+    );
+
+    const result = await backfillInstapaper(env, "instapaper-highlights", {
+      fetch: stub.fetch,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({
+      windows: ["1", "2"],
+      pending: 0,
+      irreducible: ["1"],
+      error: null,
+    });
+    expect(await readRow(env.DB, "SELECT COUNT(*) AS total FROM instapaper_highlights")).toEqual({
+      total: 1,
+    });
+  });
+
   it("answers a missing secret before anything else", async () => {
     clearSecrets(env);
 

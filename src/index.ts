@@ -30,8 +30,8 @@ export default {
     }
 
     // One source at a time, since both draw on the invocation's six open
-    // connections. A GitHub failure still leaves Instapaper to run, and either
-    // failure marks the invocation failed.
+    // connections. Each logs its own sync failures, so a rejection here is a
+    // misconfiguration, and one source's still leaves the other to run.
     const github = await settled(syncIncremental(env));
     const instapaper = await settled(syncInstapaper(env));
     for (const outcome of [github, instapaper]) {

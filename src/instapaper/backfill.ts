@@ -57,8 +57,7 @@ export async function backfillInstapaper(
     const windows = (await listings(env.DB)).map(listingWindow);
     await enqueue(env.DB, kind, windows, now.toISOString());
   } else {
-    const ids = await liveBookmarkIds(env.DB);
-    await enqueue(env.DB, kind, ids.map(String), now.toISOString());
+    await enqueueHighlights(env.DB, await liveBookmarkIds(env.DB), now.toISOString(), "DO NOTHING");
   }
 
   // The drain takes the caller's options rather than the fixed `now` above, so
@@ -103,18 +102,43 @@ export async function requeueHighlights(
   if (bookmarkIds.length === 0) {
     return;
   }
-  const statement = db.prepare(
-    "INSERT INTO crawl_units (kind, window, parent, status, updated_at)" +
-      " VALUES ('instapaper-highlights', ?1, NULL, 'pending', ?2)" +
-      " ON CONFLICT (kind, window) DO UPDATE SET status = 'pending', updated_at = excluded.updated_at",
+  await enqueueHighlights(
+    db,
+    bookmarkIds,
+    at,
+    "DO UPDATE SET status = 'pending', updated_at = excluded.updated_at",
   );
-  await db.batch(bookmarkIds.map((id) => statement.bind(String(id), at)));
+}
+
+// One statement over a JSON array, since a batch of one insert per bookmark
+// grows with the account past what an invocation may query.
+async function enqueueHighlights(
+  db: D1Database,
+  bookmarkIds: readonly number[],
+  at: string,
+  onConflict: "DO NOTHING" | "DO UPDATE SET status = 'pending', updated_at = excluded.updated_at",
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO crawl_units (kind, window, parent, status, updated_at)" +
+        " SELECT 'instapaper-highlights', value, NULL, 'pending', ?2 FROM json_each(?1) WHERE true" +
+        ` ON CONFLICT (kind, window) ${onConflict}`,
+    )
+    .bind(JSON.stringify(bookmarkIds.map(String)), at)
+    .run();
 }
 
 function crawlSource(env: Env, kind: InstapaperKind, options: InstapaperSyncOptions): CrawlSource {
   if (kind === "instapaper-highlights") {
     return {
-      fetch: async (window) => unitFetch(await syncHighlights(env, Number(window), options)),
+      fetch: async (window) => {
+        const run = unitFetch(await syncHighlights(env, Number(window), options));
+        // A bookmark whose read fails every time would hold the drain at its
+        // unit, so only a limit stops it. The failed run stays in `sync_runs`.
+        return run.error !== null && run.resumeAt === null
+          ? { ...run, error: null, truncated: true }
+          : run;
+      },
       split: () => [],
     };
   }

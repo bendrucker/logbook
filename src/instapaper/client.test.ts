@@ -53,47 +53,57 @@ describe("instapaperPost", () => {
     expect((await verify(stub.fetch)).data).toEqual([USER]);
   });
 
-  it("reads an error array as an error whatever the status", async () => {
-    const stub = stubInstapaper(() =>
-      apiError(1241, "Invalid or missing bookmark_id", { status: 200 }),
-    );
+  it.each<{
+    name: string;
+    response: () => Response;
+    expected: abstract new (...args: never[]) => Error;
+    fields: object;
+  }>([
+    {
+      name: "reads an error array as an error whatever the status",
+      response: () => apiError(1241, "Invalid or missing bookmark_id", { status: 200 }),
+      expected: InstapaperApiError,
+      fields: { code: 1241, status: 200 },
+    },
+    {
+      name: "reads error 1040 as the rate limit, waiting as long as Retry-After says",
+      response: () =>
+        apiError(1040, "Rate-limit exceeded", { status: 400, headers: { "Retry-After": "120" } }),
+      expected: InstapaperRateLimited,
+      fields: { retryAfterSeconds: 120 },
+    },
+    {
+      name: "waits an hour on a rate limit that names no wait",
+      response: () => apiError(1040, "Rate-limit exceeded"),
+      expected: InstapaperRateLimited,
+      fields: { retryAfterSeconds: 3600 },
+    },
+    {
+      name: "waits an hour on an empty Retry-After",
+      response: () =>
+        apiError(1040, "Rate-limit exceeded", { status: 400, headers: { "Retry-After": "" } }),
+      expected: InstapaperRateLimited,
+      fields: { retryAfterSeconds: 3600 },
+    },
+    {
+      name: "keeps the body of a failure that is not an error array",
+      response: () => new Response("upstream down", { status: 503 }),
+      expected: InstapaperHttpError,
+      fields: { status: 503, body: "upstream down" },
+    },
+    {
+      name: "refuses a 200 whose body is not JSON",
+      response: () => new Response("<html>", { status: 200 }),
+      expected: InstapaperValidationError,
+      fields: { status: 200 },
+    },
+  ])("$name", async ({ response, expected, fields }) => {
+    const stub = stubInstapaper(response);
 
     const thrown = await verify(stub.fetch).catch((error: unknown) => error);
 
-    expect(thrown).toBeInstanceOf(InstapaperApiError);
-    expect(thrown).toMatchObject({ code: 1241, status: 200 });
-  });
-
-  it("reads error 1040 as the rate limit, waiting as long as Retry-After says", async () => {
-    const stub = stubInstapaper(() =>
-      apiError(1040, "Rate-limit exceeded", { status: 400, headers: { "Retry-After": "120" } }),
-    );
-
-    const thrown = await verify(stub.fetch).catch((error: unknown) => error);
-
-    expect(thrown).toBeInstanceOf(InstapaperRateLimited);
-    expect(thrown).toMatchObject({ retryAfterSeconds: 120 });
-  });
-
-  it("waits an hour on a rate limit that names no wait", async () => {
-    const stub = stubInstapaper(() => apiError(1040, "Rate-limit exceeded"));
-
-    await expect(verify(stub.fetch)).rejects.toMatchObject({ retryAfterSeconds: 3600 });
-  });
-
-  it("keeps the body of a failure that is not an error array", async () => {
-    const stub = stubInstapaper(() => new Response("upstream down", { status: 503 }));
-
-    const thrown = await verify(stub.fetch).catch((error: unknown) => error);
-
-    expect(thrown).toBeInstanceOf(InstapaperHttpError);
-    expect(thrown).toMatchObject({ status: 503, body: "upstream down" });
-  });
-
-  it("refuses a 200 whose body is not JSON", async () => {
-    const stub = stubInstapaper(() => new Response("<html>", { status: 200 }));
-
-    await expect(verify(stub.fetch)).rejects.toBeInstanceOf(InstapaperValidationError);
+    expect(thrown).toBeInstanceOf(expected);
+    expect(thrown).toMatchObject(fields);
   });
 
   it("stops before sending a request past the cap", async () => {

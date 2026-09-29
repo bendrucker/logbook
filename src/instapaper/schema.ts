@@ -84,13 +84,22 @@ export const highlightsResponse = itemsOf(highlight, "highlight");
 
 export const verifyCredentialsResponse = itemsOf(user, "user");
 
+const idList = z.array(z.union([id, z.string().regex(/^\d+$/).transform(Number)]));
+
 // `bookmarks/list` answers an object rather than the standard array. The
-// documentation calls `delete_ids` a list of IDs without naming a type.
+// documentation calls `delete_ids` a list of IDs without naming a type, so it
+// may arrive as an array or as the comma-separated string `have` is sent as.
 export const bookmarksListResponse = z.object({
   user: user.optional(),
   bookmarks: z.array(bookmark),
   highlights: z.array(highlight).default([]),
-  delete_ids: z.array(z.union([id, z.string().regex(/^\d+$/).transform(Number)])).default([]),
+  delete_ids: z
+    .preprocess(
+      (value) =>
+        typeof value === "string" ? value.split(",").filter((each) => each !== "") : value,
+      idList,
+    )
+    .default([]),
 });
 
 export type BookmarksList = z.infer<typeof bookmarksListResponse>;

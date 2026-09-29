@@ -22,8 +22,4 @@ export class RequestCap {
     }
     this.#sent += 1;
   }
-
-  get remaining(): number {
-    return this.#cap - this.#sent;
-  }
 }

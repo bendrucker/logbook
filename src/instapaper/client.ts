@@ -177,7 +177,8 @@ function apiError(text: string): z.infer<typeof errorResponse>[0] | null {
 }
 
 function retryAfter(headers: Headers): number {
-  const seconds = Number(headers.get("retry-after") ?? Number.NaN);
+  const header = headers.get("retry-after")?.trim() ?? "";
+  const seconds = header === "" ? Number.NaN : Number(header);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_RETRY_SECONDS;
 }
 

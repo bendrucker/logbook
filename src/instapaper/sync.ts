@@ -102,7 +102,7 @@ export async function syncListing(
 ): Promise<ListingResult> {
   const kind = "instapaper-bookmarks";
   const window = listingWindow(listing);
-  const bookmarkIds: number[] = [];
+  const bookmarkIds = new Set<number>();
 
   const result = await recordRun(
     env,
@@ -129,8 +129,10 @@ export async function syncListing(
           page,
           options,
         );
-        const fresh = applied.bookmarkIds.filter((id) => !bookmarkIds.includes(id));
-        bookmarkIds.push(...fresh);
+        const fresh = applied.bookmarkIds.filter((id) => !bookmarkIds.has(id));
+        for (const id of fresh) {
+          bookmarkIds.add(id);
+        }
         run.result = {
           ...run.result,
           pages: page,
@@ -154,14 +156,14 @@ export async function syncListing(
           run.result = { ...run.result, truncated: true };
           return;
         }
-        have = bookmarkIds.map(String);
+        have = [...bookmarkIds].map(String);
         page += 1;
       }
     },
     (error, run) => archiveFailure(env, kind, window, run, error),
   );
 
-  return { ...result, bookmarkIds };
+  return { ...result, bookmarkIds: [...bookmarkIds] };
 }
 
 async function readListingPage(
