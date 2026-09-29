@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { RequestCap } from "../request-cap";
 
 const ENDPOINT = "https://api.trakt.tv";
 const USER_AGENT = "logbook (+https://github.com/bendrucker/logbook)";
@@ -51,33 +52,6 @@ export class TraktValidationError extends TraktResponseError {
     super("TraktValidationError", `Trakt response did not validate: ${message}`, 200, body, {
       cause,
     });
-  }
-}
-
-// Thrown before a request goes out, so a refusal spends nothing.
-export class RequestCapReached extends Error {
-  constructor(cap: number) {
-    super(`request cap reached: sent ${cap} of ${cap} this invocation`);
-    this.name = "RequestCapReached";
-  }
-}
-
-// Trakt's limit is per application over five minutes and reports nothing on a
-// success, so a count per invocation bounds the spend and a 429 is what reports
-// the limit itself.
-export class RequestCap {
-  readonly #cap: number;
-  #sent = 0;
-
-  constructor(cap: number) {
-    this.#cap = cap;
-  }
-
-  admit(): void {
-    if (this.#sent >= this.#cap) {
-      throw new RequestCapReached(this.#cap);
-    }
-    this.#sent += 1;
   }
 }
 

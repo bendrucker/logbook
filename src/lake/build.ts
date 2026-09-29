@@ -1,6 +1,7 @@
 import { eachConcurrent, OPEN_CONNECTIONS } from "../concurrency";
 import { failBuild, finishBuild, startBuild } from "./builds";
 import { commitDays } from "./commit-days";
+import { instapaperBookmarks, instapaperFolders, instapaperHighlights } from "./instapaper";
 import { issues } from "./issues";
 import { pullRequests } from "./pull-requests";
 import { repositories } from "./repositories";
@@ -14,6 +15,9 @@ export const LAKE_TABLES: readonly LakeTable[] = [
   reviews,
   issues,
   commitDays,
+  instapaperBookmarks,
+  instapaperHighlights,
+  instapaperFolders,
   traktTitles,
   traktPlays,
   traktRatings,

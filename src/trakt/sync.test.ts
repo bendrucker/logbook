@@ -12,7 +12,7 @@ import {
 } from "../../test/trakt-fixtures";
 import { recentRuns } from "../sync/runs";
 import { readWatermark } from "../sync/state";
-import { RequestCap } from "./client";
+import { RequestCap } from "../request-cap";
 import { readMetadata } from "./raw";
 import { syncHistoryWindow, syncRatings, watchedWindow, yearWindow } from "./sync";
 

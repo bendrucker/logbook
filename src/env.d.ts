@@ -4,6 +4,7 @@
 interface Secrets {
   ADMIN_TOKEN?: string;
   GITHUB_TOKEN?: string;
+  INSTAPAPER_ACCESS_TOKEN?: string;
   TRAKT_CLIENT_ID?: string;
 }
 

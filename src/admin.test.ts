@@ -232,6 +232,15 @@ describe("POST /admin/backfill", () => {
     await expect(response.json()).resolves.toEqual({ error: "GITHUB_TOKEN is not configured" });
   });
 
+  it("routes an Instapaper kind to its own backfill, which has no from", async () => {
+    const response = await post("kind=instapaper-bookmarks", authorization);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "INSTAPAPER_ACCESS_TOKEN is not configured",
+    });
+  });
+
   it("answers 503 for a Trakt kind while the client ID is unset", async () => {
     const response = await post("kind=trakt-ratings", authorization);
 

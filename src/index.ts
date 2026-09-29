@@ -1,6 +1,7 @@
 import { handleBackfill, handleLakeBuild, handleSyncStatus } from "./admin";
 import { buildLake, LAKE_CRON } from "./lake";
 import { syncIncremental } from "./sync/incremental";
+import { syncInstapaper } from "./instapaper/incremental";
 import { rewalkTraktYear, syncTrakt } from "./trakt/incremental";
 
 export default {
@@ -36,12 +37,13 @@ export default {
       return;
     }
 
-    // One source at a time, since both draw on the invocation's six open
-    // connections. A GitHub failure still leaves Trakt to run, and either
+    // One source at a time, since all draw on the invocation's six open
+    // connections. A failure in one still leaves the others to run, and any
     // failure marks the invocation failed.
     const github = await settled(syncIncremental(env));
     const trakt = await settled(syncTrakt(env));
-    for (const outcome of [github, trakt]) {
+    const instapaper = await settled(syncInstapaper(env));
+    for (const outcome of [github, trakt, instapaper]) {
       if (outcome.status === "rejected") {
         throw outcome.reason;
       }

@@ -30,6 +30,10 @@
     // allows an application 500 GETs every five minutes and answers 429 past
     // that, which stops the run until its Retry-After.
     "RATE_CAP_TRAKT": 100,
+    // Instapaper requests one invocation sends at most, cron or backfill.
+    // Instapaper documents a rate limit without a number and answers 429 past
+    // it, which stops the run until `Retry-After` or the next hour.
+    "RATE_CAP_INSTAPAPER": 50,
   },
   "triggers": {
     // Hourly incremental sync. GitHub's search API and Trakt's history are
@@ -51,7 +55,8 @@
   "r2_buckets": [
     { "binding": "RAW", "bucket_name": "logbook-raw" },
     // Shared with activity-hub so one DuckDB session can join rides against
-    // pull requests. This project writes under `github/` and `trakt/` prefixes.
+    // pull requests. This project writes under `github/`, `trakt/`, and
+    // `instapaper/` prefixes.
     { "binding": "LAKE", "bucket_name": "activity-hub-lake" },
   ],
 }

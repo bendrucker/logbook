@@ -108,3 +108,17 @@ export function timestamp(name: string): LakeColumn {
     },
   };
 }
+
+// A fraction, which SQLite stores as REAL and D1 answers as a number.
+export function double(name: string): LakeColumn {
+  return {
+    name,
+    type: "DOUBLE",
+    cell: (value) => {
+      if (value === null || typeof value === "number") {
+        return value;
+      }
+      throw new LakeValueError(name, value);
+    },
+  };
+}

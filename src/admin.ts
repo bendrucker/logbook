@@ -8,10 +8,11 @@ import {
   parseMonth,
 } from "./sync/backfill";
 import { type FrontierStatus, frontierStatus } from "./sync/frontier";
-import { byKind, isTraktKind, SYNC_KINDS, type SyncKind } from "./sync/kinds";
+import { byKind, isInstapaperKind, isTraktKind, SYNC_KINDS, type SyncKind } from "./sync/kinds";
 import { MissingSecretError } from "./sync/run";
 import { lastRuns, recentFailures, type SyncRun } from "./sync/runs";
 import { readWatermarks, type Watermark } from "./sync/state";
+import { backfillInstapaper } from "./instapaper/backfill";
 import { backfillTrakt } from "./trakt/backfill";
 
 const FAILURE_LIMIT = 10;
@@ -76,12 +77,7 @@ export async function handleBackfill(request: Request, env: Env): Promise<Respon
   }
 
   try {
-    const from = url.searchParams.get("from");
-    // Trakt history starts at the oldest play when no `from` names a start.
-    const result: BackfillResult = isTraktKind(kind)
-      ? await backfillTrakt(env, kind, from === null ? null : parseMonth(from))
-      : await backfill(env, kind, parseMonth(from ?? monthWindow(BACKFILL_START).key));
-    return Response.json(result);
+    return Response.json(await backfillKind(env, kind, url.searchParams.get("from")));
   } catch (error) {
     if (error instanceof InvalidMonthError) {
       return Response.json({ error: error.message }, { status: 400 });
@@ -91,6 +87,18 @@ export async function handleBackfill(request: Request, env: Env): Promise<Respon
     }
     return serverError(error);
   }
+}
+
+function backfillKind(env: Env, kind: SyncKind, from: string | null): Promise<BackfillResult> {
+  // Trakt history starts at the oldest play when no `from` names a start.
+  if (isTraktKind(kind)) {
+    return backfillTrakt(env, kind, from === null ? null : parseMonth(from));
+  }
+  // Instapaper reads the whole account in one listing, so it has no `from`.
+  if (isInstapaperKind(kind)) {
+    return backfillInstapaper(env, kind);
+  }
+  return backfill(env, kind, parseMonth(from ?? monthWindow(BACKFILL_START).key));
 }
 
 // Runs the same build the nightly cron runs, so a schema change does not have

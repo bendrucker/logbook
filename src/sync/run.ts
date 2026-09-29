@@ -13,7 +13,8 @@ import type { ReviewsFailure, ReviewsPage } from "../github/reviews";
 import { issuePages, pullRequestPages, reviewedPullRequestPages } from "../github/search";
 import type { ContributionsCollection } from "../github/schema";
 import type { EventKind } from "../github/windows";
-import { RequestCapReached, TraktRateLimited } from "../trakt/client";
+import { InstapaperRateLimited } from "../instapaper/client";
+import { TraktRateLimited } from "../trakt/client";
 import {
   normalizeContributions,
   normalizeSearchPage,
@@ -27,6 +28,7 @@ import { archivedYear, crossCheck } from "./cross-check";
 import { recordIrreducible } from "./frontier";
 import type { SyncKind } from "./kinds";
 import { finishRun, type RunResult, startRun } from "./runs";
+import { RequestCapReached } from "../request-cap";
 import { advance } from "./state";
 
 export class MissingSecretError extends Error {
@@ -293,7 +295,11 @@ export function stoppedUntil(error: unknown, now: Date): string | null {
   if (error instanceof BudgetRefused) {
     return error.resetAt ?? now.toISOString();
   }
-  if (error instanceof SecondaryRateLimited || error instanceof TraktRateLimited) {
+  if (
+    error instanceof SecondaryRateLimited ||
+    error instanceof TraktRateLimited ||
+    error instanceof InstapaperRateLimited
+  ) {
     return new Date(now.getTime() + error.retryAfterSeconds * 1000).toISOString();
   }
   if (error instanceof RequestCapReached) {

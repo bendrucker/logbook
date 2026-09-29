@@ -2,10 +2,10 @@ import type { z } from "zod";
 import type { TraktKind } from "../sync/kinds";
 import { MissingSecretError, recordRun, type SyncResult, syncedThrough } from "../sync/run";
 import { advance } from "../sync/state";
+import type { RequestCap } from "../request-cap";
 import {
   PAGE_LIMIT,
   type Pagination,
-  type RequestCap,
   type TraktOptions,
   TraktResponseError,
   traktGet,

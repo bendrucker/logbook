@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { stubFetch } from "../../test/fetch-stub";
+import { RequestCap, RequestCapReached } from "../request-cap";
 import { moviePlay, rateLimited, traktResponse } from "../../test/trakt-fixtures";
 import {
   readPagination,
-  RequestCap,
-  RequestCapReached,
   TraktHttpError,
   TraktRateLimited,
   TraktValidationError,

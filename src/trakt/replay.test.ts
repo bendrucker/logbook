@@ -9,7 +9,7 @@ import {
   stubTrakt,
   traktResponse,
 } from "../../test/trakt-fixtures";
-import { RequestCap } from "./client";
+import { RequestCap } from "../request-cap";
 import { replayTraktWindow } from "./replay";
 import { syncHistoryWindow, yearWindow } from "./sync";
 

@@ -3,7 +3,8 @@ import type { TraktKind } from "../sync/kinds";
 import { MissingSecretError, type SyncResult } from "../sync/run";
 import { readWatermark } from "../sync/state";
 import { drainTraktHistory } from "./backfill";
-import { RequestCap, type TraktOptions } from "./client";
+import { RequestCap } from "../request-cap";
+import type { TraktOptions } from "./client";
 import {
   syncHistoryWindow,
   syncRatings,

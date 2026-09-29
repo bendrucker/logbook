@@ -2,14 +2,18 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { commitDay, issue, pullRequest, review, seedRepository } from "../../test/fixtures";
 import { parquetRows, readParquet } from "../../test/parquet";
+import { bookmark, folder, highlight } from "../../test/instapaper-fixtures";
 import { emptyBucket, readObject } from "../../test/r2";
 import { episodePlay, movieRating } from "../../test/trakt-fixtures";
+import { applyChanges, applyFolders, applyHighlights } from "../instapaper/rows";
+import { changesResponse, foldersResponse, highlightsResponse } from "../instapaper/schema";
 import { upsertCommitDays, upsertIssues, upsertPullRequests, upsertReviews } from "../store";
 import { normalizeHistory, normalizeRatings } from "../trakt/rows";
 import { historyPage, ratingsPage } from "../trakt/schema";
 import { buildLake, LAKE_TABLES, tableKey } from "./build";
 import { readLatestBuild } from "./builds";
 import { commitDays } from "./commit-days";
+import { instapaperBookmarks, instapaperFolders, instapaperHighlights } from "./instapaper";
 import { issues } from "./issues";
 import { pullRequests } from "./pull-requests";
 import { repositories } from "./repositories";
@@ -48,7 +52,10 @@ describe("buildLake", () => {
     );
     expect(
       listed.objects.every(
-        (object) => object.key.startsWith("github/v1/") || object.key.startsWith("trakt/v1/"),
+        (object) =>
+          object.key.startsWith("github/v1/") ||
+          object.key.startsWith("trakt/v1/") ||
+          object.key.startsWith("instapaper/v1/"),
       ),
     ).toBe(true);
   });
@@ -67,6 +74,9 @@ describe("buildLake", () => {
       trakt_titles: 0,
       trakt_plays: 0,
       trakt_ratings: 0,
+      instapaper_bookmarks: 0,
+      instapaper_highlights: 0,
+      instapaper_folders: 0,
     });
     expect(built.startedAt).toBe(STARTED_AT);
   });
@@ -150,6 +160,83 @@ describe("buildLake", () => {
     await buildLake(env, STARTED_AT);
 
     expect(await rowsOf(table)).toEqual([expected]);
+  });
+
+  it("writes Instapaper rows that read back as D1 holds them", async () => {
+    const fetchedAt = "2026-09-10T00:00:00.000Z";
+    await applyFolders(
+      env.DB,
+      foldersResponse.parse({ folders: [folder(7, "Essays")] }).folders,
+      fetchedAt,
+    );
+    await applyChanges(
+      env.DB,
+      changesResponse.parse({
+        bookmarks: [
+          bookmark(3_000_000_001, {
+            liked: true,
+            folder_id: 7,
+            author: "A. Writer",
+            pubtime: 1_788_000_000,
+            category: 3,
+            progress: { percentage: 0.25, timestamp: 1_788_220_900 },
+          }),
+        ],
+      }),
+      fetchedAt,
+    );
+    await applyHighlights(
+      env.DB,
+      3_000_000_001,
+      highlightsResponse.parse({
+        highlights: [highlight(9, 3_000_000_001, { note: "why", position: 2 })],
+      }).highlights,
+    );
+
+    await buildLake(env, STARTED_AT);
+
+    expect(await rowsOf(instapaperBookmarks)).toEqual([
+      {
+        bookmark_id: 3_000_000_001n,
+        url: "https://example.com/3000000001",
+        title: "Article 3000000001",
+        description: null,
+        image: null,
+        author: "A. Writer",
+        article_published_at: new Date(1_788_000_000 * 1000),
+        saved_at: new Date((1_788_220_800 + 3_000_000_001) * 1000),
+        liked: true,
+        archived: false,
+        folder_id: 7n,
+        progress: 0.25,
+        progress_at: new Date("2026-09-01T00:01:40.000Z"),
+        private_source: null,
+        category: 3,
+        tags: "[]",
+        deleted_at: null,
+        fetched_at: new Date(fetchedAt),
+      },
+    ]);
+    expect(await rowsOf(instapaperHighlights)).toEqual([
+      {
+        highlight_id: 9n,
+        bookmark_id: 3_000_000_001n,
+        text: "Passage 9",
+        note: "why",
+        position: 2,
+        created_at: new Date((1_788_220_800 + 3600 + 9) * 1000),
+      },
+    ]);
+    expect(await rowsOf(instapaperFolders)).toEqual([
+      {
+        folder_id: 7n,
+        title: "Essays",
+        slug: "essays",
+        position: 7,
+        public: false,
+        fetched_at: new Date(fetchedAt),
+      },
+    ]);
   });
 
   it("writes Trakt rows that read back as D1 holds them", async () => {

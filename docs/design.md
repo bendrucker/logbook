@@ -2,7 +2,7 @@
 
 Logbook owns the personal data I pull from simple polled APIs. Webhooks and file decoding stay in [Activity Hub](https://github.com/bendrucker/activity-hub).
 
-Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts through its GraphQL API. [Trakt](#trakt) supplies watch history and ratings through its REST API. Logbook archives every response page in R2, normalizes them into D1, publishes a GitHub feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. Most of it describes GitHub, the first source. The [README](../README.md) is the short version.
+Three sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts through its GraphQL API. [Trakt](#trakt) supplies watch history and ratings through its REST API. [Instapaper](#instapaper) supplies bookmarks, highlights, and the notes on them through its API v2. Logbook archives every response page in R2, normalizes them into D1, publishes a GitHub feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. Most of it describes GitHub, the first source. The [README](../README.md) is the short version.
 
 ## Goals
 
@@ -36,6 +36,11 @@ flowchart TB
         ratings[users ratings]
     end
 
+    subgraph ip [Instapaper API v2]
+        bookmarks[bookmark changes]
+        highlights[bookmark highlights]
+    end
+
     subgraph cf [Cloudflare]
         cron[Hourly cron]
         extract[Extract]
@@ -46,7 +51,7 @@ flowchart TB
         lakebuild[Nightly lake build]
     end
 
-    lake[(R2 activity-hub-lake, github/ and trakt/ prefixes)]
+    lake[(R2 activity-hub-lake, github/, trakt/, and instapaper/ prefixes)]
     site[bendrucker.me Publish entrypoint]
 
     cron --> extract
@@ -56,6 +61,10 @@ flowchart TB
     extract --> ratings
     history --> raw
     ratings --> raw
+    extract --> bookmarks
+    extract --> highlights
+    bookmarks --> raw
+    highlights --> raw
     search --> raw
     contrib --> raw
     raw --> normalize --> d1
@@ -65,7 +74,7 @@ flowchart TB
 
 #### Worker
 
-The cron runs extraction, normalization, and publishing in one invocation. There is no queue between the stages because the incremental run is a handful of requests: one windowed search per event type plus one `contributionsCollection` call for the current year, then a Trakt history window and the ratings list. A backfill is larger and runs from an admin route or a script against the same code path, paged so no single invocation runs past its wall clock.
+The cron runs extraction, normalization, and publishing in one invocation. There is no queue between the stages because the incremental run is a handful of requests: one windowed search per event type plus one `contributionsCollection` call for the current year, then a Trakt history window and the ratings list, then one Instapaper change listing and the highlights of what changed. A backfill is larger and runs from an admin route or a script against the same code path, paged so no single invocation runs past its wall clock.
 
 #### Raw Storage
 
@@ -78,6 +87,7 @@ raw/
   contributions/{window}/{fetched_at}.json                                      # 2015, 2015-Q3, 2015-07, 2015-07-14, 2015-07-14T00--2015-07-14T12, or 2015-07-14T00--2015-07-14T01
   contribution-events/{kind}/{window}/{fetched_at}/{page}.json                  # kind as in search, window as in contributions
   trakt/{kind}/{window}/{fetched_at}/{page}.json                                # kind is trakt-history or trakt-ratings
+  instapaper/{kind}/{window}/{fetched_at}/{page}.json                           # instapaper-bookmarks by changes or folders, instapaper-highlights by bookmark ID
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -90,7 +100,7 @@ Upserts are keyed on GitHub's node ID, so re-normalizing the same page changes n
 
 #### Lake
 
-A nightly build reads D1 and writes Snappy Parquet in the `activity-hub-lake` bucket, one file set per table, under a prefix per source: `github/v1/` and `trakt/v1/`. The build is a full rebuild rather than an incremental merge, which is affordable because the corpus is tens of thousands of rows rather than millions of telemetry samples.
+A nightly build reads D1 and writes Snappy Parquet in the `activity-hub-lake` bucket, one file set per table, under a prefix per source: `github/v1/`, `trakt/v1/`, and `instapaper/v1/`. The build is a full rebuild rather than an incremental merge, which is affordable because the corpus is tens of thousands of rows rather than millions of telemetry samples.
 
 Sharing Activity Hub's bucket is deliberate. A query that asks which weeks had both high mileage and high review volume is one DuckDB session over two prefixes, and any other arrangement makes it a data transfer problem.
 
@@ -124,7 +134,7 @@ Commits are per-repository daily counts because that is the finest grain `contri
 
 #### Operational Tables
 
-`sync_state` is a key/value table. One key per event type holds the last window normalized successfully, and `updated_at` says when. The watermark advances only after the pages are in R2 and the rows are in D1. A failed run re-reads its window instead of skipping past it.
+`sync_state` is a key/value table. One key per kind holds the last window normalized successfully, and `updated_at` says when. The watermark advances only after the pages are in R2 and the rows are in D1. A failed run re-reads its window instead of skipping past it.
 
 `sync_runs` holds one row per extraction attempt, written before the work starts so a run that dies mid-flight reads as one that never finished. It carries the kind, the window, page and row counts, whether the window truncated, an error, and a note the contributions cross-check writes when GitHub's yearly total disagrees with the event tables. `crawl_units` is the backfill frontier: one row per window with its parent and a status of `pending`, `done`, `split`, or `irreducible`. A unit is done only once its pages are in R2 and its rows are in D1. One the budget interrupts stays pending and restarts from its first page. `lake_builds` is that shape for the nightly build, carrying per-table row counts as JSON. `/admin/sync` reports the newest of each.
 
@@ -251,9 +261,9 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 ## Operations
 
-- The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year, then reads [Trakt](#trakt) history and ratings.
+- The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year, then reads [Trakt](#trakt) history and ratings, then runs an [Instapaper](#instapaper) pass.
 - A second cron rebuilds the lake at 09:30 UTC. It sits off the hour so it never shares an instant with a sync invocation, and `scheduled` tells the two apart by the cron expression.
-- `GITHUB_TOKEN`, `TRAKT_CLIENT_ID`, and `ADMIN_TOKEN` are Worker secrets, set with `wrangler secret put`.
+- `GITHUB_TOKEN`, `TRAKT_CLIENT_ID`, `INSTAPAPER_ACCESS_TOKEN`, and `ADMIN_TOKEN` are Worker secrets, set with `wrangler secret put`.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
 - The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off. Search hides it, and the totals still count it. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
@@ -271,6 +281,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - The cutover has two writers on the site's code page. Retiring the site's sync belongs in the same change that turns on publishing.
 - A play deleted on Trakt stays in `trakt_plays`. History lists what exists, and nothing compares D1 against it. A rating removed on Trakt stays in `trakt_ratings` the same way. The full re-read every hour would make reconciling them cheap, but nothing does.
 - Trakt's history filter reads `watched_at`. A play logged today with a date in a prior year falls outside every hourly window and the nightly re-walk of the current year. It lands only through `bun run backfill <url> trakt-history --from <that year>-01`.
+- [Gaps](#gaps) lists what the Instapaper sync leaves out.
 
 ## Trakt
 
@@ -308,9 +319,65 @@ Trakt documents 500 unauthenticated GET requests every five minutes per applicat
 
 History backfills in yearly `crawl_units` windows, from the year of `from` or, without it, the year of the oldest play. Finding the oldest play takes two requests: page 1 for the page count, then the last page, whose last item is the oldest play. Both archive under the window `earliest`. A later call finds the years already enqueued and skips the discovery. Trakt has no result cap, so a year never splits. A ratings backfill is one full read.
 
+## Instapaper
+
+Instapaper is the third source: every bookmark across Home, the Archive, and my own folders, with its highlights and the note on each. The tables are shaped so a later feed can select liked bookmarks with their notes in one join.
+
+| Table                   | Columns                                                                                                                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instapaper_bookmarks`  | Bookmark ID, url, title, description, image, author, article published at, saved at, liked, archived, folder ID, progress, progress at, private source, category, tags, deleted at |
+| `instapaper_highlights` | Highlight ID, bookmark ID, text, note, position, created at                                                                                                                        |
+| `instapaper_folders`    | Folder ID, title, slug, position, public                                                                                                                                           |
+
+#### Access
+
+The sync calls API v2 through `instapaper-api`, Instapaper's TypeScript SDK. Every request carries a bearer token. `INSTAPAPER_ACCESS_TOKEN` is a personal access token generated for my own account on the [Applications page](https://www.instapaper.com/developers/applications). It doesn't expire. The cron skips Instapaper while it is unset.
+
+The SDK hands back parsed JSON that nothing has checked. The Worker gives it a `fetch` that keeps each response's bytes, status, and `Retry-After`. Those bytes go to R2 as received and validate against zod schemas, the same parse a replay runs. The request cap admits each call before the SDK sends it.
+
+#### Change Listing
+
+`GET /bookmarks?since=` returns every bookmark changed since a Unix timestamp across Home, the Archive, and every folder, with `deleted_ids` for those deleted. Changed bookmarks and deleted IDs share a page of up to 500, so the offset advances by both and a short page ends the read. A returned bookmark upserts and clears `deleted_at`. A deleted ID sets `deleted_at`. Nothing in the read writes to the account.
+
+#### Hourly Pass
+
+The pass reads `GET /folders`, then the change listing from five minutes before the `instapaper-bookmarks` watermark, which absorbs clock drift between the Worker and Instapaper. Every bookmark it returned has its highlights unit put back to pending. The watermark takes the pass's start once the listing lands, and until a backfill sets it, the pass is skipped. What the cap leaves drains the bookmarks frontier, then the highlights frontier.
+
+#### Highlights
+
+`GET /bookmarks/{id}/highlights` returns a bookmark's complete highlight list, so a highlight D1 holds that the list omits was deleted. `instapaper-highlights` runs only as frontier units and has no watermark. A read that fails without a limit behind it settles its unit `irreducible`, so one bookmark cannot hold the frontier. The unit goes back to pending when the bookmark next comes back changed.
+
+#### Backfill
+
+```sh
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=instapaper-bookmarks"
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=instapaper-highlights"
+```
+
+A bookmarks backfill reads the folders, then enqueues one unit: the change listing from `since=1`, which covers the whole account. Once it lands, the watermark takes its fetch time, every bookmark it returned has its highlights queued, and the hourly pass takes over. A limit mid-read leaves the unit pending, and the next call reads it again from the first page. A highlights backfill enqueues every bookmark not known to be deleted, one request each. Instapaper has no date windows to crawl, so `from` is ignored.
+
+#### Rate Limit
+
+Instapaper documents a rate limit without a number and answers 429 past it. `RATE_CAP_INSTAPAPER` caps one invocation at 50 requests, cron or backfill. A 429 stops the run with `resumeAt` from `Retry-After`, or an hour when there is none. Instapaper runs record `cost` 0, so the spend ledger stays GitHub's. A highlights backfill of 5,000 bookmarks is 5,000 requests, spread over 100 capped calls.
+
+#### Replay
+
+`replayInstapaper` rebuilds the three tables from `raw/instapaper/`. A deletion on one page can name a bookmark an earlier page upserted, so pages apply in fetch order, and each run stamps its own time to keep that order. A page archived as the failure that stopped its run never reached D1, and the replay skips it.
+
+#### Gaps
+
+- A highlight added, or a note edited, reaches D1 only if it marks the bookmark changed. Otherwise it waits for the next highlights read of that bookmark.
+- The backfill's listing restarts from the first page after a limit. At 50 requests of 500 items, one invocation reads 25,000 bookmarks and deleted IDs, so a larger account needs a higher `RATE_CAP_INSTAPAPER` for the backfill to finish.
+- The offset pages a set that can change mid-read. A bookmark that shifts across a page boundary can be skipped, and the next pass reads it again because the watermark holds the read's start.
+- Each hourly pass archives two pages, the folders and one change page, about 17,500 small objects a year. The bucket stays small in bytes.
+
+Four questions stay open until a live check with the real token: whether `since=1` returns the whole account, whether a new highlight or an edited note marks its bookmark changed, whether a 429 carries `Retry-After`, and what a highlights read answers for a deleted bookmark.
+
 ## Visibility
 
-The hub reads public activity only. `GITHUB_TOKEN` is a classic personal access token with no scopes, so GitHub filters private repositories out before any response reaches the hub. Nothing private is stored, archived, or published, and no layer downstream has a redaction path to get wrong.
+The hub reads public GitHub activity only. `GITHUB_TOKEN` is a classic personal access token with no scopes, so GitHub filters private repositories out before any response reaches the hub. Nothing private from GitHub is stored, archived, or published, and no layer downstream has a redaction path to get wrong.
+
+Instapaper is the exception. Bookmarks, highlights, and notes are private reading history, and they land in D1, the raw bucket, and the lake under `instapaper/v1/`. Nothing publishes them. A feed built from them would need its own decision about what leaves the account.
 
 Totals understate real activity by `restrictedContributionsCount`. Reversing the choice means a token with `repo` scope, a full backfill, and a filter at publish.
 

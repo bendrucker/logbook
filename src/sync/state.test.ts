@@ -53,6 +53,8 @@ describe("readWatermarks", () => {
       "review-contributions": null,
       "trakt-history": null,
       "trakt-ratings": null,
+      "instapaper-bookmarks": null,
+      "instapaper-highlights": null,
     });
   });
 
