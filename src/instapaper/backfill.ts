@@ -19,8 +19,6 @@ export interface InstapaperInvocationOptions extends Omit<InstapaperOptions, "re
   now?: Date;
 }
 
-// Every listing the account has: the built-in folders, each folder of the
-// user's own, and the starred view across them.
 export async function listings(db: D1Database): Promise<Listing[]> {
   const folders = await userFolderIds(db);
   return [

@@ -16,13 +16,10 @@ import {
 } from "./store";
 import { unhandled } from "../unhandled";
 
-// One folder's listing: a built-in folder, the starred view, or a folder of
-// the user's own.
 export type Listing =
   | { folder: "unread" | "archive" | "starred" }
   | { folder: "folder"; folderId: number };
 
-// The window a listing's runs and pages are recorded under.
 export function listingWindow(listing: Listing): string {
   return listing.folder === "folder" ? `folder-${listing.folderId}` : listing.folder;
 }
@@ -111,7 +108,7 @@ export interface ListingRequest {
 
 export interface ListingApplied {
   rowsChanged: number;
-  // What the page returned, whose highlights may have moved with them.
+  // IDs of the bookmarks the page returned, whose highlights may have changed.
   bookmarkIds: number[];
 }
 

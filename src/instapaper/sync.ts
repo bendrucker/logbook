@@ -60,7 +60,7 @@ export function instapaperCredentials(env: Env): Credentials {
 
 export interface InstapaperSyncOptions extends Omit<InstapaperOptions, "requests"> {
   now?: Date;
-  // Shared by every run one invocation makes, so the cap spans them all.
+  // Shared by every run in one invocation.
   requests: RequestCap;
 }
 
@@ -93,7 +93,7 @@ export function syncFolders(env: Env, options: InstapaperSyncOptions): Promise<S
 
 // A delta sends every bookmark D1 places in the folder with its hash, so only
 // new and changed bookmarks come back and `delete_ids` names the ones that
-// left. A full read sends nothing and archives the whole window.
+// left.
 export async function syncListing(
   env: Env,
   listing: Listing,

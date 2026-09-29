@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { authorize, percentEncode } from "./oauth";
 
-// Twitter's published walkthrough of signing one request, which exercises a
-// query parameter, a body with reserved characters, and a token.
+// Twitter's published walkthrough of signing one request.
 const published = {
   url: new URL("https://api.twitter.com/1.1/statuses/update.json?include_entities=true"),
   body: new URLSearchParams({ status: "Hello Ladies + Gentlemen, a signed OAuth request!" }),

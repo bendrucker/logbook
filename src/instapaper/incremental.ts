@@ -16,9 +16,8 @@ import {
   syncListing,
 } from "./sync";
 
-// One delta per listing, then whatever the cap leaves goes to the frontier.
-// A cap or a 1040 belongs to the application rather than to one listing, so
-// the first stop ends the invocation.
+// A cap or a 1040 applies to the whole application, so the first stop ends the
+// invocation.
 export async function syncInstapaper(
   env: Env,
   options: InstapaperInvocationOptions = {},

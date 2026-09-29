@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
-// Trades an Instapaper login for the access token and secret the Worker signs
-// with, through xAuth. The password goes to Instapaper once, from memory, and
-// Instapaper's terms forbid keeping it, so nothing here writes it anywhere.
-// The token stays valid until the password changes or access is revoked.
+// Trades an Instapaper login for the Worker's access token and secret through
+// xAuth. The password goes to Instapaper once and is never stored, since
+// Instapaper's terms forbid keeping it.
 
 import { once } from "node:events";
 import { z } from "zod";

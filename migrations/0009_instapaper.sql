@@ -24,7 +24,6 @@ CREATE TABLE instapaper_bookmarks (
   folder TEXT,
   folder_id INTEGER,
   progress REAL NOT NULL,
-  -- Null when progress was never recorded.
   progress_at TEXT,
   -- The label of a private source such as email, whose url does not resolve.
   private_source TEXT,
@@ -54,7 +53,6 @@ CREATE TABLE instapaper_highlights (
   highlight_id INTEGER PRIMARY KEY,
   bookmark_id INTEGER NOT NULL,
   text TEXT NOT NULL,
-  -- What I wrote about the passage.
   note TEXT,
   position INTEGER NOT NULL,
   created_at TEXT NOT NULL
