@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   apiError,
   bookmark,
+  changes,
   clearSecrets,
   folder,
+  folders,
   highlight,
-  json,
-  listing,
+  highlights,
   route,
   setSecrets,
   stubInstapaper,
@@ -39,9 +40,9 @@ async function units(kind: string): Promise<Record<string, unknown>[]> {
 }
 
 describe("syncInstapaper", () => {
-  it("does nothing while a secret is missing", async () => {
+  it("does nothing while the token is missing", async () => {
     clearSecrets(env);
-    const stub = stubInstapaper(() => json([]));
+    const stub = stubInstapaper(() => folders());
 
     await syncInstapaper(env, { fetch: stub.fetch, now: NOW });
 
@@ -50,42 +51,37 @@ describe("syncInstapaper", () => {
 
   it("leaves the first read to a backfill, still draining highlights", async () => {
     await enqueue(env.DB, "instapaper-highlights", ["5"], EARLIER);
-    const stub = stubInstapaper(() => json([highlight(1, 5)]));
+    const stub = stubInstapaper(() => highlights(highlight(1, 5)));
 
     await syncInstapaper(env, { fetch: stub.fetch, now: NOW });
 
-    expect(stub.calls.map(route)).toEqual(["/api/1.1/bookmarks/5/highlights"]);
+    expect(stub.calls.map(route)).toEqual(["highlights:5"]);
     expect(await readWatermark(env.DB, "instapaper-bookmarks")).toBeNull();
   });
 
-  it("reads each listing's delta, then the highlights of what changed", async () => {
+  it("reads changes from just behind the watermark, then the highlights of what changed", async () => {
     await advance(env.DB, "instapaper-bookmarks", EARLIER);
     const stub = stubInstapaper((call) => {
       switch (route(call)) {
-        case "/api/1/folders/list":
-          return json([folder(7, "Essays")]);
-        case "list:unread":
-          return listing([bookmark(1)]);
-        case "list:7":
-          return listing([bookmark(2)]);
-        case "list:starred":
-          return listing([bookmark(1, { starred: "1" })]);
+        case "/api/2/folders":
+          return folders(folder(7, "Essays"));
+        case "/api/2/bookmarks":
+          return changes([bookmark(1), bookmark(2, { folder_id: 7 })]);
         default:
-          return call.path.endsWith("/highlights") ? json([]) : listing([]);
+          return highlights();
       }
     });
 
     await syncInstapaper(env, { fetch: stub.fetch, now: NOW });
 
     expect(stub.calls.map(route)).toEqual([
-      "/api/1/folders/list",
-      "list:unread",
-      "list:archive",
-      "list:7",
-      "list:starred",
-      "/api/1.1/bookmarks/1/highlights",
-      "/api/1.1/bookmarks/2/highlights",
+      "/api/2/folders",
+      "/api/2/bookmarks",
+      "highlights:1",
+      "highlights:2",
     ]);
+    // Five minutes before 11:00.
+    expect(stub.calls[1]?.query.since).toBe(String(Date.parse(EARLIER) / 1000 - 300));
     expect((await readWatermark(env.DB, "instapaper-bookmarks"))?.window).toBe(NOW.toISOString());
     expect(await units("instapaper-highlights")).toEqual([
       { window: "1", status: "done" },
@@ -93,24 +89,25 @@ describe("syncInstapaper", () => {
     ]);
   });
 
-  it("stops at the first limit and leaves the watermark where it was", async () => {
+  it("stops at a limit and leaves the watermark where it was", async () => {
     await advance(env.DB, "instapaper-bookmarks", EARLIER);
+    const full = Array.from({ length: 500 }, (_, index) => bookmark(index + 1));
     const stub = stubInstapaper((call) => {
-      switch (route(call)) {
-        case "/api/1/folders/list":
-          return json([]);
-        case "list:unread":
-          return listing([bookmark(1)]);
-        default:
-          return apiError(1040, "Rate-limit exceeded");
+      if (route(call) === "/api/2/folders") {
+        return folders();
       }
+      return call.query.offset === "0" ? changes(full) : apiError(429, "Rate limit exceeded");
     });
 
     await syncInstapaper(env, { fetch: stub.fetch, now: NOW });
 
-    expect(stub.calls.map(route)).toEqual(["/api/1/folders/list", "list:unread", "list:archive"]);
+    expect(stub.calls.map(route)).toEqual([
+      "/api/2/folders",
+      "/api/2/bookmarks",
+      "/api/2/bookmarks",
+    ]);
     expect((await readWatermark(env.DB, "instapaper-bookmarks"))?.window).toBe(EARLIER);
     // What landed before the stop still has its highlights read next time.
-    expect(await units("instapaper-highlights")).toEqual([{ window: "1", status: "pending" }]);
+    expect(await units("instapaper-highlights")).toHaveLength(500);
   });
 });

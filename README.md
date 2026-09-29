@@ -2,7 +2,7 @@
 
 System of record for the personal data I pull from APIs on a schedule. A cron-driven Worker polls a source, archives every response page in R2, normalizes it into D1, and publishes one row per event to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me).
 
-Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts from its GraphQL API. [Instapaper](#instapaper) supplies bookmarks, highlights, and notes from its Full API. Other simple polled APIs can join them. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
+Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts from its GraphQL API. [Instapaper](#instapaper) supplies bookmarks, highlights, and notes from its API v2. Other simple polled APIs can join them. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
 
 ## Why
 
@@ -27,7 +27,7 @@ flowchart TB
         lakecron[Nightly lake build]
     end
 
-    instapaper[Instapaper Full API]
+    instapaper[Instapaper API v2]
     lake[(R2 activity-hub-lake, github/ and instapaper/ prefixes)]
     site[bendrucker.me Publish]
 
@@ -60,7 +60,7 @@ GitHub rows are one per event, at the grain GitHub hands over without crawling e
 | `issues`                | One issue I opened: repository, number, title, created at, closed at, state, comment count                                                            |
 | `commit_days`           | One day of commits for one repository: repository, day, commit count                                                                                  |
 | `repositories`          | One repository the event tables join to: owner, name, description, url, stars, primary language, created at, fork, visibility                         |
-| `instapaper_bookmarks`  | One bookmark: url, title, description, saved at, starred, folder, progress, tags, and when it left its folder's listing or was found deleted          |
+| `instapaper_bookmarks`  | One bookmark: url, title, author, saved at, liked, archived, folder, progress, tags, and when it was deleted                                          |
 | `instapaper_highlights` | One highlight: bookmark, text, note, position, created at                                                                                             |
 | `instapaper_folders`    | One folder of my own: title, slug, position, public                                                                                                   |
 
@@ -103,16 +103,16 @@ Each contributions year is checked against the event tables for that year. A dis
 
 ## Instapaper
 
-The same hourly cron reads Instapaper after GitHub settles. It lists my folders, then asks each listing (Unread, Archive, each folder, Starred) for what changed since D1's copy, sending the bookmarks D1 holds with their hashes. Bookmarks that come back changed have their highlights requeued. Pages archive under `raw/instapaper/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_INSTAPAPER` caps the requests one invocation sends, and error 1040 stops it and reports `resumeAt`.
+The same hourly cron reads Instapaper after GitHub settles, through Instapaper's `instapaper-api` SDK. It lists my folders, then reads every bookmark changed across the account since the last pass, with the IDs of those deleted. Bookmarks that come back changed have their highlights requeued. Pages archive under `raw/instapaper/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_INSTAPAPER` caps the requests one invocation sends, and a 429 stops it and reports `resumeAt`.
 
-A backfill reads each listing whole, then every bookmark's highlights:
+A backfill reads the whole account's bookmarks in one change listing, then every bookmark's highlights:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=instapaper-bookmarks"
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=instapaper-highlights"
 ```
 
-Instapaper lists at most the newest 500 bookmarks per folder and has no cursor, so an older archive is out of reach. [docs/design.md](docs/design.md#gaps) covers that and the other gaps: deletions, unstars past 500, and the free tier.
+[docs/design.md](docs/design.md#gaps) covers the gaps: highlight edits on an unchanged bookmark, the backfill's size per invocation, and offset paging.
 
 ## Lake
 
@@ -126,18 +126,15 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/lake"
 
 ## Secrets
 
-| Secret                       | Location                              | Consumer                                   |
-| ---------------------------- | ------------------------------------- | ------------------------------------------ |
-| `GITHUB_TOKEN`               | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request               |
-| `INSTAPAPER_CONSUMER_KEY`    | Worker secret (`wrangler secret put`) | Every Instapaper request's OAuth signature |
-| `INSTAPAPER_CONSUMER_SECRET` | Worker secret (`wrangler secret put`) | Every Instapaper request's OAuth signature |
-| `INSTAPAPER_ACCESS_TOKEN`    | Worker secret (`wrangler secret put`) | Every Instapaper request's OAuth signature |
-| `INSTAPAPER_ACCESS_SECRET`   | Worker secret (`wrangler secret put`) | Every Instapaper request's OAuth signature |
-| `ADMIN_TOKEN`                | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes            |
+| Secret                    | Location                              | Consumer                        |
+| ------------------------- | ------------------------------------- | ------------------------------- |
+| `GITHUB_TOKEN`            | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request    |
+| `INSTAPAPER_ACCESS_TOKEN` | Worker secret (`wrangler secret put`) | Every Instapaper request        |
+| `ADMIN_TOKEN`             | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes |
 
 The GitHub token is a classic personal access token with no scopes, so the hub sees and publishes public activity only. [docs/design.md](docs/design.md#visibility) records the decision.
 
-The Instapaper access token comes from xAuth, once. `bun run instapaper:login` loads the consumer key and secret from `.dev.vars`, prompts for the Instapaper login with the password hidden, and prints `INSTAPAPER_ACCESS_TOKEN` and `INSTAPAPER_ACCESS_SECRET` to store. The password is never written anywhere. Without all four the cron skips Instapaper and an Instapaper backfill answers 503.
+The Instapaper access token is a personal access token, generated for my own account on the [Applications page](https://www.instapaper.com/developers/applications). It doesn't expire. Without it the cron skips Instapaper and an Instapaper backfill answers 503.
 
 `ADMIN_TOKEN` is optional. `/admin/sync`, `/admin/backfill`, and `/admin/lake` answer 404 while it is unset. A deployment that never sets one exposes no admin surface.
 
@@ -155,18 +152,17 @@ cp .dev.vars.example .dev.vars
 bun run dev
 ```
 
-`wrangler dev` reads `GITHUB_TOKEN`, the `INSTAPAPER_*` secrets, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
+`wrangler dev` reads `GITHUB_TOKEN`, `INSTAPAPER_ACCESS_TOKEN`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
 
-| Command                    | What it does                                   |
-| -------------------------- | ---------------------------------------------- |
-| `bun run dev`              | Runs the Worker locally                        |
-| `bun run test`             | Runs the test suite                            |
-| `bun run typecheck`        | Type checks without emitting                   |
-| `bun run lint`             | Lints                                          |
-| `bun run format`           | Formats                                        |
-| `bun run types`            | Regenerates Worker types from `wrangler.jsonc` |
-| `bun run backfill`         | Walks `POST /admin/backfill` to completion     |
-| `bun run instapaper:login` | Trades an Instapaper login for an access token |
+| Command             | What it does                                   |
+| ------------------- | ---------------------------------------------- |
+| `bun run dev`       | Runs the Worker locally                        |
+| `bun run test`      | Runs the test suite                            |
+| `bun run typecheck` | Type checks without emitting                   |
+| `bun run lint`      | Lints                                          |
+| `bun run format`    | Formats                                        |
+| `bun run types`     | Regenerates Worker types from `wrangler.jsonc` |
+| `bun run backfill`  | Walks `POST /admin/backfill` to completion     |
 
 ## Status
 

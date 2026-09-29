@@ -2,7 +2,7 @@
 
 Logbook owns the personal data I pull from simple polled APIs. Webhooks and file decoding stay in [Activity Hub](https://github.com/bendrucker/activity-hub).
 
-Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts through its GraphQL API. [Instapaper](#instapaper) supplies bookmarks, highlights, and the notes on them through its Full API. Logbook archives every response page in R2, normalizes them into D1, publishes a GitHub feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. Most of it describes GitHub, the first source. The [README](../README.md) is the short version.
+Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts through its GraphQL API. [Instapaper](#instapaper) supplies bookmarks, highlights, and the notes on them through its API v2. Logbook archives every response page in R2, normalizes them into D1, publishes a GitHub feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. Most of it describes GitHub, the first source. The [README](../README.md) is the short version.
 
 ## Goals
 
@@ -31,8 +31,8 @@ flowchart TB
         contrib[contributionsCollection]
     end
 
-    subgraph ip [Instapaper Full API]
-        bookmarks[bookmarks list]
+    subgraph ip [Instapaper API v2]
+        bookmarks[bookmark changes]
         highlights[bookmark highlights]
     end
 
@@ -77,7 +77,7 @@ raw/
   search/{kind}/{window}/{fetched_at}/reviews/{pull request ID}/{page}.json     # review follow-up pages
   contributions/{window}/{fetched_at}.json                                      # 2015, 2015-Q3, 2015-07, 2015-07-14, 2015-07-14T00--2015-07-14T12, or 2015-07-14T00--2015-07-14T01
   contribution-events/{kind}/{window}/{fetched_at}/{page}.json                  # kind as in search, window as in contributions
-  instapaper/{kind}/{window}/{fetched_at}/{page}.json                           # instapaper-bookmarks by listing or folders, instapaper-highlights by bookmark ID
+  instapaper/{kind}/{window}/{fetched_at}/{page}.json                           # instapaper-bookmarks by changes or folders, instapaper-highlights by bookmark ID
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -253,7 +253,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 - The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year, then an [Instapaper](#instapaper) pass.
 - A second cron rebuilds the lake at 09:30 UTC. It sits off the hour so it never shares an instant with a sync invocation, and `scheduled` tells the two apart by the cron expression.
-- `GITHUB_TOKEN`, `ADMIN_TOKEN`, and the four `INSTAPAPER_*` credentials are Worker secrets, set with `wrangler secret put`.
+- `GITHUB_TOKEN`, `ADMIN_TOKEN`, and `INSTAPAPER_ACCESS_TOKEN` are Worker secrets, set with `wrangler secret put`.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
 - The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off. Search hides it, and the totals still count it. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
@@ -269,35 +269,35 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.
 - A public repository that goes private drops out of every later search, and the raw bucket becomes the only copy of its events.
 - The cutover has two writers on the site's code page. Retiring the site's sync belongs in the same change that turns on publishing.
-- Instapaper's listing reaches only the newest 500 bookmarks of each folder. [Gaps](#gaps) lists what that and the other Instapaper limits leave out.
+- [Gaps](#gaps) lists what the Instapaper sync leaves out.
 
 ## Instapaper
 
-Instapaper is the second source: every bookmark across Unread, Archive, Starred, and my own folders, with its highlights and the note on each. The tables are shaped so a later feed can select starred bookmarks with their notes in one join.
+Instapaper is the second source: every bookmark across Home, the Archive, and my own folders, with its highlights and the note on each. The tables are shaped so a later feed can select liked bookmarks with their notes in one join.
 
-| Table                   | Columns                                                                                                                                                   |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instapaper_bookmarks`  | Bookmark ID, url, title, description, saved at, starred, folder and folder ID, progress, progress at, private source, tags, hash, unlisted at, deleted at |
-| `instapaper_highlights` | Highlight ID, bookmark ID, text, note, position, created at                                                                                               |
-| `instapaper_folders`    | Folder ID, title, slug, position, public                                                                                                                  |
+| Table                   | Columns                                                                                                                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instapaper_bookmarks`  | Bookmark ID, url, title, description, image, author, article published at, saved at, liked, archived, folder ID, progress, progress at, private source, category, tags, deleted at |
+| `instapaper_highlights` | Highlight ID, bookmark ID, text, note, position, created at                                                                                                                        |
+| `instapaper_folders`    | Folder ID, title, slug, position, public                                                                                                                                           |
 
 #### Access
 
-The Full API signs every request with OAuth 1.0a over HMAC-SHA1, computed with Web Crypto. xAuth trades a username and password for an access token once. `bun run instapaper:login` reads the consumer key and secret from `.dev.vars`, prompts for the password without echo, and prints the token and secret to store. Instapaper's terms forbid keeping the password, and the script never writes it. The token lasts until the password changes or access is revoked. The Worker holds `INSTAPAPER_CONSUMER_KEY`, `INSTAPAPER_CONSUMER_SECRET`, `INSTAPAPER_ACCESS_TOKEN`, and `INSTAPAPER_ACCESS_SECRET`. The cron skips Instapaper while any of them is unset.
+The sync calls API v2 through `instapaper-api`, Instapaper's TypeScript SDK. Every request carries a bearer token. `INSTAPAPER_ACCESS_TOKEN` is a personal access token generated for my own account on the [Applications page](https://www.instapaper.com/developers/applications). It doesn't expire. The cron skips Instapaper while it is unset.
 
-#### Listing
+The SDK hands back parsed JSON that nothing has checked. The Worker gives it a `fetch` that keeps each response's bytes, status, and `Retry-After`. Those bytes go to R2 as received and validate against zod schemas, the same parse a replay runs. The request cap admits each call before the SDK sends it.
 
-`bookmarks/list` has no cursor. It answers the newest bookmarks of one folder, at most 500. `have` takes `id:hash` pairs for bookmarks the client already holds, and those whose hash still matches drop out of the answer. `delete_ids` names the `have` bookmarks outside the folder's window. The hash covers url, title, description, and reading progress. `have` also accepts progress, and Instapaper writes a newer one back to the account, so the sync sends hashes alone and never alters the account.
+#### Change Listing
+
+`GET /bookmarks?since=` returns every bookmark changed since a Unix timestamp across Home, the Archive, and every folder, with `deleted_ids` for those deleted. Changed bookmarks and deleted IDs share a page of up to 500, so the offset advances by both and a short page ends the read. A returned bookmark upserts and clears `deleted_at`. A deleted ID sets `deleted_at`. Nothing in the read writes to the account.
 
 #### Hourly Pass
 
-The pass reads `folders/list`, then one delta per listing: Unread, Archive, each of my folders, and Starred. Each sends as `have` every bookmark D1 places in that listing. A returned bookmark upserts. A folder listing places it there and clears `unlisted_at`. The starred listing sets `starred` and leaves the folder alone. `delete_ids` from a folder listing set `unlisted_at` on the bookmarks D1 still places in that folder, so a bookmark another listing already moved keeps its new place. From the starred listing they unstar, but only while `have` plus the returned bookmarks fit in 500.
-
-Every bookmark the pass returned has its highlights unit put back to pending. What the cap leaves drains the bookmarks frontier, then the highlights frontier. The `instapaper-bookmarks` watermark takes the pass's start once every listing lands. Until a backfill sets it, the pass is skipped.
+The pass reads `GET /folders`, then the change listing from five minutes before the `instapaper-bookmarks` watermark, which absorbs clock drift between the Worker and Instapaper. Every bookmark it returned has its highlights unit put back to pending. The watermark takes the pass's start once the listing lands, and until a backfill sets it, the pass is skipped. What the cap leaves drains the bookmarks frontier, then the highlights frontier.
 
 #### Highlights
 
-`POST /api/1.1/bookmarks/{id}/highlights` returns a bookmark's complete highlight list, so a highlight D1 holds that the list omits was deleted. Error 1241 on that read means the bookmark itself is gone, and it sets `deleted_at`. `instapaper-highlights` runs only as frontier units and has no watermark. The listing's own `highlights` array lands too, but the documentation does not say which highlights it carries. A read that fails without a limit behind it settles its unit `irreducible`, so one bookmark cannot hold the frontier. The unit goes back to pending when the bookmark next comes back changed.
+`GET /bookmarks/{id}/highlights` returns a bookmark's complete highlight list, so a highlight D1 holds that the list omits was deleted. `instapaper-highlights` runs only as frontier units and has no watermark. A read that fails without a limit behind it settles its unit `irreducible`, so one bookmark cannot hold the frontier. The unit goes back to pending when the bookmark next comes back changed.
 
 #### Backfill
 
@@ -306,26 +306,24 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kin
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=instapaper-highlights"
 ```
 
-A bookmarks backfill reads `folders/list` and enqueues one unit per listing. A unit reads its folder whole. A full page leads to another that sends every bookmark read so far as `have`, which pages past the first 500 only if `have` works as a cursor. Documented behavior says it filters instead, so the second page comes back empty and the unit settles `irreducible`. Twenty pages bound a read if it does page. Once no unit is pending, the watermark takes the earliest unit's fetch time and the hourly pass takes over. A highlights backfill enqueues every bookmark not known to be deleted, one request each. Instapaper lists by folder rather than date, so `from` is ignored.
+A bookmarks backfill reads the folders, then enqueues one unit: the change listing from `since=1`, which covers the whole account. Once it lands, the watermark takes its fetch time, every bookmark it returned has its highlights queued, and the hourly pass takes over. A limit mid-read leaves the unit pending, and the next call reads it again from the first page. A highlights backfill enqueues every bookmark not known to be deleted, one request each. Instapaper has no date windows to crawl, so `from` is ignored.
 
 #### Rate Limit
 
-The documentation names error 1040 for a rate limit and gives no number. `RATE_CAP_INSTAPAPER` caps one invocation at 50 requests, cron or backfill. A 1040 stops the run with `resumeAt` from `Retry-After`, or an hour when there is none. Instapaper runs record `cost` 0, so the spend ledger stays GitHub's. A highlights backfill of 5,000 bookmarks is 5,000 requests, spread over 100 capped calls.
+Instapaper documents a rate limit without a number and answers 429 past it. `RATE_CAP_INSTAPAPER` caps one invocation at 50 requests, cron or backfill. A 429 stops the run with `resumeAt` from `Retry-After`, or an hour when there is none. Instapaper runs record `cost` 0, so the spend ledger stays GitHub's. A highlights backfill of 5,000 bookmarks is 5,000 requests, spread over 100 capped calls.
 
 #### Replay
 
-`replayInstapaper` rebuilds the three tables from `raw/instapaper/`. A delta page's `delete_ids` mean what they meant against the tables when it was fetched, so pages apply in fetch order, and each run stamps its own time to keep that order. R2 custom metadata on each listing page records the mode and the size of `have`. A page archived as the failure that stopped its run never reached D1, and the replay skips it.
+`replayInstapaper` rebuilds the three tables from `raw/instapaper/`. A deletion on one page can name a bookmark an earlier page upserted, so pages apply in fetch order, and each run stamps its own time to keep that order. A page archived as the failure that stopped its run never reached D1, and the replay skips it.
 
 #### Gaps
 
-- A folder past 500 bookmarks shows its newest 500. Older archived bookmarks are out of reach unless `have` pages, and the backfill marks such a folder `irreducible` so the gap shows in `/admin/sync`. A folder of exactly 500 reads the same way, since its second page comes back just as empty.
-- No endpoint lists deletions. A deleted bookmark drops into `delete_ids` and reads as `unlisted_at`, the same as one moved to a folder the pass hasn't reached or one that aged out of the 500. `deleted_at` is set only when a highlights read answers 1241.
-- A highlight added, or a note edited, on a bookmark whose hash is unchanged waits for the next highlights read of that bookmark, unless the listing's `highlights` array carries it.
-- With more than 500 starred bookmarks, an unstar goes undetected.
-- The free tier limits highlight creation to five a month. The documentation does not limit reading the archive or the API on the free tier. If it does, the answer arrives as error 1041, which fails a listing run and settles each highlights unit it answers `irreducible`.
-- Each hourly pass archives a page per listing, about 40,000 small objects a year with a few folders. The bucket stays small in bytes.
+- A highlight added, or a note edited, reaches D1 only if it marks the bookmark changed. Otherwise it waits for the next highlights read of that bookmark.
+- The backfill's listing restarts from the first page after a limit. At 50 requests of 500 items, one invocation reads 25,000 bookmarks and deleted IDs, so a larger account needs a higher `RATE_CAP_INSTAPAPER` for the backfill to finish.
+- The offset pages a set that can change mid-read. A bookmark that shifts across a page boundary can be skipped, and the next pass reads it again because the watermark holds the read's start.
+- Each hourly pass archives two pages, the folders and one change page, about 17,500 small objects a year. The bucket stays small in bytes.
 
-Four questions stay open until a live check with the real token: whether `have` pages, what the listing's `highlights` array covers, how 1040 arrives, and whether the free tier answers 1041 anywhere the sync reads.
+Four questions stay open until a live check with the real token: whether `since=1` returns the whole account, whether a new highlight or an edited note marks its bookmark changed, whether a 429 carries `Retry-After`, and what a highlights read answers for a deleted bookmark.
 
 ## Visibility
 

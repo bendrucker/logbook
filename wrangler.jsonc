@@ -24,8 +24,8 @@
     "RATE_CAP_CRON": 40,
     "RATE_CAP_BACKFILL": 150,
     // Instapaper requests one invocation sends at most, cron or backfill.
-    // Instapaper documents a rate limit without a number and answers error
-    // 1040 past it, which stops the run until the next hour.
+    // Instapaper documents a rate limit without a number and answers 429 past
+    // it, which stops the run until `Retry-After` or the next hour.
     "RATE_CAP_INSTAPAPER": 50,
   },
   "triggers": {

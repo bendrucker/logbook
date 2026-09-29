@@ -6,6 +6,7 @@
       "name": "logbook",
       "dependencies": {
         "hyparquet-writer": "^0.16.9",
+        "instapaper-api": "1.0.0",
         "temporal-polyfill": "^1.0.5",
         "zod": "^4.5.4",
       },
@@ -386,6 +387,8 @@
     "hyparquet": ["hyparquet@1.30.0", "", {}, "sha512-HlvW+Luuo2RtvTzDnTJN4F2rXxKQMcmAVNnT1khytf1MR/vDS6ALeYyWwbU1X9rrOLLIG0fjRa0Y5q3XxvOXdA=="],
 
     "hyparquet-writer": ["hyparquet-writer@0.16.9", "", { "dependencies": { "hyparquet": "1.29.2" } }, "sha512-VZvH4Vq9lQwZa/+1y4YrEwF9+FAe5pED+mVN4AHflCoFk5LG2RemMHW9iwVlVqug7fO3ATwEMSG68cr3uZAkjQ=="],
+
+    "instapaper-api": ["instapaper-api@1.0.0", "", {}, "sha512-j42uRqifzLPXK/tdJj4fvwCCZLHcTbgxtfz69Pt2P4HvXyCajDt8i16WehU75oICe7d2CmybqeRL06ZGqBfMRQ=="],
 
     "kleur": ["kleur@4.1.5", "", {}, "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="],
 

@@ -2,60 +2,26 @@ import type { RequestCap } from "../request-cap";
 import type { InstapaperKind } from "../sync/kinds";
 import { MissingSecretError, recordRun, type Run, type SyncResult } from "../sync/run";
 import {
-  INVALID_BOOKMARK,
-  INVALID_FOLDER,
-  InstapaperApiError,
+  InstapaperClient,
   type InstapaperOptions,
   InstapaperResponseError,
-  instapaperPost,
-  LIST_LIMIT,
+  PAGE_SIZE,
 } from "./client";
-import type { Credentials } from "./oauth";
-import { archiveInstapaperPage, type ListingMode } from "./raw";
-import {
-  applyFolders,
-  applyHighlights,
-  applyListing,
-  type Listing,
-  type ListingApplied,
-  type ListingRequest,
-  listingFolderId,
-  listingWindow,
-} from "./rows";
-import { bookmarksListResponse, foldersResponse, highlightsResponse } from "./schema";
-import { type Known, knownInFolder, knownStarred, markDeleted } from "./store";
-import { unhandled } from "../unhandled";
-
-// A full read asks for the next page by sending what it has read so far as
-// `have`. The documentation describes `have` as a filter on the newest 500
-// rather than a cursor, in which case the second page comes back empty. Should
-// it page instead, this bounds a read at 10,000 bookmarks.
-export const FULL_READ_PAGES = 20;
+import { archiveInstapaperPage } from "./raw";
+import { applyChanges, applyFolders, applyHighlights } from "./rows";
 
 export const FOLDERS_WINDOW = "folders";
+export const CHANGES_WINDOW = "changes";
 
-const SECRETS = [
-  "INSTAPAPER_CONSUMER_KEY",
-  "INSTAPAPER_CONSUMER_SECRET",
-  "INSTAPAPER_ACCESS_TOKEN",
-  "INSTAPAPER_ACCESS_SECRET",
-] as const;
+// The earliest `since` the API accepts, which reads the whole account.
+export const EVERYTHING = new Date(1000);
 
-function secret(env: Env, name: (typeof SECRETS)[number]): string {
-  const value = env[name];
-  if (value === undefined || value === "") {
-    throw new MissingSecretError(name);
+export function instapaperToken(env: Env): string {
+  const token = env.INSTAPAPER_ACCESS_TOKEN;
+  if (token === undefined || token === "") {
+    throw new MissingSecretError("INSTAPAPER_ACCESS_TOKEN");
   }
-  return value;
-}
-
-export function instapaperCredentials(env: Env): Credentials {
-  return {
-    consumerKey: secret(env, "INSTAPAPER_CONSUMER_KEY"),
-    consumerSecret: secret(env, "INSTAPAPER_CONSUMER_SECRET"),
-    token: secret(env, "INSTAPAPER_ACCESS_TOKEN"),
-    tokenSecret: secret(env, "INSTAPAPER_ACCESS_SECRET"),
-  };
+  return token;
 }
 
 export interface InstapaperSyncOptions extends Omit<InstapaperOptions, "requests"> {
@@ -64,8 +30,13 @@ export interface InstapaperSyncOptions extends Omit<InstapaperOptions, "requests
   requests: RequestCap;
 }
 
-export interface ListingResult extends SyncResult {
+export interface ChangesResult extends SyncResult {
+  // Bookmarks the listing returned, whose highlights may have changed.
   bookmarkIds: number[];
+}
+
+function client(env: Env, options: InstapaperSyncOptions): InstapaperClient {
+  return new InstapaperClient(instapaperToken(env), options);
 }
 
 export function syncFolders(env: Env, options: InstapaperSyncOptions): Promise<SyncResult> {
@@ -76,149 +47,69 @@ export function syncFolders(env: Env, options: InstapaperSyncOptions): Promise<S
     FOLDERS_WINDOW,
     options,
     async (run) => {
-      const response = await instapaperPost(
-        instapaperCredentials(env),
-        "/api/1/folders/list",
-        {},
-        foldersResponse,
-        options,
-      );
+      const response = await client(env, options).folders();
       await archive(env, kind, FOLDERS_WINDOW, run, 1, response.body);
-      const rowsChanged = await applyFolders(env.DB, response.data, run.fetchedAt);
+      const rowsChanged = await applyFolders(env.DB, response.data.folders, run.fetchedAt);
       run.result = { ...run.result, pages: 1, rowsChanged };
     },
     (error, run) => archiveFailure(env, kind, FOLDERS_WINDOW, run, error),
   );
 }
 
-// A delta sends every bookmark D1 places in the folder with its hash, so only
-// new and changed bookmarks come back and `delete_ids` names the ones that
-// left.
-export async function syncListing(
+// Every bookmark changed since `since` across Home, the Archive, and every
+// folder, with the IDs of those deleted. Changed bookmarks and deleted IDs
+// share each page, so the offset advances by both and a short page is the
+// last.
+export async function syncChanges(
   env: Env,
-  listing: Listing,
-  mode: ListingMode,
+  since: Date,
   options: InstapaperSyncOptions,
-): Promise<ListingResult> {
+): Promise<ChangesResult> {
   const kind = "instapaper-bookmarks";
-  const window = listingWindow(listing);
   const bookmarkIds = new Set<number>();
+  const seconds = Math.max(1, Math.floor(since.getTime() / 1000));
 
   const result = await recordRun(
     env,
     kind,
-    window,
+    CHANGES_WINDOW,
     options,
     async (run) => {
-      const credentials = instapaperCredentials(env);
-      const known = mode === "delta" ? await knownFor(env.DB, listing) : [];
-      // The hash alone. Instapaper also takes progress in `have` and writes it
-      // back to the account when it is newer, which a mirror must never do.
-      let have = known.map((each) => `${each.bookmarkId}:${each.hash}`);
-      let page = 1;
+      const instapaper = client(env, options);
+      let offset = 0;
       for (;;) {
-        const request = { mode, have: have.length };
-        // oxlint-disable-next-line no-await-in-loop -- each page's `have` depends on the last
-        const applied = await readListingPage(
-          env,
-          listing,
-          credentials,
-          have,
-          request,
-          run,
-          page,
-          options,
-        );
-        const fresh = applied.bookmarkIds.filter((id) => !bookmarkIds.has(id));
-        for (const id of fresh) {
-          bookmarkIds.add(id);
-        }
-        run.result = {
-          ...run.result,
-          pages: page,
-          rowsChanged: run.result.rowsChanged + applied.rowsChanged,
-        };
-
-        if (mode === "delta") {
+        // oxlint-disable-next-line no-await-in-loop -- each page's offset depends on the last
+        const received = await readChangesPage(env, instapaper, seconds, offset, run, bookmarkIds);
+        if (received < PAGE_SIZE) {
           return;
         }
-        // Only a full page leads to another, so an empty one after it means
-        // `have` filtered the same 500 rather than paging past them, and the
-        // folder holds more than the listing reaches.
-        if (fresh.length === 0) {
-          run.result = { ...run.result, truncated: page > 1 };
-          return;
-        }
-        if (applied.bookmarkIds.length < LIST_LIMIT) {
-          return;
-        }
-        if (page === FULL_READ_PAGES) {
-          run.result = { ...run.result, truncated: true };
-          return;
-        }
-        have = [...bookmarkIds].map(String);
-        page += 1;
+        offset += received;
       }
     },
-    (error, run) => archiveFailure(env, kind, window, run, error),
+    (error, run) => archiveFailure(env, kind, CHANGES_WINDOW, run, error),
   );
 
   return { ...result, bookmarkIds: [...bookmarkIds] };
 }
 
-async function readListingPage(
+// Answers how many bookmarks and deleted IDs the page held.
+async function readChangesPage(
   env: Env,
-  listing: Listing,
-  credentials: Credentials,
-  have: readonly string[],
-  request: ListingRequest,
+  instapaper: InstapaperClient,
+  since: number,
+  offset: number,
   run: Run,
-  page: number,
-  options: InstapaperSyncOptions,
-): Promise<ListingApplied> {
-  const window = listingWindow(listing);
-  try {
-    const response = await instapaperPost(
-      credentials,
-      "/api/1/bookmarks/list",
-      { folder_id: listingFolderId(listing), limit: String(LIST_LIMIT), have: have.join(",") },
-      bookmarksListResponse,
-      options,
-    );
-    await archive(env, "instapaper-bookmarks", window, run, page, response.body, request);
-    return await applyListing(env.DB, listing, response.data, request, run.fetchedAt);
-  } catch (error) {
-    // A folder deleted since `folders/list` read it lists nothing, and its
-    // bookmarks turn up in the archive.
-    if (!(error instanceof InstapaperApiError) || error.code !== INVALID_FOLDER) {
-      throw error;
-    }
-    await archive(
-      env,
-      "instapaper-bookmarks",
-      window,
-      run,
-      page,
-      error.body,
-      request,
-      error.status,
-    );
-    return { rowsChanged: 0, bookmarkIds: [] };
+  bookmarkIds: Set<number>,
+): Promise<number> {
+  const page = run.result.pages + 1;
+  const response = await instapaper.changes(since, offset);
+  await archive(env, "instapaper-bookmarks", CHANGES_WINDOW, run, page, response.body);
+  const rowsChanged = await applyChanges(env.DB, response.data, run.fetchedAt);
+  for (const bookmark of response.data.bookmarks) {
+    bookmarkIds.add(bookmark.id);
   }
-}
-
-function knownFor(db: D1Database, listing: Listing): Promise<Known[]> {
-  switch (listing.folder) {
-    case "starred":
-      return knownStarred(db);
-    case "folder":
-      return knownInFolder(db, "folder", listing.folderId);
-    case "unread":
-    case "archive":
-      return knownInFolder(db, listing.folder, null);
-    default:
-      throw unhandled(listing);
-  }
+  run.result = { ...run.result, pages: page, rowsChanged: run.result.rowsChanged + rowsChanged };
+  return response.data.bookmarks.length + response.data.deleted_ids.length;
 }
 
 // A bookmark's highlights come one list per bookmark, complete, so the list
@@ -236,27 +127,10 @@ export function syncHighlights(
     window,
     options,
     async (run) => {
-      try {
-        const response = await instapaperPost(
-          instapaperCredentials(env),
-          `/api/1.1/bookmarks/${bookmarkId}/highlights`,
-          {},
-          highlightsResponse,
-          options,
-        );
-        await archive(env, kind, window, run, 1, response.body);
-        const rowsChanged = await applyHighlights(env.DB, bookmarkId, response.data);
-        run.result = { ...run.result, pages: 1, rowsChanged };
-      } catch (error) {
-        // An ID Instapaper no longer recognizes belongs to a deleted bookmark,
-        // which is an answer about the bookmark rather than a failed read.
-        if (!(error instanceof InstapaperApiError) || error.code !== INVALID_BOOKMARK) {
-          throw error;
-        }
-        await archive(env, kind, window, run, 1, error.body, undefined, error.status);
-        const rowsChanged = await markDeleted(env.DB, bookmarkId, run.fetchedAt);
-        run.result = { ...run.result, pages: 1, rowsChanged };
-      }
+      const response = await client(env, options).highlights(bookmarkId);
+      await archive(env, kind, window, run, 1, response.body);
+      const rowsChanged = await applyHighlights(env.DB, bookmarkId, response.data.highlights);
+      run.result = { ...run.result, pages: 1, rowsChanged };
     },
     (error, run) => archiveFailure(env, kind, window, run, error),
   );
@@ -269,8 +143,6 @@ function archive(
   run: Run,
   page: number,
   body: string,
-  listing?: ListingRequest,
-  status = 200,
 ): Promise<boolean> {
   return archiveInstapaperPage(env.RAW, {
     kind,
@@ -278,8 +150,7 @@ function archive(
     fetchedAt: run.fetchedAt,
     page,
     body,
-    status,
-    ...(listing === undefined ? {} : { listing }),
+    status: 200,
   });
 }
 

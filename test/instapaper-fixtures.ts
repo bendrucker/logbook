@@ -1,36 +1,32 @@
-// Instapaper API shapes as the Full API documents them. Nothing here has been
-// checked against a live response yet.
+// Instapaper API v2 shapes as its OpenAPI spec and SDK types describe them.
+// Nothing here has been checked against a live response yet.
 
-export const SECRETS = {
-  INSTAPAPER_CONSUMER_KEY: "consumer-key",
-  INSTAPAPER_CONSUMER_SECRET: "consumer-secret",
-  INSTAPAPER_ACCESS_TOKEN: "access-token",
-  INSTAPAPER_ACCESS_SECRET: "access-secret",
-} as const;
+export const TOKEN = "access-token";
 
 export function setSecrets(env: Env): void {
-  Object.assign(env, SECRETS);
+  env.INSTAPAPER_ACCESS_TOKEN = TOKEN;
 }
 
 export function clearSecrets(env: Env): void {
-  for (const name of Object.keys(SECRETS)) {
-    Reflect.deleteProperty(env, name);
-  }
+  Reflect.deleteProperty(env, "INSTAPAPER_ACCESS_TOKEN");
 }
 
 export interface BookmarkFixture {
-  type: "bookmark";
-  bookmark_id: number;
-  url: string;
-  title: string;
-  description: string;
+  id: number;
+  url: string | null;
+  title: string | null;
+  description: string | null;
+  image: string | null;
+  progress: { percentage: number; timestamp: number };
+  liked: boolean;
+  archived: boolean;
   time: number;
-  starred: "0" | "1";
-  private_source: string;
-  hash: string;
-  progress: number;
-  progress_timestamp: number;
-  tags: { id: number; name: string }[];
+  pubtime: number | null;
+  author: string | null;
+  folder_id: number | null;
+  tags: { id: number; name: string; slug: string; count: number; baton: null }[];
+  private_source: string | null;
+  category: number;
 }
 
 // 2026-09-01T00:00:00Z plus the ID in seconds, so a bookmark's save time is
@@ -39,25 +35,27 @@ const SAVED_BASE = 1_788_220_800;
 
 export function bookmark(id: number, overrides: Partial<BookmarkFixture> = {}): BookmarkFixture {
   return {
-    type: "bookmark",
-    bookmark_id: id,
+    id,
     url: `https://example.com/${id}`,
     title: `Article ${id}`,
-    description: "",
+    description: null,
+    image: null,
+    progress: { percentage: 0, timestamp: 0 },
+    liked: false,
+    archived: false,
     time: SAVED_BASE + id,
-    starred: "0",
-    private_source: "",
-    hash: `hash-${id}`,
-    progress: 0,
-    progress_timestamp: 0,
+    pubtime: null,
+    author: null,
+    folder_id: null,
     tags: [],
+    private_source: null,
+    category: 0,
     ...overrides,
   };
 }
 
 export interface HighlightFixture {
-  type: "highlight";
-  highlight_id: number;
+  id: number;
   bookmark_id: number;
   text: string;
   note: string | null;
@@ -71,8 +69,7 @@ export function highlight(
   overrides: Partial<HighlightFixture> = {},
 ): HighlightFixture {
   return {
-    type: "highlight",
-    highlight_id: id,
+    id,
     bookmark_id: bookmarkId,
     text: `Passage ${id}`,
     note: null,
@@ -83,19 +80,8 @@ export function highlight(
 }
 
 export function folder(id: number, title: string): Record<string, unknown> {
-  return {
-    type: "folder",
-    folder_id: id,
-    title,
-    slug: title.toLowerCase(),
-    display_title: title,
-    sync_to_mobile: 1,
-    position: id,
-    public: 0,
-  };
+  return { id, title, slug: title.toLowerCase(), position: id, public: false, count: 0 };
 }
-
-export const USER = { type: "user", user_id: 42, username: "ben@example.com" };
 
 export function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -105,30 +91,34 @@ export function json(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
-export function listing(
+export function changes(
   bookmarks: readonly BookmarkFixture[],
-  options: { highlights?: readonly HighlightFixture[]; deleteIds?: readonly number[] } = {},
+  deletedIds: readonly number[] = [],
 ): Response {
-  return json({
-    user: USER,
-    bookmarks,
-    highlights: options.highlights ?? [],
-    delete_ids: options.deleteIds ?? [],
-  });
+  return json({ bookmarks, total: bookmarks.length + deletedIds.length, deleted_ids: deletedIds });
 }
 
-export function apiError(code: number, message: string, init: ResponseInit = {}): Response {
-  return json([{ type: "error", error_code: code, message }], { status: 400, ...init });
+export function folders(...list: Record<string, unknown>[]): Response {
+  return json({ folders: list });
+}
+
+export function highlights(...list: HighlightFixture[]): Response {
+  return json({ highlights: list });
+}
+
+export function apiError(status: number, message: string, init: ResponseInit = {}): Response {
+  return json({ error: { code: status, message } }, { status, ...init });
 }
 
 export interface InstapaperCall {
+  method: string;
   path: string;
-  form: Record<string, string>;
+  query: Record<string, string>;
   authorization: string | null;
 }
 
-// Routes on the request rather than its order, since a sync reads its folders
-// in an order the test would otherwise restate.
+// Routes on the request rather than its order, since a sync reads in an order
+// the test would otherwise restate.
 export function stubInstapaper(respond: (call: InstapaperCall) => Response | Promise<Response>): {
   fetch: typeof globalThis.fetch;
   calls: InstapaperCall[];
@@ -136,9 +126,11 @@ export function stubInstapaper(respond: (call: InstapaperCall) => Response | Pro
   const calls: InstapaperCall[] = [];
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
+    const url = new URL(request.url);
     const call = {
-      path: new URL(request.url).pathname,
-      form: Object.fromEntries(await formOf(request)),
+      method: request.method,
+      path: url.pathname,
+      query: Object.fromEntries(url.searchParams),
       authorization: request.headers.get("Authorization"),
     };
     calls.push(call);
@@ -147,11 +139,8 @@ export function stubInstapaper(respond: (call: InstapaperCall) => Response | Pro
   return { fetch, calls };
 }
 
-// Decoded by hand, since workerd warns on `text()` over a form body.
-async function formOf(request: Request): Promise<URLSearchParams> {
-  return new URLSearchParams(new TextDecoder().decode(await request.arrayBuffer()));
-}
-
+// A highlights path names its bookmark, so a test routes on `highlights:<id>`.
 export function route(call: InstapaperCall): string {
-  return call.path === "/api/1/bookmarks/list" ? `list:${call.form.folder_id}` : call.path;
+  const match = /^\/api\/2\/bookmarks\/(\d+)\/highlights$/.exec(call.path);
+  return match === null ? call.path : `highlights:${match[1]}`;
 }

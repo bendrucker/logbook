@@ -77,7 +77,7 @@ export async function handleBackfill(request: Request, env: Env): Promise<Respon
 
   try {
     const from = url.searchParams.get("from");
-    // Instapaper lists by folder rather than by date, so it has no `from`.
+    // Instapaper reads the whole account in one listing, so it has no `from`.
     const result: BackfillResult = isInstapaperKind(kind)
       ? await backfillInstapaper(env, kind)
       : await backfill(env, kind, parseMonth(from ?? monthWindow(BACKFILL_START).key));

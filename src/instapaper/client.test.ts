@@ -1,56 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { apiError, json, stubInstapaper, USER } from "../../test/instapaper-fixtures";
+import { apiError, folder, folders, json, stubInstapaper } from "../../test/instapaper-fixtures";
 import { RequestCap, RequestCapReached } from "../request-cap";
-import {
-  InstapaperApiError,
-  InstapaperHttpError,
-  InstapaperRateLimited,
-  InstapaperValidationError,
-  instapaperPost,
-} from "./client";
-import { verifyCredentialsResponse } from "./schema";
+import { InstapaperClient, InstapaperRateLimited, InstapaperResponseError } from "./client";
 
-const CREDENTIALS = {
-  consumerKey: "consumer-key",
-  consumerSecret: "consumer-secret",
-  token: "access-token",
-  tokenSecret: "access-secret",
-};
-
-function verify(fetch: typeof globalThis.fetch, requests?: RequestCap) {
-  return instapaperPost(
-    CREDENTIALS,
-    "/api/1/account/verify_credentials",
-    { extra: "a b" },
-    verifyCredentialsResponse,
-    { fetch, ...(requests === undefined ? {} : { requests }) },
-  );
+function client(fetch: typeof globalThis.fetch, requests?: RequestCap): InstapaperClient {
+  return new InstapaperClient("access-token", {
+    fetch,
+    ...(requests === undefined ? {} : { requests }),
+  });
 }
 
-describe("instapaperPost", () => {
-  it("posts a signed form and validates the answer", async () => {
-    const stub = stubInstapaper(() => json([USER]));
+describe("InstapaperClient", () => {
+  it("sends the token as a bearer and keeps the bytes it validated", async () => {
+    const stub = stubInstapaper(() => folders(folder(7, "Essays")));
 
-    const response = await verify(stub.fetch);
+    const response = await client(stub.fetch).folders();
 
-    expect(response.data).toEqual([USER]);
-    expect(response.body).toBe(JSON.stringify([USER]));
-    expect(stub.calls).toEqual([
-      {
-        path: "/api/1/account/verify_credentials",
-        form: { extra: "a b" },
-        // oxlint-disable-next-line typescript/no-unsafe-assignment -- vitest types asymmetric matchers as `any`
-        authorization: expect.stringMatching(/^OAuth oauth_consumer_key="consumer-key", /),
-      },
+    expect(response.data.folders).toEqual([
+      { id: 7, title: "Essays", slug: "essays", position: 7, public: false },
     ]);
-    expect(stub.calls[0]?.authorization).toContain('oauth_token="access-token"');
-    expect(stub.calls[0]?.authorization).toMatch(/oauth_signature="[^"]+"$/);
+    expect(response.body).toBe(JSON.stringify({ folders: [folder(7, "Essays")] }));
+    expect(stub.calls).toEqual([
+      { method: "GET", path: "/api/2/folders", query: {}, authorization: "Bearer access-token" },
+    ]);
   });
 
-  it("keeps only the items of the type it asked for", async () => {
-    const stub = stubInstapaper(() => json([{ type: "meta" }, USER]));
+  it("pages the change listing by offset at the largest page size", async () => {
+    const stub = stubInstapaper(() => json({ bookmarks: [], total: 0 }));
 
-    expect((await verify(stub.fetch)).data).toEqual([USER]);
+    const response = await client(stub.fetch).changes(1_788_220_800, 500);
+
+    expect(response.data).toEqual({ bookmarks: [], deleted_ids: [] });
+    expect(stub.calls[0]?.query).toEqual({ since: "1788220800", limit: "500", offset: "500" });
   });
 
   it.each<{
@@ -60,58 +41,52 @@ describe("instapaperPost", () => {
     fields: object;
   }>([
     {
-      name: "reads an error array as an error whatever the status",
-      response: () => apiError(1241, "Invalid or missing bookmark_id", { status: 200 }),
-      expected: InstapaperApiError,
-      fields: { code: 1241, status: 200 },
-    },
-    {
-      name: "reads error 1040 as the rate limit, waiting as long as Retry-After says",
-      response: () =>
-        apiError(1040, "Rate-limit exceeded", { status: 400, headers: { "Retry-After": "120" } }),
+      name: "reads a 429 as the rate limit, waiting as long as Retry-After says",
+      response: () => apiError(429, "Rate limit exceeded", { headers: { "Retry-After": "120" } }),
       expected: InstapaperRateLimited,
-      fields: { retryAfterSeconds: 120 },
+      fields: { retryAfterSeconds: 120, status: 429 },
     },
     {
       name: "waits an hour on a rate limit that names no wait",
-      response: () => apiError(1040, "Rate-limit exceeded"),
+      response: () => apiError(429, "Rate limit exceeded"),
       expected: InstapaperRateLimited,
       fields: { retryAfterSeconds: 3600 },
     },
     {
       name: "waits an hour on an empty Retry-After",
-      response: () =>
-        apiError(1040, "Rate-limit exceeded", { status: 400, headers: { "Retry-After": "" } }),
+      response: () => apiError(429, "Rate limit exceeded", { headers: { "Retry-After": "" } }),
       expected: InstapaperRateLimited,
       fields: { retryAfterSeconds: 3600 },
     },
     {
-      name: "keeps the body of a failure that is not an error array",
+      name: "keeps the body of an error status",
       response: () => new Response("upstream down", { status: 503 }),
-      expected: InstapaperHttpError,
-      fields: { status: 503, body: "upstream down" },
+      expected: InstapaperResponseError,
+      fields: { name: "InstapaperApiError", status: 503, body: "upstream down" },
     },
     {
-      name: "refuses a 200 whose body is not JSON",
-      response: () => new Response("<html>", { status: 200 }),
-      expected: InstapaperValidationError,
-      fields: { status: 200 },
+      name: "refuses a 200 that does not match the schema",
+      response: () => json({ folders: [{ id: "seven" }] }),
+      expected: InstapaperResponseError,
+      fields: { name: "InstapaperValidationError", status: 200 },
     },
   ])("$name", async ({ response, expected, fields }) => {
     const stub = stubInstapaper(response);
 
-    const thrown = await verify(stub.fetch).catch((error: unknown) => error);
+    const thrown = await client(stub.fetch)
+      .folders()
+      .catch((error: unknown) => error);
 
     expect(thrown).toBeInstanceOf(expected);
     expect(thrown).toMatchObject(fields);
   });
 
   it("stops before sending a request past the cap", async () => {
-    const stub = stubInstapaper(() => json([USER]));
-    const requests = new RequestCap(1);
+    const stub = stubInstapaper(() => folders());
+    const instapaper = client(stub.fetch, new RequestCap(1));
 
-    await verify(stub.fetch, requests);
-    await expect(verify(stub.fetch, requests)).rejects.toBeInstanceOf(RequestCapReached);
+    await instapaper.folders();
+    await expect(instapaper.folders()).rejects.toBeInstanceOf(RequestCapReached);
     expect(stub.calls).toHaveLength(1);
   });
 });

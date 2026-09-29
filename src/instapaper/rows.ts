@@ -1,89 +1,53 @@
-import { LIST_LIMIT } from "./client";
-import type { ListingMode } from "./raw";
-import type { Bookmark, BookmarksList, Folder, Highlight } from "./schema";
+import type { Bookmark, Changes, Folder, Highlight } from "./schema";
 import {
   type BookmarkRow,
-  type FolderName,
   type FolderRow,
   type HighlightRow,
-  markUnlisted,
-  markUnstarred,
+  markDeleted,
   pruneFolders,
   pruneHighlights,
   upsertBookmarks,
   upsertFolders,
   upsertHighlights,
 } from "./store";
-import { unhandled } from "../unhandled";
-
-export type Listing =
-  | { folder: "unread" | "archive" | "starred" }
-  | { folder: "folder"; folderId: number };
-
-export function listingWindow(listing: Listing): string {
-  return listing.folder === "folder" ? `folder-${listing.folderId}` : listing.folder;
-}
-
-export function parseListingWindow(window: string): Listing | null {
-  if (window === "unread" || window === "archive" || window === "starred") {
-    return { folder: window };
-  }
-  const match = /^folder-(\d+)$/.exec(window);
-  return match === null ? null : { folder: "folder", folderId: Number(match[1]) };
-}
-
-// The `folder_id` parameter `bookmarks/list` takes.
-export function listingFolderId(listing: Listing): string {
-  return listing.folder === "folder" ? String(listing.folderId) : listing.folder;
-}
-
-function placement(listing: Listing): { folder: FolderName | null; folderId: number | null } {
-  switch (listing.folder) {
-    case "starred":
-      return { folder: null, folderId: null };
-    case "folder":
-      return { folder: "folder", folderId: listing.folderId };
-    case "unread":
-    case "archive":
-      return { folder: listing.folder, folderId: null };
-    default:
-      throw unhandled(listing);
-  }
-}
 
 function instant(seconds: number): string {
   return new Date(seconds * 1000).toISOString();
 }
 
-function orNull(value: string): string | null {
+function orNull(value: string | null): string | null {
   return value === "" ? null : value;
 }
 
-export function bookmarkRow(bookmark: Bookmark, listing: Listing, fetchedAt: string): BookmarkRow {
+export function bookmarkRow(bookmark: Bookmark, fetchedAt: string): BookmarkRow {
   return {
-    bookmarkId: bookmark.bookmark_id,
-    url: bookmark.url,
-    title: bookmark.title,
+    bookmarkId: bookmark.id,
+    url: orNull(bookmark.url),
+    title: orNull(bookmark.title),
     description: orNull(bookmark.description),
+    image: orNull(bookmark.image),
+    author: orNull(bookmark.author),
+    articlePublishedAt: bookmark.pubtime === null ? null : instant(bookmark.pubtime),
     savedAt: instant(bookmark.time),
-    starred: bookmark.starred,
-    ...placement(listing),
-    progress: bookmark.progress,
+    liked: bookmark.liked,
+    archived: bookmark.archived,
+    folderId: bookmark.folder_id,
+    progress: bookmark.progress.percentage,
     // Zero for a bookmark nobody has opened.
-    progressAt: bookmark.progress_timestamp === 0 ? null : instant(bookmark.progress_timestamp),
+    progressAt: bookmark.progress.timestamp === 0 ? null : instant(bookmark.progress.timestamp),
     privateSource: orNull(bookmark.private_source),
+    category: bookmark.category,
     tags: JSON.stringify(bookmark.tags.map((tag) => tag.name)),
-    hash: bookmark.hash,
     fetchedAt,
   };
 }
 
 export function highlightRow(highlight: Highlight): HighlightRow {
   return {
-    highlightId: highlight.highlight_id,
+    highlightId: highlight.id,
     bookmarkId: highlight.bookmark_id,
     text: highlight.text,
-    note: highlight.note === null ? null : orNull(highlight.note),
+    note: orNull(highlight.note),
     position: highlight.position,
     createdAt: instant(highlight.time),
   };
@@ -91,60 +55,25 @@ export function highlightRow(highlight: Highlight): HighlightRow {
 
 export function folderRow(folder: Folder, fetchedAt: string): FolderRow {
   return {
-    folderId: folder.folder_id,
+    folderId: folder.id,
     title: folder.title,
-    slug: folder.slug ?? null,
-    position: folder.position ?? null,
-    public: folder.public === undefined ? null : folder.public === 1,
+    slug: folder.slug,
+    position: folder.position,
+    public: folder.public,
     fetchedAt,
   };
 }
 
-export interface ListingRequest {
-  mode: ListingMode;
-  // How many bookmarks the request sent as `have`.
-  have: number;
-}
-
-export interface ListingApplied {
-  rowsChanged: number;
-  // IDs of the bookmarks the page returned, whose highlights may have changed.
-  bookmarkIds: number[];
-}
-
-// Bookmarks land before their highlights and before `delete_ids` is read, so a
-// bookmark this page moved into the folder is not marked as having left it.
-export async function applyListing(
+export async function applyChanges(
   db: D1Database,
-  listing: Listing,
-  data: BookmarksList,
-  request: ListingRequest,
+  changes: Changes,
   fetchedAt: string,
-): Promise<ListingApplied> {
-  let rowsChanged = await upsertBookmarks(
+): Promise<number> {
+  const upserted = await upsertBookmarks(
     db,
-    data.bookmarks.map((bookmark) => bookmarkRow(bookmark, listing, fetchedAt)),
+    changes.bookmarks.map((bookmark) => bookmarkRow(bookmark, fetchedAt)),
   );
-  rowsChanged += await upsertHighlights(db, data.highlights.map(highlightRow));
-
-  // A full read's `have` holds the pages it already read, so its `delete_ids`
-  // says nothing about what left the folder.
-  if (request.mode === "delta") {
-    if (listing.folder === "starred") {
-      // Past the limit, a bookmark still starred can drop out of the window as
-      // a newer one is starred, and `delete_ids` stops meaning unstarred.
-      if (request.have + data.bookmarks.length <= LIST_LIMIT) {
-        rowsChanged += await markUnstarred(db, data.delete_ids);
-      }
-    } else {
-      const { folder, folderId } = placement(listing);
-      if (folder !== null) {
-        rowsChanged += await markUnlisted(db, folder, folderId, data.delete_ids, fetchedAt);
-      }
-    }
-  }
-
-  return { rowsChanged, bookmarkIds: data.bookmarks.map((bookmark) => bookmark.bookmark_id) };
+  return upserted + (await markDeleted(db, changes.deleted_ids, fetchedAt));
 }
 
 export async function applyHighlights(
@@ -156,7 +85,7 @@ export async function applyHighlights(
   const pruned = await pruneHighlights(
     db,
     bookmarkId,
-    highlights.map((highlight) => highlight.highlight_id),
+    highlights.map((highlight) => highlight.id),
   );
   return upserted + pruned;
 }
@@ -172,7 +101,7 @@ export async function applyFolders(
   );
   const pruned = await pruneFolders(
     db,
-    folders.map((folder) => folder.folder_id),
+    folders.map((folder) => folder.id),
   );
   return upserted + pruned;
 }

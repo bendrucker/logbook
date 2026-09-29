@@ -1,24 +1,13 @@
+import { APIError, Instapaper, RateLimitError } from "instapaper-api";
 import type { z } from "zod";
 import type { RequestCap } from "../request-cap";
-import { authorize, type Credentials } from "./oauth";
-import { errorResponse } from "./schema";
+import { changesResponse, foldersResponse, highlightsResponse } from "./schema";
 
-const ENDPOINT = "https://www.instapaper.com";
-const USER_AGENT = "logbook (+https://github.com/bendrucker/logbook)";
+// The most one page of `GET /bookmarks` holds.
+export const PAGE_SIZE = 500;
 
-// The most `bookmarks/list` returns. It has no cursor, so each folder shows
-// only its most recent 500.
-export const LIST_LIMIT = 500;
-
-// The error codes this client acts on. Instapaper documents no number for its
-// rate limit, only the code that reports it.
-export const RATE_LIMITED = 1040;
-export const PREMIUM_REQUIRED = 1041;
-export const INVALID_BOOKMARK = 1241;
-export const INVALID_FOLDER = 1242;
-
-// Instapaper documents no wait with its limit. An hour is the cron's cadence,
-// so a stopped run resumes on the next one.
+// A 429 names no wait unless it carries `Retry-After`. An hour is the cron's
+// cadence, so a stopped run resumes on the next one.
 const DEFAULT_RETRY_SECONDS = 60 * 60;
 
 // Raw storage keeps a failing response's bytes, so every failure after the
@@ -37,52 +26,17 @@ export class InstapaperResponseError extends Error {
   }
 }
 
-export class InstapaperHttpError extends InstapaperResponseError {
-  constructor(status: number, body: string) {
-    super("InstapaperHttpError", `Instapaper responded ${status}`, status, body);
-  }
-}
-
-// An error object Instapaper answered with, whatever the HTTP status.
-export class InstapaperApiError extends InstapaperResponseError {
-  readonly code: number;
-
-  constructor(
-    code: number,
-    message: string,
-    status: number,
-    body: string,
-    name = "InstapaperApiError",
-  ) {
-    super(name, `Instapaper error ${code}: ${message}`, status, body);
-    this.code = code;
-  }
-}
-
-export class InstapaperRateLimited extends InstapaperApiError {
+export class InstapaperRateLimited extends InstapaperResponseError {
   readonly retryAfterSeconds: number;
 
-  constructor(retryAfterSeconds: number, message: string, status: number, body: string) {
-    super(RATE_LIMITED, message, status, body, "InstapaperRateLimited");
+  constructor(retryAfterSeconds: number, status: number, body: string, cause: unknown) {
+    super("InstapaperRateLimited", "Instapaper rate limit exceeded", status, body, { cause });
     this.retryAfterSeconds = retryAfterSeconds;
-  }
-}
-
-export class InstapaperValidationError extends InstapaperResponseError {
-  constructor(message: string, status: number, body: string, cause: unknown) {
-    super(
-      "InstapaperValidationError",
-      `Instapaper response did not validate: ${message}`,
-      status,
-      body,
-      { cause },
-    );
   }
 }
 
 export interface InstapaperOptions {
   fetch?: typeof globalThis.fetch;
-  endpoint?: string;
   requests?: RequestCap;
 }
 
@@ -92,109 +46,133 @@ export interface InstapaperResponse<T> {
   body: string;
 }
 
-// Every Full API method is a POST with its parameters in a form body and the
-// OAuth parameters in the Authorization header.
-export async function instapaperPost<T>(
-  credentials: Credentials,
-  path: string,
-  params: Record<string, string>,
-  schema: z.ZodType<T>,
-  options: InstapaperOptions = {},
-): Promise<InstapaperResponse<T>> {
-  const body = await send(credentials, path, params, options);
-  if (!body.response.ok) {
-    throw new InstapaperHttpError(body.response.status, body.text);
-  }
-  return {
-    data: validate(schema, parseJson(body.text, body.response.status), body.text),
-    body: body.text,
-  };
+interface Exchange {
+  status: number;
+  body: string;
+  retryAfter: string | null;
 }
 
-// The xAuth exchange answers a query string rather than JSON.
-export async function instapaperPostText(
-  credentials: Credentials,
-  path: string,
-  params: Record<string, string>,
-  options: InstapaperOptions = {},
-): Promise<string> {
-  const body = await send(credentials, path, params, options);
-  if (!body.response.ok) {
-    throw new InstapaperHttpError(body.response.status, body.text);
+// The SDK sends each request and maps its errors. It returns parsed JSON that
+// nothing has checked, so the bytes it read are validated here instead, the
+// same way a replay reads them back from R2.
+export class InstapaperClient {
+  readonly #sdk: Instapaper;
+  readonly #requests: RequestCap | undefined;
+  #last: Exchange | null = null;
+
+  constructor(accessToken: string, options: InstapaperOptions = {}) {
+    // workerd's native fetch throws "Illegal invocation" when called with a
+    // foreign `this`. An arrow wrapper keeps late binding without that risk.
+    const transport = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+    this.#requests = options.requests;
+    this.#sdk = new Instapaper({
+      accessToken,
+      fetch: async (url, init) => {
+        const response = await transport(url, init);
+        const body = await response.text();
+        this.#last = {
+          status: response.status,
+          body,
+          retryAfter: response.headers.get("retry-after"),
+        };
+        return { status: response.status, ok: response.ok, text: () => Promise.resolve(body) };
+      },
+    });
   }
-  return body.text;
-}
 
-async function send(
-  credentials: Credentials,
-  path: string,
-  params: Record<string, string>,
-  options: InstapaperOptions,
-): Promise<{ response: Response; text: string }> {
-  // workerd's native fetch throws "Illegal invocation" when called with a
-  // foreign `this`. An arrow wrapper keeps late binding without that risk.
-  const transport = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
-  const url = new URL(path, options.endpoint ?? ENDPOINT);
-  const form = new URLSearchParams(params);
+  changes(
+    since: number,
+    offset: number,
+  ): Promise<InstapaperResponse<z.infer<typeof changesResponse>>> {
+    return this.#call(changesResponse, (sdk) =>
+      sdk.bookmarks.changes(since, { limit: PAGE_SIZE, offset }),
+    );
+  }
 
-  options.requests?.admit();
-  const response = await transport(url, {
-    method: "POST",
-    headers: {
-      Authorization: await authorize("POST", url, form, credentials),
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": USER_AGENT,
-    },
-    body: form,
-  });
-  const text = await response.text();
+  folders(): Promise<InstapaperResponse<z.infer<typeof foldersResponse>>> {
+    return this.#call(foldersResponse, (sdk) => sdk.folders.list());
+  }
 
-  const error = apiError(text);
-  if (error !== null) {
-    if (error.error_code === RATE_LIMITED) {
-      throw new InstapaperRateLimited(
-        retryAfter(response.headers),
-        error.message,
-        response.status,
-        text,
-      );
+  highlights(bookmarkId: number): Promise<InstapaperResponse<z.infer<typeof highlightsResponse>>> {
+    return this.#call(highlightsResponse, (sdk) => sdk.highlights.list(bookmarkId));
+  }
+
+  // Admitted here rather than in the fetch, where the SDK would report a
+  // refusal as a network failure.
+  async #call<T>(
+    schema: z.ZodType<T>,
+    request: (sdk: Instapaper) => Promise<unknown>,
+  ): Promise<InstapaperResponse<T>> {
+    this.#requests?.admit();
+    this.#last = null;
+    try {
+      await request(this.#sdk);
+    } catch (error) {
+      throw failure(error, this.#take());
     }
-    throw new InstapaperApiError(error.error_code, error.message, response.status, text);
+    const exchange = this.#take();
+    if (exchange === null) {
+      throw new Error("the Instapaper SDK resolved without sending a request");
+    }
+    return { data: validate(schema, exchange), body: exchange.body };
   }
-  return { response, text };
+
+  #take(): Exchange | null {
+    const exchange = this.#last;
+    this.#last = null;
+    return exchange;
+  }
 }
 
-// Instapaper documents no status for an error, so its body decides.
-function apiError(text: string): z.infer<typeof errorResponse>[0] | null {
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return null;
+function failure(error: unknown, exchange: Exchange | null): unknown {
+  if (!(error instanceof APIError) || exchange === null) {
+    return error;
   }
-  const parsed = errorResponse.safeParse(data);
-  return parsed.success ? parsed.data[0] : null;
+  if (error instanceof RateLimitError) {
+    return new InstapaperRateLimited(
+      retryAfter(exchange.retryAfter),
+      exchange.status,
+      exchange.body,
+      error,
+    );
+  }
+  return new InstapaperResponseError(
+    "InstapaperApiError",
+    `Instapaper responded ${exchange.status}: ${error.message}`,
+    exchange.status,
+    exchange.body,
+    { cause: error },
+  );
 }
 
-function retryAfter(headers: Headers): number {
-  const header = headers.get("retry-after")?.trim() ?? "";
-  const seconds = header === "" ? Number.NaN : Number(header);
+function retryAfter(header: string | null): number {
+  const trimmed = header?.trim() ?? "";
+  const seconds = trimmed === "" ? Number.NaN : Number(trimmed);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_RETRY_SECONDS;
 }
 
-// Instapaper asks clients to read a body that is not JSON as a 503.
-function parseJson(body: string, status: number): unknown {
+function validate<T>(schema: z.ZodType<T>, exchange: Exchange): T {
+  let data: unknown;
   try {
-    return JSON.parse(body);
+    data = JSON.parse(exchange.body);
   } catch (error) {
-    throw new InstapaperValidationError("body is not JSON", status, body, error);
+    throw new InstapaperResponseError(
+      "InstapaperValidationError",
+      "Instapaper response is not JSON",
+      exchange.status,
+      exchange.body,
+      { cause: error },
+    );
   }
-}
-
-function validate<T>(schema: z.ZodType<T>, data: unknown, body: string): T {
   const parsed = schema.safeParse(data);
   if (!parsed.success) {
-    throw new InstapaperValidationError(parsed.error.message, 200, body, parsed.error);
+    throw new InstapaperResponseError(
+      "InstapaperValidationError",
+      `Instapaper response did not validate: ${parsed.error.message}`,
+      exchange.status,
+      exchange.body,
+      { cause: parsed.error },
+    );
   }
   return parsed.data;
 }

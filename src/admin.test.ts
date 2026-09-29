@@ -236,7 +236,7 @@ describe("POST /admin/backfill", () => {
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
-      error: "INSTAPAPER_CONSUMER_KEY is not configured",
+      error: "INSTAPAPER_ACCESS_TOKEN is not configured",
     });
   });
 

@@ -4,8 +4,8 @@ import { commitDay, issue, pullRequest, review, seedRepository } from "../../tes
 import { parquetRows, readParquet } from "../../test/parquet";
 import { bookmark, folder, highlight } from "../../test/instapaper-fixtures";
 import { emptyBucket, readObject } from "../../test/r2";
-import { applyFolders, applyHighlights, applyListing } from "../instapaper/rows";
-import { bookmarksListResponse, foldersResponse, highlightsResponse } from "../instapaper/schema";
+import { applyChanges, applyFolders, applyHighlights } from "../instapaper/rows";
+import { changesResponse, foldersResponse, highlightsResponse } from "../instapaper/schema";
 import { upsertCommitDays, upsertIssues, upsertPullRequests, upsertReviews } from "../store";
 import { buildLake, LAKE_TABLES, tableKey } from "./build";
 import { readLatestBuild } from "./builds";
@@ -154,26 +154,33 @@ describe("buildLake", () => {
 
   it("writes Instapaper rows that read back as D1 holds them", async () => {
     const fetchedAt = "2026-09-10T00:00:00.000Z";
-    await applyFolders(env.DB, foldersResponse.parse([folder(7, "Essays")]), fetchedAt);
-    await applyListing(
+    await applyFolders(
       env.DB,
-      { folder: "folder", folderId: 7 },
-      bookmarksListResponse.parse({
+      foldersResponse.parse({ folders: [folder(7, "Essays")] }).folders,
+      fetchedAt,
+    );
+    await applyChanges(
+      env.DB,
+      changesResponse.parse({
         bookmarks: [
           bookmark(3_000_000_001, {
-            starred: "1",
-            progress: 0.25,
-            progress_timestamp: 1_788_220_900,
+            liked: true,
+            folder_id: 7,
+            author: "A. Writer",
+            pubtime: 1_788_000_000,
+            category: 3,
+            progress: { percentage: 0.25, timestamp: 1_788_220_900 },
           }),
         ],
       }),
-      { mode: "full", have: 0 },
       fetchedAt,
     );
     await applyHighlights(
       env.DB,
       3_000_000_001,
-      highlightsResponse.parse([highlight(9, 3_000_000_001, { note: "why", position: 2 })]),
+      highlightsResponse.parse({
+        highlights: [highlight(9, 3_000_000_001, { note: "why", position: 2 })],
+      }).highlights,
     );
 
     await buildLake(env, STARTED_AT);
@@ -184,16 +191,18 @@ describe("buildLake", () => {
         url: "https://example.com/3000000001",
         title: "Article 3000000001",
         description: null,
+        image: null,
+        author: "A. Writer",
+        article_published_at: new Date(1_788_000_000 * 1000),
         saved_at: new Date((1_788_220_800 + 3_000_000_001) * 1000),
-        starred: true,
-        folder: "folder",
+        liked: true,
+        archived: false,
         folder_id: 7n,
         progress: 0.25,
         progress_at: new Date("2026-09-01T00:01:40.000Z"),
         private_source: null,
+        category: 3,
         tags: "[]",
-        hash: "hash-3000000001",
-        unlisted_at: null,
         deleted_at: null,
         fetched_at: new Date(fetchedAt),
       },

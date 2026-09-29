@@ -27,10 +27,7 @@ export default defineConfig(async () => {
             // The pool reads `.dev.vars`, so without these a developer's real
             // credentials would reach the tests. Each test sets what it needs.
             GITHUB_TOKEN: "",
-            INSTAPAPER_CONSUMER_KEY: "",
-            INSTAPAPER_CONSUMER_SECRET: "",
             INSTAPAPER_ACCESS_TOKEN: "",
-            INSTAPAPER_ACCESS_SECRET: "",
             ADMIN_TOKEN: "",
           },
         },

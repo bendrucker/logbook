@@ -1,22 +1,14 @@
 import { RequestCap } from "../request-cap";
 import { MissingSecretError } from "../sync/run";
 import { advance, readWatermark } from "../sync/state";
-import {
-  drainInstapaper,
-  type InstapaperInvocationOptions,
-  listings,
-  requeueHighlights,
-} from "./backfill";
-import type { Listing } from "./rows";
-import {
-  instapaperCredentials,
-  type InstapaperSyncOptions,
-  type ListingResult,
-  syncFolders,
-  syncListing,
-} from "./sync";
+import { drainInstapaper, type InstapaperInvocationOptions, requeueHighlights } from "./backfill";
+import { instapaperToken, type InstapaperSyncOptions, syncChanges, syncFolders } from "./sync";
 
-// A cap or a 1040 applies to the whole application, so the first stop ends the
+// Reads open this far behind the watermark, so a change stamped by a clock
+// running behind the Worker's still lands in the next listing.
+const SKEW_MS = 5 * 60 * 1000;
+
+// A cap or a 429 applies to the whole application, so the first stop ends the
 // invocation.
 export async function syncInstapaper(
   env: Env,
@@ -52,15 +44,16 @@ export async function syncInstapaper(
   }
 }
 
-// True when a limit stopped the pass. The watermark moves only when every
-// listing landed, so it names the last pass that saw the whole account.
+// True when a limit stopped the pass. The watermark moves only when the whole
+// listing landed, so it names the last pass that saw every change.
 async function syncBookmarks(
   env: Env,
   options: InstapaperSyncOptions,
   started: Date,
 ): Promise<boolean> {
-  if ((await readWatermark(env.DB, "instapaper-bookmarks")) === null) {
-    // A delta against an empty table reads each folder whole, which is what a
+  const watermark = await readWatermark(env.DB, "instapaper-bookmarks");
+  if (watermark === null) {
+    // A listing from nothing would read the whole account, which is what a
     // backfill does under a frontier that survives a limit.
     console.log("instapaper-bookmarks has no watermark, so a backfill owns its first read");
     return false;
@@ -71,48 +64,21 @@ async function syncBookmarks(
     return folders.resumeAt !== null;
   }
 
-  const remaining = await listings(env.DB);
-  const changed = new Set<number>();
-  let failed = false;
-  let stopped = false;
-  for (const listing of remaining) {
-    // oxlint-disable-next-line no-await-in-loop -- a rate limit on one listing ends the pass
-    const result = await syncDelta(env, listing, options, changed);
-    if (result.error !== null) {
-      failed = true;
-      if (result.resumeAt !== null) {
-        stopped = true;
-        break;
-      }
-    }
-  }
-
-  await requeueHighlights(env.DB, [...changed], started.toISOString());
-  if (!failed) {
+  const since = new Date(new Date(watermark.window).getTime() - SKEW_MS);
+  const changes = await syncChanges(env, since, options);
+  // What a failed listing landed before it stopped still has its highlights read.
+  await requeueHighlights(env.DB, changes.bookmarkIds, started.toISOString());
+  if (changes.error === null) {
     await advance(env.DB, "instapaper-bookmarks", started.toISOString());
   }
-  return stopped;
-}
-
-// What a failed listing landed before it stopped still has its highlights read.
-async function syncDelta(
-  env: Env,
-  listing: Listing,
-  options: InstapaperSyncOptions,
-  changed: Set<number>,
-): Promise<ListingResult> {
-  const result = await syncListing(env, listing, "delta", options);
-  for (const id of result.bookmarkIds) {
-    changed.add(id);
-  }
-  return result;
+  return changes.resumeAt !== null;
 }
 
 // A cron that throws only retries on the next hour, and no amount of retrying
 // sets a secret.
 function configured(env: Env): boolean {
   try {
-    instapaperCredentials(env);
+    instapaperToken(env);
     return true;
   } catch (error) {
     if (!(error instanceof MissingSecretError)) {

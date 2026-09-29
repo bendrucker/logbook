@@ -4,46 +4,36 @@ import { type CrawlSource, type Drain, drain, enqueue, frontierStatus } from "..
 import type { InstapaperKind } from "../sync/kinds";
 import { advance } from "../sync/state";
 import type { InstapaperOptions } from "./client";
-import { type Listing, listingWindow, parseListingWindow } from "./rows";
-import { liveBookmarkIds, userFolderIds } from "./store";
+import { liveBookmarkIds } from "./store";
 import {
+  CHANGES_WINDOW,
+  EVERYTHING,
   FOLDERS_WINDOW,
-  instapaperCredentials,
+  instapaperToken,
   type InstapaperSyncOptions,
+  syncChanges,
   syncFolders,
   syncHighlights,
-  syncListing,
 } from "./sync";
 
 export interface InstapaperInvocationOptions extends Omit<InstapaperOptions, "requests"> {
   now?: Date;
 }
 
-export async function listings(db: D1Database): Promise<Listing[]> {
-  const folders = await userFolderIds(db);
-  return [
-    { folder: "unread" },
-    { folder: "archive" },
-    ...folders.map((folderId): Listing => ({ folder: "folder", folderId })),
-    { folder: "starred" },
-  ];
-}
-
 // A unit already in the frontier keeps its status, so calling again resumes.
-// A bookmarks unit is one folder read whole, and a highlights unit is one
-// bookmark's highlights.
+// The bookmarks unit is one change listing from the start of the account, and
+// a highlights unit is one bookmark's highlights.
 export async function backfillInstapaper(
   env: Env,
   kind: InstapaperKind,
   options: InstapaperInvocationOptions = {},
 ): Promise<BackfillResult> {
   // Read before anything else so an unconfigured deployment answers the caller.
-  instapaperCredentials(env);
+  instapaperToken(env);
   const now = options.now ?? new Date();
   const requests = new RequestCap(env.RATE_CAP_INSTAPAPER);
 
   if (kind === "instapaper-bookmarks") {
-    // The folder list names the user folders to enqueue.
     const folders = await syncFolders(env, { ...options, now, requests });
     if (folders.error !== null) {
       return {
@@ -54,8 +44,7 @@ export async function backfillInstapaper(
         error: folders.error,
       };
     }
-    const windows = (await listings(env.DB)).map(listingWindow);
-    await enqueue(env.DB, kind, windows, now.toISOString());
+    await enqueue(env.DB, kind, [CHANGES_WINDOW], now.toISOString());
   } else {
     await enqueueHighlights(env.DB, await liveBookmarkIds(env.DB), now.toISOString(), "DO NOTHING");
   }
@@ -70,10 +59,8 @@ export async function backfillInstapaper(
   };
 }
 
-// Once every folder has been read whole, the bookmarks are synced through the
-// earliest of those reads and the hourly delta takes over. A folder past the
-// listing limit settles irreducible and counts as read, since no further read
-// reaches more of it.
+// Once the whole account has been read, the bookmarks are synced through the
+// start of that read and the hourly change listing takes over.
 export async function drainInstapaper(
   env: Env,
   kind: InstapaperKind,
@@ -92,7 +79,7 @@ export async function drainInstapaper(
   return drained;
 }
 
-// A bookmark whose listing came back changed may have gained highlights, so its
+// A bookmark the change listing returned may have gained highlights, so its
 // unit goes back to pending whatever status an earlier read left it in.
 export async function requeueHighlights(
   db: D1Database,
@@ -144,13 +131,14 @@ function crawlSource(env: Env, kind: InstapaperKind, options: InstapaperSyncOpti
   }
   return {
     fetch: async (window) => {
-      const listing = parseListingWindow(window);
-      if (listing === null) {
-        throw new Error(`${window} is not an Instapaper listing`);
+      if (window !== CHANGES_WINDOW) {
+        throw new Error(`${window} is not an Instapaper bookmarks window`);
       }
-      return unitFetch(await syncListing(env, listing, "full", options));
+      const changes = await syncChanges(env, EVERYTHING, options);
+      await requeueHighlights(env.DB, changes.bookmarkIds, changes.fetchedAt);
+      return unitFetch(changes);
     },
-    // A listing has no narrower window to ask for.
+    // The listing has no narrower window to ask for.
     split: () => [],
   };
 }
