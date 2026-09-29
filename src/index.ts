@@ -36,9 +36,11 @@ export default {
       return;
     }
 
-    // The sources share nothing but D1, so one failing leaves the other to run,
-    // and either failure still marks the invocation failed.
-    const [github, trakt] = await Promise.allSettled([syncIncremental(env), syncTrakt(env)]);
+    // One source at a time, since both draw on the invocation's six open
+    // connections. A GitHub failure still leaves Trakt to run, and either
+    // failure marks the invocation failed.
+    const github = await settled(syncIncremental(env));
+    const trakt = await settled(syncTrakt(env));
     for (const outcome of [github, trakt]) {
       if (outcome.status === "rejected") {
         throw outcome.reason;
@@ -47,3 +49,8 @@ export default {
     console.log(`sync trigger ${controller.cron} finished`);
   },
 } satisfies ExportedHandler<Env>;
+
+async function settled(run: Promise<void>): Promise<PromiseSettledResult<void>> {
+  const [outcome] = await Promise.allSettled([run]);
+  return outcome;
+}
