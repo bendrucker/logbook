@@ -46,7 +46,6 @@ async function* pull<T>(source: Iterable<T> | AsyncIterable<T>): AsyncGenerator<
   yield* source;
 }
 
-// `mapConcurrent` for work whose results nobody reads.
 export async function eachConcurrent<T>(
   source: Iterable<T> | AsyncIterable<T>,
   limit: number,
