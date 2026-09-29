@@ -2,7 +2,7 @@
 
 System of record for the personal data I pull from APIs on a schedule. A cron-driven Worker polls a source, archives every response page in R2, normalizes it into D1, and publishes one row per event to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me).
 
-GitHub is the first source: pull requests, reviews, issues, and commit counts from GitHub's GraphQL API. Other simple polled APIs can join it later. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
+Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts from its GraphQL API. [Trakt](#trakt) supplies watch history and ratings from its REST API. Other simple polled APIs can join them. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
 
 ## Why
 
@@ -27,12 +27,15 @@ flowchart TB
         lakecron[Nightly lake build]
     end
 
-    lake[(R2 activity-hub-lake, github/ prefix)]
+    trakt[Trakt API]
+    lake[(R2 activity-hub-lake, github/ and trakt/ prefixes)]
     site[bendrucker.me Publish]
 
     cron --> worker
     worker -->|search and contributionsCollection| api
+    worker -->|history and ratings| trakt
     api -->|response pages| raw
+    trakt -->|response pages| raw
     raw -->|normalize| d1
     d1 --> feed -->|code feed rows| site
     d1 --> lakecron --> lake
@@ -40,7 +43,7 @@ flowchart TB
 
 The raw bucket is the system of record. Rebuilding the event tables after a schema change replays those pages and spends no GitHub requests, which matters when a full backfill is a few hundred search calls.
 
-Lake tables land under a `github/` prefix in the `activity-hub-lake` bucket that Activity Hub already writes. Sharing one bucket is what lets a single DuckDB session join rides against pull requests by day, and it is the only real cross-project concern.
+Lake tables land under a prefix per source, `github/` and `trakt/`, in the `activity-hub-lake` bucket that Activity Hub already writes. Sharing one bucket is what lets a single DuckDB session join rides against pull requests by day, and it is the only real cross-project concern.
 
 The site is a read-only consumer. The design routes writes to its D1 through the `Publish` entrypoint it exposes over a service binding, which validates every row on arrival and answers a bad shape with a `ValidationError`. The binding would carry no credential and tell the callee nothing about who called, leaving that method list as the whole security boundary. None of it exists yet: the service binding and the publish path land with the feed.
 
@@ -57,6 +60,9 @@ One row per event, at the grain GitHub hands over without crawling each reposito
 | `issues`        | One issue I opened: repository, number, title, created at, closed at, state, comment count                                                            |
 | `commit_days`   | One day of commits for one repository: repository, day, commit count                                                                                  |
 | `repositories`  | One repository the event tables join to: owner, name, description, url, stars, primary language, created at, fork, visibility                         |
+| `trakt_plays`   | One play from my Trakt history: history ID, watched at, action, movie or episode, show                                                                |
+| `trakt_ratings` | One rating per title: movie, show, season, or episode, rating, rated at                                                                               |
+| `trakt_titles`  | One title the plays and ratings join to: type, Trakt ID, title, year, external IDs, air dates, runtime, genres                                        |
 
 A sync state table alongside these records the last window read per event type. Commits are daily counts because that is how `contributionsCollection` already exposes them. Per-commit history, comment bodies, and individual review comments stay out of the first version. Each one needs a walk of every PR in every repository, and per-PR counts give most of the analytics value at a hundredth of the requests.
 
@@ -95,9 +101,21 @@ Search misses some events GitHub counts: it hides issues in repositories that la
 
 Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a search gap and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. GitHub counts reviews once per pull request, including my own, so the note sets that figure against distinct pull requests: `reviews 75 (38 own) vs 37 PRs`, with the own count read from the year's archived review connection pages. When the archived issue or pull request pages list exactly as many events as GitHub reports, the note names the node IDs behind a gap: `issues 186 vs 101 (missing I_a, I_b and 83 more)`. `GET /admin/sync` reports it alongside the watermarks, each kind's pending and irreducible frontier windows, the last ten failures, and the most recent lake build.
 
+## Trakt
+
+The same hourly cron reads my public Trakt profile with the application's client ID, no OAuth. History reads from a day behind its watermark to now, and ratings re-read in full every run. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_TRAKT` caps the requests one invocation sends, and a 429 stops it with `resumeAt` from `Retry-After`.
+
+Backfill history by year. Without `from` it starts at the year of the oldest play:
+
+```sh
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=trakt-history"
+```
+
+The nightly lake cron re-reads the current year of history first, which catches plays logged late with an earlier date. A play backdated into a prior year needs `bun run backfill <url> trakt-history --from <year>-01`. Plays deleted and ratings removed on Trakt stay in D1.
+
 ## Lake
 
-A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing one rebuilt table with four stale ones. `lake_builds` records each build with its per-table row counts, or the reason it failed.
+A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/` and `trakt/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing one rebuilt table with four stale ones. `lake_builds` records each build with its per-table row counts, or the reason it failed.
 
 To rewrite the tables before the next nightly build, run the same build from an admin route:
 
@@ -107,18 +125,21 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/lake"
 
 ## Secrets
 
-| Secret         | Location                              | Consumer                        |
-| -------------- | ------------------------------------- | ------------------------------- |
-| `GITHUB_TOKEN` | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request    |
-| `ADMIN_TOKEN`  | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes |
+| Secret            | Location                              | Consumer                                |
+| ----------------- | ------------------------------------- | --------------------------------------- |
+| `GITHUB_TOKEN`    | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request            |
+| `TRAKT_CLIENT_ID` | Worker secret (`wrangler secret put`) | Every Trakt request, as `trakt-api-key` |
+| `ADMIN_TOKEN`     | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes         |
 
 The GitHub token is a classic personal access token with no scopes, so the hub sees and publishes public activity only. [docs/design.md](docs/design.md#visibility) records the decision.
+
+Without `TRAKT_CLIENT_ID` the cron skips Trakt and a Trakt backfill answers 503.
 
 `ADMIN_TOKEN` is optional. `/admin/sync`, `/admin/backfill`, and `/admin/lake` answer 404 while it is unset. A deployment that never sets one exposes no admin surface.
 
 ## Infrastructure
 
-`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` for whose history the hub reads and the [rate budget](#rate-budget). The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
+`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` and `TRAKT_USER` for whose history the hub reads, the [rate budget](#rate-budget), and `RATE_CAP_TRAKT`. The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 
 There is no Terraform here. Activity Hub needs it for a DNS record, a Workers route, and the Cloudflare Access applications in front of its admin routes. This hub is reached by cron and by a service binding. It has no hostname to manage. `/admin/sync` sits behind `ADMIN_TOKEN` alone, with no Access application in front of it.
 
@@ -130,7 +151,7 @@ cp .dev.vars.example .dev.vars
 bun run dev
 ```
 
-`wrangler dev` reads `GITHUB_TOKEN` and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with both left empty serves `/healthz` and answers the admin routes 404.
+`wrangler dev` reads `GITHUB_TOKEN`, `TRAKT_CLIENT_ID`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all three left empty serves `/healthz` and answers the admin routes 404.
 
 | Command             | What it does                                   |
 | ------------------- | ---------------------------------------------- |

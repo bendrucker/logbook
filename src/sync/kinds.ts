@@ -9,7 +9,11 @@ export type ContributionEventsKind =
 
 // The three search kinds come from the extraction client's own union, so a kind
 // added there breaks byKind below until this module covers it too.
-export type SyncKind = EventKind | "contributions" | ContributionEventsKind;
+export type GitHubKind = EventKind | "contributions" | ContributionEventsKind;
+
+export type TraktKind = "trakt-history" | "trakt-ratings";
+
+export type SyncKind = GitHubKind | TraktKind;
 
 export const SEARCH_KINDS = [
   "pr-authored",
@@ -17,7 +21,9 @@ export const SEARCH_KINDS = [
   "issue",
 ] as const satisfies readonly EventKind[];
 
-export const SYNC_KINDS = [
+// Every GitHub kind spends from one token's point budget, which the Trakt kinds
+// never touch.
+export const GITHUB_KINDS = [
   "pr-authored",
   "pr-reviewed",
   "issue",
@@ -25,7 +31,14 @@ export const SYNC_KINDS = [
   "issue-contributions",
   "pr-contributions",
   "review-contributions",
-] as const satisfies readonly SyncKind[];
+] as const satisfies readonly GitHubKind[];
+
+export const TRAKT_KINDS = [
+  "trakt-history",
+  "trakt-ratings",
+] as const satisfies readonly TraktKind[];
+
+export const SYNC_KINDS = [...GITHUB_KINDS, ...TRAKT_KINDS] as const satisfies readonly SyncKind[];
 
 // The event kind a connection's nodes archive and normalize as, which is the
 // search kind finding the same events.
@@ -39,6 +52,10 @@ export function isContributionEventsKind(kind: SyncKind): kind is ContributionEv
   return kind in CONTRIBUTION_EVENTS;
 }
 
+export function isTraktKind(kind: SyncKind): kind is TraktKind {
+  return TRAKT_KINDS.some((each) => each === kind);
+}
+
 // Spelling the keys out is what lets the compiler check them: a record missing
 // one fails to satisfy its own return type.
 export function byKind<Value>(value: (kind: SyncKind) => Value): Record<SyncKind, Value> {
@@ -50,5 +67,7 @@ export function byKind<Value>(value: (kind: SyncKind) => Value): Record<SyncKind
     "issue-contributions": value("issue-contributions"),
     "pr-contributions": value("pr-contributions"),
     "review-contributions": value("review-contributions"),
+    "trakt-history": value("trakt-history"),
+    "trakt-ratings": value("trakt-ratings"),
   };
 }

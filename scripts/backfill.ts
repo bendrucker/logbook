@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { SYNC_KINDS, type SyncKind } from "../src/sync/kinds";
 
-const USAGE = `usage: ADMIN_TOKEN=... bun run backfill <base-url> [${SYNC_KINDS.join("|")}] [--from YYYY-MM]`;
+const USAGE = `usage: ADMIN_TOKEN=... bun run backfill <base-url> [${SYNC_KINDS.join("|")}] [--from YYYY-MM]\n  --from on trakt-history starts at its year, and without it the oldest play decides`;
 
 const KIND_WIDTH = Math.max(...SYNC_KINDS.map((kind) => kind.length));
 
@@ -52,9 +52,9 @@ const kinds = requested === undefined ? SYNC_KINDS : [requested];
 
 try {
   for (const each of kinds) {
-    // Kinds share one GitHub rate limit and one Worker, and a kind that stops
-    // on a failed window should stop the run before the next kind spends
-    // requests reaching the same wall.
+    // Kinds of one source share its rate limit, and every kind shares the
+    // Worker, so a kind that stops on a failed window should stop the run
+    // before the next kind spends requests reaching the same wall.
     // oxlint-disable-next-line no-await-in-loop -- kinds share one rate limit
     await walk(each);
   }

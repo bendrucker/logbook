@@ -2,8 +2,11 @@ import { parquetWriteBuffer } from "hyparquet-writer";
 import type { LakeColumn } from "./columns";
 
 export interface LakeTable {
-  // The D1 table, and the prefix segment the Parquet lands under.
+  // The D1 table.
   name: string;
+  // Where the Parquet lands in the lake bucket: the source's prefix, a schema
+  // version, and the table.
+  path: string;
   // Ordering for the paged read, which has to be total so no row is read twice
   // or skipped as pages advance. Every key column is also a `columns` entry,
   // since the page after this one starts from the last row's key.

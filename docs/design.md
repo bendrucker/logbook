@@ -2,7 +2,7 @@
 
 Logbook owns the personal data I pull from simple polled APIs. Webhooks and file decoding stay in [Activity Hub](https://github.com/bendrucker/activity-hub).
 
-GitHub is the only source today. Logbook extracts its events from GitHub's GraphQL API, archives every response page in R2, normalizes them into D1, publishes a feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. The [README](../README.md) is the short version.
+Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts through its GraphQL API. [Trakt](#trakt) supplies watch history and ratings through its REST API. Logbook archives every response page in R2, normalizes them into D1, publishes a GitHub feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. Most of it describes GitHub, the first source. The [README](../README.md) is the short version.
 
 ## Goals
 
@@ -68,6 +68,7 @@ raw/
   search/{kind}/{window}/{fetched_at}/reviews/{pull request ID}/{page}.json     # review follow-up pages
   contributions/{window}/{fetched_at}.json                                      # 2015, 2015-Q3, 2015-07, 2015-07-14, 2015-07-14T00--2015-07-14T12, or 2015-07-14T00--2015-07-14T01
   contribution-events/{kind}/{window}/{fetched_at}/{page}.json                  # kind as in search, window as in contributions
+  trakt/{kind}/{window}/{fetched_at}/{page}.json                                # kind is trakt-history or trakt-ratings
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -80,7 +81,7 @@ Upserts are keyed on GitHub's node ID, so re-normalizing the same page changes n
 
 #### Lake
 
-A nightly build reads D1 and writes Snappy Parquet under `github/v1/` in the `activity-hub-lake` bucket, one file set per table. The build is a full rebuild rather than an incremental merge, which is affordable because the corpus is tens of thousands of rows rather than millions of telemetry samples.
+A nightly build reads D1 and writes Snappy Parquet in the `activity-hub-lake` bucket, one file set per table, under a prefix per source: `github/v1/` and `trakt/v1/`. The build is a full rebuild rather than an incremental merge, which is affordable because the corpus is tens of thousands of rows rather than millions of telemetry samples.
 
 Sharing Activity Hub's bucket is deliberate. A query that asks which weeks had both high mileage and high review volume is one DuckDB session over two prefixes, and any other arrangement makes it a data transfer problem.
 
@@ -259,6 +260,42 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.
 - A public repository that goes private drops out of every later search, and the raw bucket becomes the only copy of its events.
 - The cutover has two writers on the site's code page. Retiring the site's sync belongs in the same change that turns on publishing.
+- A play deleted on Trakt stays in `trakt_plays`. History lists what exists, and nothing compares D1 against it. A rating removed on Trakt stays in `trakt_ratings` the same way, even though the full re-read every hour would make detecting it cheap.
+- Trakt's history filter reads `watched_at`. A play logged today with a date in a prior year falls outside every hourly window and the nightly re-walk of the current year. It lands only through `bun run backfill <url> trakt-history --from <that year>-01`.
+
+## Trakt
+
+Trakt is the second source: every play in my watch history and every rating, with title metadata from `extended=full`.
+
+#### Access
+
+Both endpoints read a public profile with the application's client ID alone. `GET /users/bendrucker/history` and `GET /users/bendrucker/ratings` carry `trakt-api-version: 2` and `trakt-api-key` and no OAuth token, so there is no refresh flow to keep alive. `TRAKT_CLIENT_ID` is a Worker secret and `TRAKT_USER` a var. Making the profile private would stop the sync, and switching to OAuth would be the fix.
+
+#### Tables
+
+| Table           | Grain                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| `trakt_plays`   | One play: Trakt's history ID, watched at, action (scrobble, checkin, watch), movie or episode, title, show      |
+| `trakt_ratings` | One rating per title: movie, show, season, or episode, rating 1 to 10, rated at, show                           |
+| `trakt_titles`  | One title keyed on type and Trakt ID: slug, title, year, season and number, IMDb, TMDB, and TVDB IDs, air dates |
+
+A play is keyed on Trakt's history `id`. A rating has no ID of its own, and Trakt holds one per title, so it is keyed on the title. Plays and ratings join to `trakt_titles` on `(type, trakt_id)`. An episode or season also names its show, and the show is a title too. `genres` is a JSON array in D1 and in Parquet. `trakt_plays.id` is `INT64` in Parquet because Trakt documents it as int64.
+
+#### Extraction
+
+History pages 250 items at a time, following `X-Pagination-Page-Count` from each response instead of computing pages from the requested limit, which Trakt may clamp. The bodies are bare JSON arrays, so the pagination headers ride along as R2 custom metadata. Replay reads them to tell a finished fetch from one that stopped partway, and rebuilds from the newest finished fetch of a window.
+
+The hourly cron reads history from a day behind the watermark to now, then the whole ratings list. Trakt filters on both bounds inclusively and to the instant, though its reference names a date format. The day of overlap catches plays logged a little late, and upserts on the history ID make it free. Ratings have no window filter, and the list is small, so each run re-reads it and upserts every row. The ratings watermark records the last full read.
+
+The nightly lake cron re-reads the whole current year of history before it builds, which catches plays logged late with a date earlier in the year. It leaves the watermark alone.
+
+#### Rate Limit
+
+Trakt documents 500 unauthenticated GET requests every five minutes per application, and its responses carry no header reporting what is left. There is no point budget to account against, so Logbook caps the requests one invocation sends at `RATE_CAP_TRAKT`, and a 429 ends the invocation with `resumeAt` read from `Retry-After`. Trakt runs record `cost` 0 in `sync_runs` so they stay out of GitHub's point ledger. `pages` counts their requests.
+
+#### Backfill
+
+History backfills in yearly `crawl_units` windows, from the year of `from` or, without it, the year of the oldest play. Finding that takes two requests: page 1 for the page count, then the last page, whose last item is the oldest play. Both archive under the window `earliest`. A later call finds the years already enqueued and skips the discovery. Trakt has no result cap, so a year never splits. A ratings backfill is one full read.
 
 ## Visibility
 

@@ -3,6 +3,7 @@ import type { LakeTable } from "./table";
 
 export const reviews: LakeTable = {
   name: "reviews",
+  path: "github/v1/reviews",
   key: ["id"],
   columns: [
     text("id"),

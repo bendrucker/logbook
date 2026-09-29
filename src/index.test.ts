@@ -12,7 +12,8 @@ import { emptyBucket } from "../test/r2";
 import worker from "./index";
 import { LAKE_CRON, readLatestBuild } from "./lake";
 import { recentRuns } from "./sync/runs";
-import { advance } from "./sync/state";
+import { advance, readWatermark } from "./sync/state";
+import { moviePlay, traktResponse } from "../test/trakt-fixtures";
 
 describe("fetch", () => {
   it("reports health", async () => {
@@ -41,6 +42,7 @@ describe("scheduled", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete env.GITHUB_TOKEN;
+    delete env.TRAKT_CLIENT_ID;
   });
 
   it("runs the incremental sync on the cron", async () => {
@@ -61,6 +63,19 @@ describe("scheduled", () => {
     expect(await recentRuns(env.DB, "contributions", 1)).toMatchObject([{ error: null }]);
   });
 
+  it("syncs Trakt beside GitHub on the same cron", async () => {
+    env.TRAKT_CLIENT_ID = "client-id";
+    const { fetch, requests } = stubFetch(() => traktResponse([], null));
+    vi.stubGlobal("fetch", fetch);
+
+    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
+
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/users/bendrucker/ratings",
+    ]);
+    expect(await recentRuns(env.DB, "trakt-ratings", 1)).toMatchObject([{ error: null }]);
+  });
+
   it("writes no run while the GitHub token is unset", async () => {
     await advance(env.DB, "issue", "2026-09-09T10:00:00.000Z", "2026-09-09T10:00:00Z");
 
@@ -76,6 +91,7 @@ describe("the nightly lake cron", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete env.GITHUB_TOKEN;
+    delete env.TRAKT_CLIENT_ID;
   });
 
   it("is one the deployment triggers", () => {
@@ -98,6 +114,25 @@ describe("the nightly lake cron", () => {
     expect(await readLatestBuild(env.DB)).toMatchObject({
       error: null,
       rowCounts: { repositories: 0 },
+    });
+  });
+
+  it("re-reads the current year of Trakt history before building", async () => {
+    env.TRAKT_CLIENT_ID = "client-id";
+    const { fetch, requests } = stubFetch(() =>
+      traktResponse([moviePlay(1, "2026-02-01T20:00:00.000Z")]),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await worker.scheduled(createScheduledController({ cron: LAKE_CRON }), env);
+
+    expect(requests.map((request) => new URL(request.url).searchParams.get("start_at"))).toEqual([
+      `${new Date().getUTCFullYear()}-01-01T00:00:00.000Z`,
+    ]);
+    expect(await readWatermark(env.DB, "trakt-history")).toBeNull();
+    expect(await readLatestBuild(env.DB)).toMatchObject({
+      error: null,
+      rowCounts: { trakt_plays: 1 },
     });
   });
 });

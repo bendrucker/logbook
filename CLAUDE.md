@@ -1,10 +1,10 @@
 # Logbook
 
-System of record for personal data pulled from simple APIs on a cron. GitHub is the only source so far: pull requests, reviews, issues, and commit counts, archived raw in R2 and published as a code feed to [bendrucker.me](https://github.com/bendrucker/bendrucker.me). Sibling of [activity-hub](https://github.com/bendrucker/activity-hub), which handles rides and workouts through webhooks and file decoding. Don't generalize the code for a second source until one lands. See the [README](README.md).
+System of record for personal data pulled from simple APIs on a cron. Two sources: GitHub (pull requests, reviews, issues, and commit counts, published as a code feed to [bendrucker.me](https://github.com/bendrucker/bendrucker.me)) and Trakt (watch history and ratings), both archived raw in R2. Sibling of [activity-hub](https://github.com/bendrucker/activity-hub), which handles rides and workouts through webhooks and file decoding. GitHub code lives in `src/github/` and the GitHub-shaped `src/sync/`. Trakt lives in `src/trakt/` and reuses `sync_state`, `sync_runs`, `crawl_units`, and `recordRun`. See the [README](README.md).
 
 ## Stack
 
-Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`), R2 (`RAW` for API responses, `LAKE` for Parquet output). `LAKE` is activity-hub's bucket, written under a `github/` prefix so one DuckDB session can join rides against pull requests. Two cron triggers drive the Worker: an hourly sync and a nightly lake build. Config lives in `wrangler.jsonc`.
+Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`), R2 (`RAW` for API responses, `LAKE` for Parquet output). `LAKE` is activity-hub's bucket, written under `github/v1/` and `trakt/v1/` so one DuckDB session can join rides against pull requests. Two cron triggers drive the Worker: an hourly sync and a nightly lake build. Config lives in `wrangler.jsonc`.
 
 `src/index.ts` exports the default handler and nothing else. workerd reads every named export of the entrypoint as a handler and refuses a string. Neither the test suite nor CI catches that, so `bun run dev` is what surfaces it. A constant the handler needs lives in the module it describes.
 
@@ -50,9 +50,13 @@ One call enqueues the kind's windows from `from` onward in the `crawl_units` fro
 
 `bun run backfill` repeats the call until nothing is pending, one line printed per call, and sleeps until `resumeAt` when the route reports one. Backfill requests go out at least two seconds apart. Naming no kind walks every kind in `SYNC_KINDS` in order. It stops on the first non-2xx and on a window the route reports as failed. Rerunning it retries that window.
 
+## Trakt
+
+The hourly cron runs Trakt after GitHub settles, independently of it: history from a day behind its watermark to now, then all ratings, then leftover cap on enqueued history years. `RATE_CAP_TRAKT` caps requests per invocation, and a 429 reports `resumeAt` from `Retry-After`. Trakt runs record `cost` 0 so `spendSince` stays a GitHub ledger. History backfills in yearly `crawl_units` windows. Ratings backfill as one full read. The nightly lake cron re-reads the current year of history first. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`, with the pagination headers in R2 custom metadata.
+
 ## Secrets
 
-Worker secrets are set with `wrangler secret put`, never committed. `wrangler dev` reads them from `.dev.vars`, which is gitignored. `.dev.vars.example` lists the names with empty values. `GITHUB_TOKEN` signs every GraphQL and search request. It is a classic personal access token with no scopes, so the hub sees public activity only. Granting it `repo` scope would pull private repositories into the archive and the feed, which the [design](docs/design.md#visibility) rules out. `ADMIN_TOKEN` guards `/admin/sync`, `/admin/backfill`, and `/admin/lake`, and all three answer 404 while it is unset so an unconfigured deployment has no admin surface. Public, non-sensitive identifiers belong in `wrangler.jsonc` as `vars`: `GITHUB_LOGIN` is whose history the hub reads, and the `RATE_*` vars are the rate budget.
+Worker secrets are set with `wrangler secret put`, never committed. `wrangler dev` reads them from `.dev.vars`, which is gitignored. `.dev.vars.example` lists the names with empty values. `TRAKT_CLIENT_ID` is the Trakt application's client ID, sent as `trakt-api-key`. Without it the cron skips Trakt. `GITHUB_TOKEN` signs every GraphQL and search request. It is a classic personal access token with no scopes, so the hub sees public activity only. Granting it `repo` scope would pull private repositories into the archive and the feed, which the [design](docs/design.md#visibility) rules out. `ADMIN_TOKEN` guards `/admin/sync`, `/admin/backfill`, and `/admin/lake`, and all three answer 404 while it is unset so an unconfigured deployment has no admin surface. Public, non-sensitive identifiers belong in `wrangler.jsonc` as `vars`: `GITHUB_LOGIN` and `TRAKT_USER` are whose history the hub reads, and the `RATE_*` vars are the rate budget.
 
 ## Lake
 

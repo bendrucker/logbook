@@ -6,6 +6,7 @@ import type { LakeTable } from "./table";
 // meaning changing.
 export const repositories: LakeTable = {
   name: "repositories",
+  path: "github/v1/repositories",
   key: ["id"],
   columns: [
     text("id"),
