@@ -105,17 +105,17 @@ Each contributions year is checked against the event tables for that year. A dis
 
 The same hourly cron reads my public Trakt profile with the application's client ID, no OAuth. History reads from a day behind its watermark to now, and waits for the drain while backfill years are still enqueued. Ratings re-read in full every run. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_TRAKT` caps the requests one invocation sends, and a 429 stops it with `resumeAt` from `Retry-After`.
 
-Backfill history by year. Without `from` it starts at the year of the oldest play:
+Backfill history by year, from the year of `from` or, without it, the year of the oldest play:
 
 ```sh
-curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=trakt-history"
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kind=trakt-history&from=2023-01"
 ```
 
 The nightly lake cron re-reads the current year of history first, which catches plays logged late with an earlier date. A play backdated into a prior year needs `bun run backfill <url> trakt-history --from <year>-01`. Plays deleted and ratings removed on Trakt stay in D1.
 
 ## Lake
 
-A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/` and `trakt/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing one rebuilt table with four stale ones. `lake_builds` records each build with its per-table row counts, or the reason it failed.
+A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/` and `trakt/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones. Both sources' tables build as one set. Before it builds, the cron re-reads the current year of Trakt history, and a failed re-read still leaves a build worth writing. `lake_builds` records each build with its per-table row counts, or the reason it failed.
 
 To rewrite the tables before the next nightly build, run the same build from an admin route:
 

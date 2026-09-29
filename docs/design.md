@@ -6,7 +6,7 @@ Two sources feed it. GitHub supplies pull requests, reviews, issues, and commit 
 
 ## Goals
 
-- Own the data. Every API response page lands in R2 before anything parses it. A schema change then replays history instead of re-querying GitHub.
+- Own the data. Every API response page lands in R2 before anything parses it. A schema change then replays history instead of re-querying the source.
 - One row per event, so month, year, and lifetime totals are each a SQL query rather than another aggregate table with its own backfill.
 - Separate contributions to other people's repositories from work on my own, because those are different claims about what I do.
 - Publish a code feed to bendrucker.me on the same terms as the ride feed: the site validates on arrival, owns its schema, and reads only.
@@ -31,6 +31,11 @@ flowchart TB
         contrib[contributionsCollection]
     end
 
+    subgraph trakt [Trakt API]
+        history[users history]
+        ratings[users ratings]
+    end
+
     subgraph cf [Cloudflare]
         cron[Hourly cron]
         extract[Extract]
@@ -41,12 +46,16 @@ flowchart TB
         lakebuild[Nightly lake build]
     end
 
-    lake[(R2 activity-hub-lake, github/ prefix)]
+    lake[(R2 activity-hub-lake, github/ and trakt/ prefixes)]
     site[bendrucker.me Publish entrypoint]
 
     cron --> extract
     extract --> search
     extract --> contrib
+    extract --> history
+    extract --> ratings
+    history --> raw
+    ratings --> raw
     search --> raw
     contrib --> raw
     raw --> normalize --> d1
@@ -56,7 +65,7 @@ flowchart TB
 
 #### Worker
 
-The cron runs extraction, normalization, and publishing in one invocation. There is no queue between the stages because the incremental run is a handful of requests: one windowed search per event type plus one `contributionsCollection` call for the current year. A backfill is larger and runs from an admin route or a script against the same code path, paged so no single invocation runs past its wall clock.
+The cron runs extraction, normalization, and publishing in one invocation. There is no queue between the stages because the incremental run is a handful of requests: one windowed search per event type plus one `contributionsCollection` call for the current year, then a Trakt history window and the ratings list. A backfill is larger and runs from an admin route or a script against the same code path, paged so no single invocation runs past its wall clock.
 
 #### Raw Storage
 
@@ -95,7 +104,7 @@ Timestamps land as Parquet `TIMESTAMP_MILLIS` rather than the ISO strings D1 hol
 
 #### Identity
 
-Every event's primary key is the GraphQL node ID GitHub returns, which is stable across renames of the repository and of the owner. `number` is stored beside it for readability, and `owner` and `name` come off the repository dimension each event joins to by `repository_id`.
+Every GitHub event's primary key is the GraphQL node ID GitHub returns, which is stable across renames of the repository and of the owner. `number` is stored beside it for readability, and `owner` and `name` come off the repository dimension each event joins to by `repository_id`.
 
 #### Tables
 
@@ -242,9 +251,9 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 ## Operations
 
-- The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year.
+- The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year, then reads [Trakt](#trakt) history and ratings.
 - A second cron rebuilds the lake at 09:30 UTC. It sits off the hour so it never shares an instant with a sync invocation, and `scheduled` tells the two apart by the cron expression.
-- `GITHUB_TOKEN` is a Worker secret, set with `wrangler secret put`. It is the only credential the hub holds.
+- `GITHUB_TOKEN`, `TRAKT_CLIENT_ID`, and `ADMIN_TOKEN` are Worker secrets, set with `wrangler secret put`.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
 - The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off. Search hides it, and the totals still count it. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
@@ -260,7 +269,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 - Search discovers only what exists. A pull request or repository deleted on GitHub stops matching every window and its rows go stale in place. Nothing here reconciles that, and a periodic re-walk of past windows is the only cheap detector.
 - A public repository that goes private drops out of every later search, and the raw bucket becomes the only copy of its events.
 - The cutover has two writers on the site's code page. Retiring the site's sync belongs in the same change that turns on publishing.
-- A play deleted on Trakt stays in `trakt_plays`. History lists what exists, and nothing compares D1 against it. A rating removed on Trakt stays in `trakt_ratings` the same way, even though the full re-read every hour would make detecting it cheap.
+- A play deleted on Trakt stays in `trakt_plays`. History lists what exists, and nothing compares D1 against it. A rating removed on Trakt stays in `trakt_ratings` the same way. The full re-read every hour would make reconciling them cheap, but nothing does.
 - Trakt's history filter reads `watched_at`. A play logged today with a date in a prior year falls outside every hourly window and the nightly re-walk of the current year. It lands only through `bun run backfill <url> trakt-history --from <that year>-01`.
 
 ## Trakt
@@ -269,7 +278,7 @@ Trakt is the second source: every play in my watch history and every rating, wit
 
 #### Access
 
-Both endpoints read a public profile with the application's client ID alone. `GET /users/bendrucker/history` and `GET /users/bendrucker/ratings` carry `trakt-api-version: 2` and `trakt-api-key` and no OAuth token, so there is no refresh flow to keep alive. `TRAKT_CLIENT_ID` is a Worker secret and `TRAKT_USER` a var. Making the profile private would stop the sync, and switching to OAuth would be the fix.
+Both endpoints read a public profile with the application's client ID alone. `GET /users/{TRAKT_USER}/history` and `GET /users/{TRAKT_USER}/ratings` carry `trakt-api-version: 2` and `trakt-api-key` and no OAuth token, so there is no refresh flow to keep alive. `TRAKT_CLIENT_ID` is a Worker secret and `TRAKT_USER` a var. Making the profile private would stop the sync. Switching to OAuth would fix it.
 
 #### Tables
 
@@ -283,11 +292,11 @@ A play is keyed on Trakt's history `id`. A rating has no ID of its own, and Trak
 
 #### Extraction
 
-History pages 250 items at a time, following `X-Pagination-Page-Count` from each response instead of computing pages from the requested limit, which Trakt may clamp. The bodies are bare JSON arrays, so the pagination headers ride along as R2 custom metadata. Replay reads them to tell a finished fetch from one that stopped partway, and rebuilds from the newest finished fetch of a window.
+History pages 250 items at a time, following `X-Pagination-Page-Count` from each response instead of computing pages from the requested limit, which Trakt may clamp. The bodies are bare JSON arrays, so the pagination headers are stored as R2 custom metadata. Replay reads them to tell a finished fetch from one that stopped partway, and rebuilds from the newest finished fetch of a window.
 
-The hourly cron reads history from a day behind the watermark to now, then the whole ratings list. Trakt filters on both bounds inclusively and to the instant, though its reference names a date format. The day of overlap catches plays logged a little late, and upserts on the history ID make it free. Ratings have no window filter, and the list is small, so each run re-reads it and upserts every row. The ratings watermark records the last full read.
+The hourly cron reads history from a day behind the watermark to now, then the whole ratings list. Trakt accepts full ISO timestamps for `start_at` and `end_at` and includes both bounds, even though its reference shows only dates. The day of overlap catches plays logged a little late. Re-reading those plays is harmless, because rows upsert on the history ID. Ratings have no window filter, and the list is small, so each run re-reads it and upserts every row. The ratings watermark records the last full read.
 
-A backfill that stopped partway leaves the history watermark at the end of the last year it finished. A window from there to now could need more requests than the cap every hour and never advance, starving ratings and the drain behind it. So the hourly history read waits while any history year is still enqueued, and the drain finishes those years first. The current year is the last unit, and it carries the watermark to now.
+A backfill that stopped partway leaves the history watermark at the end of the last year it finished. A window from there to now could need more requests than the cap allows, so it would fail every hour without advancing, and ratings and the backfill queue behind it would never run. So the hourly history read waits while any history year is still enqueued in `crawl_units`, and the hourly drain of that queue finishes those years first. The current year is the last unit, and it carries the watermark to now.
 
 The nightly lake cron re-reads the whole current year of history before it builds, which catches plays logged late with a date earlier in the year. It leaves the watermark alone.
 
@@ -297,7 +306,7 @@ Trakt documents 500 unauthenticated GET requests every five minutes per applicat
 
 #### Backfill
 
-History backfills in yearly `crawl_units` windows, from the year of `from` or, without it, the year of the oldest play. Finding that takes two requests: page 1 for the page count, then the last page, whose last item is the oldest play. Both archive under the window `earliest`. A later call finds the years already enqueued and skips the discovery. Trakt has no result cap, so a year never splits. A ratings backfill is one full read.
+History backfills in yearly `crawl_units` windows, from the year of `from` or, without it, the year of the oldest play. Finding the oldest play takes two requests: page 1 for the page count, then the last page, whose last item is the oldest play. Both archive under the window `earliest`. A later call finds the years already enqueued and skips the discovery. Trakt has no result cap, so a year never splits. A ratings backfill is one full read.
 
 ## Visibility
 
