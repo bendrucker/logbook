@@ -1,0 +1,134 @@
+// Re-normalizing reads R2 and never calls Instapaper, so a schema change
+// rebuilds the Instapaper tables from the pages already archived.
+import type { z } from "zod";
+import { MissingRawObjectError, RawValidationError } from "../normalize";
+import { INVALID_BOOKMARK } from "./client";
+import {
+  type ArchivedMetadata,
+  type ArchivedPage,
+  parseKey,
+  RAW_PREFIX,
+  readMetadata,
+} from "./raw";
+import { applyFolders, applyHighlights, applyListing, parseListingWindow } from "./rows";
+import {
+  bookmarksListResponse,
+  errorResponse,
+  foldersResponse,
+  highlightsResponse,
+} from "./schema";
+import { markDeleted } from "./store";
+import { FOLDERS_WINDOW } from "./sync";
+
+export interface InstapaperReplay {
+  pages: number;
+  rowsChanged: number;
+}
+
+interface Replayable extends ArchivedPage {
+  listing: ArchivedMetadata["listing"];
+}
+
+// A delta page's `delete_ids` mean what they meant against the tables as they
+// stood when it was fetched, so the pages apply in the order they arrived,
+// which is the order of their runs' fetch times.
+export async function replayInstapaper(
+  db: D1Database,
+  bucket: R2Bucket,
+): Promise<InstapaperReplay> {
+  const pages = await listReplayable(bucket);
+  let rowsChanged = 0;
+
+  const pending = [...pages];
+  let page = pending.shift();
+  while (page !== undefined) {
+    // eslint-disable-next-line no-await-in-loop
+    rowsChanged += await replayPage(db, page, await readBody(bucket, page.key));
+    page = pending.shift();
+  }
+
+  return { pages: pages.length, rowsChanged };
+}
+
+async function replayPage(db: D1Database, page: Replayable, body: string): Promise<number> {
+  const data = parseJson(page.key, body);
+
+  // An error answer archived as a page rather than a failure is one the sync
+  // acted on. A deleted bookmark is the only one that changes a row.
+  const error = errorResponse.safeParse(data);
+  if (error.success) {
+    const [first] = error.data;
+    return page.kind === "instapaper-highlights" && first.error_code === INVALID_BOOKMARK
+      ? markDeleted(db, Number(page.window), page.fetchedAt)
+      : 0;
+  }
+
+  if (page.kind === "instapaper-highlights") {
+    return applyHighlights(db, Number(page.window), validate(highlightsResponse, page.key, data));
+  }
+  if (page.window === FOLDERS_WINDOW) {
+    return applyFolders(db, validate(foldersResponse, page.key, data), page.fetchedAt);
+  }
+  const listing = parseListingWindow(page.window);
+  if (listing === null || page.listing === null) {
+    throw new RawValidationError(page.key, "the key names no listing", null);
+  }
+  const applied = await applyListing(
+    db,
+    listing,
+    validate(bookmarksListResponse, page.key, data),
+    page.listing,
+    page.fetchedAt,
+  );
+  return applied.rowsChanged;
+}
+
+// A page archived as the failure that stopped its run never reached D1.
+async function listReplayable(bucket: R2Bucket): Promise<Replayable[]> {
+  const pages: Replayable[] = [];
+  let cursor: string | undefined;
+  do {
+    // eslint-disable-next-line no-await-in-loop
+    const listed = await bucket.list({ prefix: RAW_PREFIX, cursor, include: ["customMetadata"] });
+    for (const object of listed.objects) {
+      const page = parseKey(object.key);
+      const metadata = readMetadata(object.customMetadata);
+      if (page !== null && metadata.failure === null) {
+        pages.push({ ...page, listing: metadata.listing });
+      }
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor !== undefined);
+
+  return pages.toSorted(
+    (a, b) =>
+      a.fetchedAt.localeCompare(b.fetchedAt) ||
+      a.kind.localeCompare(b.kind) ||
+      a.window.localeCompare(b.window) ||
+      a.page - b.page,
+  );
+}
+
+async function readBody(bucket: R2Bucket, key: string): Promise<string> {
+  const object = await bucket.get(key);
+  if (object === null) {
+    throw new MissingRawObjectError(key);
+  }
+  return object.text();
+}
+
+function parseJson(key: string, body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    throw new RawValidationError(key, "the body is not JSON", error);
+  }
+}
+
+function validate<T>(schema: z.ZodType<T>, key: string, data: unknown): T {
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) {
+    throw new RawValidationError(key, parsed.error.message, parsed.error);
+  }
+  return parsed.data;
+}

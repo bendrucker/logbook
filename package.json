@@ -6,6 +6,7 @@
     "typecheck": "tsc --noEmit && tsc -p scripts --noEmit",
     "lint": "oxlint --type-aware --report-unused-disable-directives",
     "backfill": "bun scripts/backfill.ts",
+    "instapaper:login": "bun --env-file=.dev.vars scripts/instapaper-login.ts",
     "test": "vitest run",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

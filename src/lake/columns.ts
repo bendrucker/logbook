@@ -1,7 +1,7 @@
 import type { BasicType } from "hyparquet-writer";
 
 // What a D1 value becomes in the Parquet column.
-export type Cell = string | number | boolean | Date | null;
+export type Cell = string | number | bigint | boolean | Date | null;
 
 export interface LakeColumn {
   name: string;
@@ -49,6 +49,24 @@ export function integer(name: string): LakeColumn {
   };
 }
 
+// A 64-bit ID, which INT32 would overflow. The writer encodes INT64 from a
+// bigint, and D1 answers with a number exact up to 2^53.
+export function bigint(name: string): LakeColumn {
+  return {
+    name,
+    type: "INT64",
+    cell: (value) => {
+      if (value === null) {
+        return null;
+      }
+      if (typeof value === "number" && Number.isSafeInteger(value)) {
+        return BigInt(value);
+      }
+      throw new LakeValueError(name, value);
+    },
+  };
+}
+
 // SQLite has no boolean type, so D1 answers with the 0 or 1 the column stores.
 export function boolean(name: string): LakeColumn {
   return {
@@ -67,8 +85,8 @@ export function boolean(name: string): LakeColumn {
 }
 
 // The writer encodes a Date as INT64 TIMESTAMP_MILLIS, which DuckDB reads as a
-// timestamp with no cast. GitHub's timestamps are UTC to the second, so the
-// epoch milliseconds carry everything the string did.
+// timestamp with no cast. Every source's timestamps are UTC to the millisecond
+// or coarser, so the epoch milliseconds carry everything the string did.
 export function timestamp(name: string): LakeColumn {
   return {
     name,
@@ -87,6 +105,20 @@ export function timestamp(name: string): LakeColumn {
       }
 
       return date;
+    },
+  };
+}
+
+// A fraction, which SQLite stores as REAL and D1 answers as a number.
+export function double(name: string): LakeColumn {
+  return {
+    name,
+    type: "DOUBLE",
+    cell: (value) => {
+      if (value === null || typeof value === "number") {
+        return value;
+      }
+      throw new LakeValueError(name, value);
     },
   };
 }

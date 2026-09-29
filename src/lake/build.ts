@@ -1,6 +1,7 @@
 import { eachConcurrent, OPEN_CONNECTIONS } from "../concurrency";
 import { failBuild, finishBuild, startBuild } from "./builds";
 import { commitDays } from "./commit-days";
+import { instapaperBookmarks, instapaperFolders, instapaperHighlights } from "./instapaper";
 import { issues } from "./issues";
 import { pullRequests } from "./pull-requests";
 import { repositories } from "./repositories";
@@ -13,6 +14,9 @@ export const LAKE_TABLES: readonly LakeTable[] = [
   reviews,
   issues,
   commitDays,
+  instapaperBookmarks,
+  instapaperHighlights,
+  instapaperFolders,
 ];
 
 // Matches the nightly trigger in wrangler.jsonc. `scheduled` runs the sync on
@@ -23,14 +27,12 @@ export const LAKE_TABLES: readonly LakeTable[] = [
 // named export of the entrypoint as a handler and refuses a string.
 export const LAKE_CRON = "30 9 * * *";
 
-// Activity Hub owns the bucket and writes its own tables under `lake/v1/`, so
-// this project's prefix keeps one DuckDB session able to read both.
-const PREFIX = "github/v1";
-
 const CONTENT_TYPE = "application/vnd.apache.parquet";
 
+// Activity Hub owns the bucket and writes its own tables under `lake/v1/`, so
+// each source's own prefix keeps one DuckDB session able to read them all.
 export function tableKey(table: LakeTable): string {
-  return `${PREFIX}/${table.name}/part-0.parquet`;
+  return `${table.path}/part-0.parquet`;
 }
 
 export interface LakeBuildResult {

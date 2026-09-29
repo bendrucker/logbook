@@ -2,11 +2,15 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { commitDay, issue, pullRequest, review, seedRepository } from "../../test/fixtures";
 import { parquetRows, readParquet } from "../../test/parquet";
+import { bookmark, folder, highlight } from "../../test/instapaper-fixtures";
 import { emptyBucket, readObject } from "../../test/r2";
+import { applyFolders, applyHighlights, applyListing } from "../instapaper/rows";
+import { bookmarksListResponse, foldersResponse, highlightsResponse } from "../instapaper/schema";
 import { upsertCommitDays, upsertIssues, upsertPullRequests, upsertReviews } from "../store";
 import { buildLake, LAKE_TABLES, tableKey } from "./build";
 import { readLatestBuild } from "./builds";
 import { commitDays } from "./commit-days";
+import { instapaperBookmarks, instapaperFolders, instapaperHighlights } from "./instapaper";
 import { issues } from "./issues";
 import { pullRequests } from "./pull-requests";
 import { repositories } from "./repositories";
@@ -33,7 +37,7 @@ async function rowsOf(table: LakeTable): Promise<Record<string, unknown>[]> {
 beforeEach(() => emptyBucket(env.LAKE));
 
 describe("buildLake", () => {
-  it("writes every table under the shared bucket's github prefix", async () => {
+  it("writes every table under its source's prefix in the shared bucket", async () => {
     await seed();
 
     await buildLake(env, STARTED_AT);
@@ -42,7 +46,11 @@ describe("buildLake", () => {
     expect(listed.objects.map((object) => object.key).toSorted()).toEqual(
       LAKE_TABLES.map(tableKey).toSorted(),
     );
-    expect(listed.objects.every((object) => object.key.startsWith("github/v1/"))).toBe(true);
+    expect(
+      listed.objects.every(
+        (object) => object.key.startsWith("github/v1/") || object.key.startsWith("instapaper/v1/"),
+      ),
+    ).toBe(true);
   });
 
   it("reports the rows it wrote per table", async () => {
@@ -56,6 +64,9 @@ describe("buildLake", () => {
       reviews: 1,
       issues: 1,
       commit_days: 1,
+      instapaper_bookmarks: 0,
+      instapaper_highlights: 0,
+      instapaper_folders: 0,
     });
     expect(built.startedAt).toBe(STARTED_AT);
   });
@@ -139,6 +150,74 @@ describe("buildLake", () => {
     await buildLake(env, STARTED_AT);
 
     expect(await rowsOf(table)).toEqual([expected]);
+  });
+
+  it("writes Instapaper rows that read back as D1 holds them", async () => {
+    const fetchedAt = "2026-09-10T00:00:00.000Z";
+    await applyFolders(env.DB, foldersResponse.parse([folder(7, "Essays")]), fetchedAt);
+    await applyListing(
+      env.DB,
+      { folder: "folder", folderId: 7 },
+      bookmarksListResponse.parse({
+        bookmarks: [
+          bookmark(3_000_000_001, {
+            starred: "1",
+            progress: 0.25,
+            progress_timestamp: 1_788_220_900,
+          }),
+        ],
+      }),
+      { mode: "full", have: 0 },
+      fetchedAt,
+    );
+    await applyHighlights(
+      env.DB,
+      3_000_000_001,
+      highlightsResponse.parse([highlight(9, 3_000_000_001, { note: "why", position: 2 })]),
+    );
+
+    await buildLake(env, STARTED_AT);
+
+    expect(await rowsOf(instapaperBookmarks)).toEqual([
+      {
+        bookmark_id: 3_000_000_001n,
+        url: "https://example.com/3000000001",
+        title: "Article 3000000001",
+        description: null,
+        saved_at: new Date((1_788_220_800 + 3_000_000_001) * 1000),
+        starred: true,
+        folder: "folder",
+        folder_id: 7n,
+        progress: 0.25,
+        progress_at: new Date("2026-09-01T00:01:40.000Z"),
+        private_source: null,
+        tags: "[]",
+        hash: "hash-3000000001",
+        unlisted_at: null,
+        deleted_at: null,
+        fetched_at: new Date(fetchedAt),
+      },
+    ]);
+    expect(await rowsOf(instapaperHighlights)).toEqual([
+      {
+        highlight_id: 9n,
+        bookmark_id: 3_000_000_001n,
+        text: "Passage 9",
+        note: "why",
+        position: 2,
+        created_at: new Date((1_788_220_800 + 3600 + 9) * 1000),
+      },
+    ]);
+    expect(await rowsOf(instapaperFolders)).toEqual([
+      {
+        folder_id: 7n,
+        title: "Essays",
+        slug: "essays",
+        position: 7,
+        public: false,
+        fetched_at: new Date(fetchedAt),
+      },
+    ]);
   });
 
   it.each(LAKE_TABLES.map((table) => ({ name: table.name, table })))(

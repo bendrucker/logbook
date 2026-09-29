@@ -23,6 +23,10 @@
     // subrequests. A backfill call drains the frontier until its cap.
     "RATE_CAP_CRON": 40,
     "RATE_CAP_BACKFILL": 150,
+    // Instapaper requests one invocation sends at most, cron or backfill.
+    // Instapaper documents a rate limit without a number and answers error
+    // 1040 past it, which stops the run until the next hour.
+    "RATE_CAP_INSTAPAPER": 50,
   },
   "triggers": {
     // Hourly incremental sync. GitHub's search API is windowed by date rather
@@ -43,7 +47,7 @@
   "r2_buckets": [
     { "binding": "RAW", "bucket_name": "logbook-raw" },
     // Shared with activity-hub so one DuckDB session can join rides against
-    // pull requests. This project writes under a `github/` prefix.
+    // pull requests. This project writes under `github/` and `instapaper/` prefixes.
     { "binding": "LAKE", "bucket_name": "activity-hub-lake" },
   ],
 }

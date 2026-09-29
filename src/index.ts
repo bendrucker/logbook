@@ -1,6 +1,7 @@
 import { handleBackfill, handleLakeBuild, handleSyncStatus } from "./admin";
 import { buildLake, LAKE_CRON } from "./lake";
 import { syncIncremental } from "./sync/incremental";
+import { syncInstapaper } from "./instapaper/incremental";
 
 export default {
   fetch(request, env): Response | Promise<Response> {
@@ -28,7 +29,21 @@ export default {
       return;
     }
 
-    await syncIncremental(env);
+    // One source at a time, since both draw on the invocation's six open
+    // connections. A GitHub failure still leaves Instapaper to run, and either
+    // failure marks the invocation failed.
+    const github = await settled(syncIncremental(env));
+    const instapaper = await settled(syncInstapaper(env));
+    for (const outcome of [github, instapaper]) {
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
+    }
     console.log(`sync trigger ${controller.cron} finished`);
   },
 } satisfies ExportedHandler<Env>;
+
+async function settled(run: Promise<void>): Promise<PromiseSettledResult<void>> {
+  const [outcome] = await Promise.allSettled([run]);
+  return outcome;
+}

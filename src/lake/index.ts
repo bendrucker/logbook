@@ -2,6 +2,7 @@ export { buildLake, LAKE_CRON, LAKE_TABLES, type LakeBuildResult, tableKey } fro
 export { type LakeBuild, readLatestBuild } from "./builds";
 export { type Cell, type LakeColumn, LakeValueError } from "./columns";
 export { commitDays } from "./commit-days";
+export { instapaperBookmarks, instapaperFolders, instapaperHighlights } from "./instapaper";
 export { issues } from "./issues";
 export { pullRequests } from "./pull-requests";
 export { repositories } from "./repositories";

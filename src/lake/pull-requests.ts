@@ -3,6 +3,7 @@ import type { LakeTable } from "./table";
 
 export const pullRequests: LakeTable = {
   name: "pull_requests",
+  path: "github/v1/pull_requests",
   key: ["id"],
   columns: [
     text("id"),

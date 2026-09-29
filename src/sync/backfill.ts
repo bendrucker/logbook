@@ -10,7 +10,7 @@ import {
 import { backfillLimits, openBudget } from "./budget";
 import { type CrawlSource, drain, enqueue, frontierStatus, type UnitFetch } from "./frontier";
 import { syncContributionEventsWindow } from "./contribution-events";
-import { isContributionEventsKind, SYNC_KINDS, type SyncKind } from "./kinds";
+import { GITHUB_KINDS, type GitHubKind, isContributionEventsKind, type SyncKind } from "./kinds";
 import {
   githubToken,
   type InvocationOptions,
@@ -64,7 +64,7 @@ export function parseMonth(value: string): Month {
 // same `from` carries on where the last call stopped.
 export async function backfill(
   env: Env,
-  kind: SyncKind,
+  kind: GitHubKind,
   from: Month,
   options: InvocationOptions = {},
 ): Promise<BackfillResult> {
@@ -92,7 +92,7 @@ export async function backfill(
 // without anyone rerunning the script. It stops at the first kind a limit
 // refuses, since the limit belongs to the token.
 export async function drainBackfill(env: Env, options: SyncOptions): Promise<void> {
-  for (const kind of SYNC_KINDS) {
+  for (const kind of GITHUB_KINDS) {
     // oxlint-disable-next-line no-await-in-loop -- the first kind a limit refuses ends the drain
     const drained = await drain(env.DB, kind, crawlSource(env, kind, options));
     if (drained.error !== null) {
@@ -104,7 +104,7 @@ export async function drainBackfill(env: Env, options: SyncOptions): Promise<voi
   }
 }
 
-function roots(kind: SyncKind, from: Month, now: Date): string[] {
+function roots(kind: GitHubKind, from: Month, now: Date): string[] {
   if (kind === "contributions" || isContributionEventsKind(kind)) {
     const last = now.getUTCFullYear();
     return last < from.year
@@ -114,7 +114,7 @@ function roots(kind: SyncKind, from: Month, now: Date): string[] {
   return monthlyWindows(from, now).map((window) => window.key);
 }
 
-function crawlSource(env: Env, kind: SyncKind, options: SyncOptions): CrawlSource {
+function crawlSource(env: Env, kind: GitHubKind, options: SyncOptions): CrawlSource {
   const now = options.now ?? new Date();
   const split = (window: string) => splitContributions(window, now).map((child) => child.key);
   if (kind === "contributions") {
@@ -160,7 +160,7 @@ function searchCreated(
   );
 }
 
-function unitFetch(run: SyncResult): UnitFetch {
+export function unitFetch(run: SyncResult): UnitFetch {
   return {
     fetchedAt: run.fetchedAt,
     pages: run.pages,

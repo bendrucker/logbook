@@ -13,6 +13,7 @@ import type { ReviewsFailure, ReviewsPage } from "../github/reviews";
 import { issuePages, pullRequestPages, reviewedPullRequestPages } from "../github/search";
 import type { ContributionsCollection } from "../github/schema";
 import type { EventKind } from "../github/windows";
+import { InstapaperRateLimited } from "../instapaper/client";
 import {
   normalizeContributions,
   normalizeSearchPage,
@@ -26,6 +27,7 @@ import { archivedYear, crossCheck } from "./cross-check";
 import { recordIrreducible } from "./frontier";
 import type { SyncKind } from "./kinds";
 import { finishRun, type RunResult, startRun } from "./runs";
+import { RequestCapReached } from "../request-cap";
 import { advance } from "./state";
 
 export class MissingSecretError extends Error {
@@ -63,8 +65,13 @@ export interface InvocationOptions extends GraphQLOptions {
   clock?: Clock;
 }
 
-export interface SyncOptions extends GraphQLOptions {
+// A source without a point budget records no cost.
+export interface RunOptions {
   now?: Date;
+  budget?: Budget;
+}
+
+export interface SyncOptions extends GraphQLOptions, RunOptions {
   // Shared by every window one invocation syncs, so the cap spans them all.
   budget: Budget;
 }
@@ -158,14 +165,15 @@ export async function recordRun(
   env: Env,
   kind: SyncKind,
   window: string,
-  options: SyncOptions,
+  options: RunOptions,
   body: (run: Run) => Promise<void>,
   onFailure: (error: unknown, run: Run) => Promise<unknown>,
 ): Promise<SyncResult> {
   const now = options.now ?? new Date();
   const run: Run = { now, fetchedAt: now.toISOString(), result: CLEAN };
   const id = await startRun(env.DB, kind, window, run.fetchedAt);
-  const spent = options.budget.spent;
+  const { budget } = options;
+  const spent = budget?.spent ?? 0;
   let resumeAt: string | null = null;
 
   try {
@@ -175,7 +183,9 @@ export async function recordRun(
     resumeAt = stoppedUntil(error, now);
     await onFailure(error, run);
   } finally {
-    run.result = charged(run.result, options.budget, spent);
+    if (budget !== undefined) {
+      run.result = charged(run.result, budget, spent);
+    }
     await finishRun(env.DB, id, run.result);
   }
 
@@ -278,14 +288,17 @@ export function charged(result: RunResult, budget: Budget, before: number): RunR
   return { ...result, cost, rateRemaining: cost > 0 ? budget.remaining : null };
 }
 
-// The cap has no reset to wait for, so a run it stopped resumes as soon as the
+// A cap has no reset to wait for, so a run it stopped resumes as soon as the
 // caller likes.
 export function stoppedUntil(error: unknown, now: Date): string | null {
   if (error instanceof BudgetRefused) {
     return error.resetAt ?? now.toISOString();
   }
-  if (error instanceof SecondaryRateLimited) {
+  if (error instanceof SecondaryRateLimited || error instanceof InstapaperRateLimited) {
     return new Date(now.getTime() + error.retryAfterSeconds * 1000).toISOString();
+  }
+  if (error instanceof RequestCapReached) {
+    return now.toISOString();
   }
   return null;
 }

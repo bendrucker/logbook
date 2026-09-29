@@ -4,6 +4,10 @@
 interface Secrets {
   ADMIN_TOKEN?: string;
   GITHUB_TOKEN?: string;
+  INSTAPAPER_CONSUMER_KEY?: string;
+  INSTAPAPER_CONSUMER_SECRET?: string;
+  INSTAPAPER_ACCESS_TOKEN?: string;
+  INSTAPAPER_ACCESS_SECRET?: string;
 }
 
 interface Env extends Secrets {}
