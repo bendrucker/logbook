@@ -6,7 +6,6 @@
       "name": "logbook",
       "dependencies": {
         "hyparquet-writer": "^0.16.9",
-        "oxlint-tsgolint": "^7.0.2001",
         "temporal-polyfill": "^1.0.5",
         "zod": "^4.5.4",
       },

@@ -3,7 +3,9 @@
 import type { z } from "zod";
 import { MissingRawObjectError, RawValidationError } from "../normalize";
 import type { TraktKind } from "../sync/kinds";
+import { OPEN_CONNECTIONS, mapConcurrent } from "../concurrency";
 import { pageNumber } from "../raw-object";
+import { unhandled } from "../unhandled";
 import { readMetadata, traktPrefix } from "./raw";
 import {
   addRows,
@@ -46,18 +48,15 @@ export async function replayTraktWindow(
     return null;
   }
 
-  let rows = UNCHANGED;
-  // One page after another, so a title two pages name keeps the later page's
+  const bodies = mapConcurrent(selected.pageKeys, OPEN_CONNECTIONS, async (key) => ({
+    key,
+    body: await readBody(bucket, key),
+  }));
+  // Reads land in key order, so a title two pages name keeps the later page's
   // copy.
-  const pending = [...selected.pageKeys];
-  let key = pending.shift();
-  while (key !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
-    const body = await readBody(bucket, key);
-    // eslint-disable-next-line no-await-in-loop
-    const changed = await normalizePage(db, kind, key, body, selected.fetchedAt);
-    rows = addRows(rows, changed);
-    key = pending.shift();
+  let rows = UNCHANGED;
+  for await (const { key, body } of bodies) {
+    rows = addRows(rows, await normalizePage(db, kind, key, body, selected.fetchedAt));
   }
 
   return { fetchedAt: selected.fetchedAt, complete: selected.complete, rows };
@@ -75,6 +74,8 @@ function normalizePage(
       return normalizeHistory(db, parse(historyPage, key, body), fetchedAt);
     case "trakt-ratings":
       return normalizeRatings(db, parse(ratingsPage, key, body), fetchedAt);
+    default:
+      throw unhandled(kind);
   }
 }
 
@@ -88,7 +89,7 @@ async function listFetches(bucket: R2Bucket, prefix: string): Promise<ArchivedFe
   >();
   let cursor: string | undefined;
   do {
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- each listing needs the cursor the last one returned
     const listing = await bucket.list({ prefix, cursor, include: ["customMetadata"] });
     for (const object of listing.objects) {
       const fetchedAt = object.key.slice(prefix.length, object.key.lastIndexOf("/"));

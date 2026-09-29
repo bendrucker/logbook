@@ -1,3 +1,4 @@
+import { unhandled } from "../unhandled";
 import type { Episode, HistoryItem, Movie, RatingItem, Season, Show } from "./schema";
 import {
   type Play,
@@ -185,6 +186,8 @@ export function ratingRows(items: readonly RatingItem[], fetchedAt: string): Rat
           traktId: item.episode.ids.trakt,
           showTraktId: item.show.ids.trakt,
         };
+      default:
+        throw unhandled(item);
     }
   });
   return { titles: titles.rows(), ratings };

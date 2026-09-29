@@ -52,7 +52,7 @@ export function readMetadata(metadata: Record<string, string> | undefined): Arch
   const pageCount = number("pageCount");
   return {
     status: number("status") ?? 0,
-    failure: metadata?.["failure"] ?? null,
+    failure: metadata?.failure ?? null,
     pagination: page === null || pageCount === null ? null : { page, pageCount },
   };
 }

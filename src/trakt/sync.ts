@@ -116,10 +116,7 @@ async function syncPages<Item extends HistoryItem | RatingItem>(
 
       // Each page is archived before its rows are written, so a normalization
       // bug stays diagnosable against the bytes.
-      let page = await pages.next();
-      while (page.done !== true) {
-        const { number, body, pagination, items } = page.value;
-        // eslint-disable-next-line no-await-in-loop
+      for await (const { number, body, pagination, items } of pages) {
         await archiveTraktPage(env.RAW, {
           kind,
           window,
@@ -129,15 +126,12 @@ async function syncPages<Item extends HistoryItem | RatingItem>(
           status: 200,
           pagination,
         });
-        // eslint-disable-next-line no-await-in-loop
         const changed = await fetch.normalize(env.DB, items, run.fetchedAt);
         run.result = {
           ...run.result,
           pages: number,
           rowsChanged: run.result.rowsChanged + changed.titles + changed.plays + changed.ratings,
         };
-        // eslint-disable-next-line no-await-in-loop
-        page = await pages.next();
       }
 
       const through = fetch.through(run.fetchedAt);
@@ -181,9 +175,9 @@ export async function* traktPages<Item>(
   options: TraktOptions,
 ): AsyncGenerator<TraktPage<Item>> {
   let number = 1;
-  let pageCount = 1;
+  let pageCount: number;
   do {
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- a page lands before the next is requested, so the cap stops between pages
     const response = await traktGet(
       clientId,
       path,
