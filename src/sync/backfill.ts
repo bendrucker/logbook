@@ -92,10 +92,8 @@ export async function backfill(
 // without anyone rerunning the script. It stops at the first kind a limit
 // refuses, since the limit belongs to the token.
 export async function drainBackfill(env: Env, options: SyncOptions): Promise<void> {
-  const remaining = [...SYNC_KINDS];
-  let kind = remaining.shift();
-  while (kind !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
+  for (const kind of SYNC_KINDS) {
+    // oxlint-disable-next-line no-await-in-loop -- the first kind a limit refuses ends the drain
     const drained = await drain(env.DB, kind, crawlSource(env, kind, options));
     if (drained.error !== null) {
       console.error(`${kind} backfill drain stopped: ${drained.error}`);
@@ -103,7 +101,6 @@ export async function drainBackfill(env: Env, options: SyncOptions): Promise<voi
     if (drained.resumeAt !== null) {
       return;
     }
-    kind = remaining.shift();
   }
 }
 

@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { fakeClock } from "../../test/clock";
 import { stubFetch } from "../../test/fetch-stub";
@@ -61,6 +61,7 @@ describe("syncIncremental", () => {
     expect(await count("pull_requests")).toEqual({ total: 2 });
     expect(await readWatermark(env.DB, "pr-authored")).toEqual({
       window: NOW.toISOString(),
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- vitest types asymmetric matchers as `any`
       updatedAt: expect.any(String),
     });
     const [run] = await recentRuns(env.DB, "pr-authored", 1);

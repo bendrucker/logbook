@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { pullRequest, seedRepository } from "../../test/fixtures";
 import { markPublished, publishedAt, readRow } from "../../test/tables";

@@ -42,7 +42,10 @@ export async function archivedYear(
   return archived;
 }
 
-type Authored = { id: string; author: { login: string } | null };
+interface Authored {
+  id: string;
+  author: { login: string } | null;
+}
 
 // Every node the kind's archive holds for the year, keyed by node ID, so an
 // event two windows both listed counts once. Null when nothing is archived or
@@ -128,7 +131,7 @@ function sameSize(
   ids: ReadonlySet<string> | undefined,
   reported: number,
 ): ReadonlySet<string> | null {
-  return ids !== undefined && ids.size === reported ? ids : null;
+  return ids?.size === reported ? ids : null;
 }
 
 // `reviews 75 (38 own) vs 37 PRs`: GitHub's figure as it reports it, the part

@@ -54,7 +54,7 @@ export function parseHourRange(value: string): HourRange | null {
 }
 
 function hourKey(time: Temporal.PlainDateTime): string {
-  return `${time.toPlainDate()}T${String(time.hour).padStart(2, "0")}`;
+  return `${time.toPlainDate().toString()}T${String(time.hour).padStart(2, "0")}`;
 }
 
 export function hourRangeEnd(range: HourRange): Temporal.PlainDateTime {

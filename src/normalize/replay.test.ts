@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   commitDaysPayload,
@@ -69,7 +69,7 @@ function commitsPayload(
     const commits = nodes.reduce((total, node) => total + node.commitCount, 0);
     return { repository: repository(name), contributions: { totalCount: commits, nodes } };
   });
-  const commits = entries.reduce((total, [, , commitCount]) => total + commitCount, 0);
+  const commits = entries.reduce((total, entry) => total + entry[2], 0);
   return contributionsPayload(0, 0, {
     totalCommitContributions: commits,
     totalRepositoriesWithContributedCommits: repositories ?? names.length,
@@ -96,7 +96,7 @@ function watchReads(bucket: R2Bucket): { bucket: R2Bucket; most: () => number } 
         };
       }
       const value: unknown = Reflect.get(target, property);
-      return typeof value === "function" ? value.bind(target) : value;
+      return typeof value === "function" ? (value.bind(target) as unknown) : value;
     },
   });
   return { bucket: watched, most: () => most };

@@ -84,7 +84,7 @@ export async function drain(db: D1Database, kind: string, source: CrawlSource): 
   while (window !== null) {
     // Each unit's pages are read one after another under a budget that has to
     // see one response before it admits the next request.
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- the drain stops at the first unit that fails
     const fetched = await source.fetch(window);
     result.windows.push(window);
     result.pages += fetched.pages;
@@ -96,9 +96,9 @@ export async function drain(db: D1Database, kind: string, source: CrawlSource): 
       return { ...result, resumeAt: fetched.resumeAt, error: fetched.error };
     }
 
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- a unit settles before the next is picked, or it would be picked again
     await settle(db, kind, window, fetched, fetched.truncated ? source.split(window) : null);
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- settling a truncated unit enqueues the windows it splits into
     window = await nextPending(db, kind);
   }
 
@@ -124,8 +124,7 @@ async function settle(
   fetched: UnitFetch,
   children: readonly string[] | null,
 ): Promise<void> {
-  const status: UnitStatus =
-    children === null ? "done" : children.length === 0 ? "irreducible" : "split";
+  const status = unitStatus(children);
   const at = new Date().toISOString();
   const insert = insertUnit(db);
 
@@ -138,6 +137,13 @@ async function settle(
       .bind(kind, window, status, fetched.fetchedAt, fetched.pages, fetched.cost, at),
     ...(children ?? []).map((child) => insert.bind(kind, child, window, "pending", at)),
   ]);
+}
+
+function unitStatus(children: readonly string[] | null): UnitStatus {
+  if (children === null) {
+    return "done";
+  }
+  return children.length === 0 ? "irreducible" : "split";
 }
 
 export interface FrontierStatus {

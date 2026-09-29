@@ -9,6 +9,7 @@ import {
 import { archiveContributionEventsPage } from "../github/raw";
 import type { EventKind } from "../github/windows";
 import { normalizeContributionEvents } from "../normalize";
+import { unhandled } from "../unhandled";
 import { CONTRIBUTION_EVENTS, type ContributionEventsKind } from "./kinds";
 import {
   githubToken,
@@ -48,9 +49,9 @@ export function syncContributionEventsWindow(
 
       let page = await pages.next();
       while (page.done !== true) {
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- a page lands before the next is requested
         run.result = await ingest(env, event, key, run.fetchedAt, page.value, run.result);
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
         page = await pages.next();
       }
     },
@@ -110,5 +111,7 @@ function contributionEventPages(
       return kinded(reviewContributionPages(options), (nodes) => ({ kind, nodes }));
     case "issue":
       return kinded(issueContributionPages(options), (nodes) => ({ kind, nodes }));
+    default:
+      throw unhandled(kind);
   }
 }

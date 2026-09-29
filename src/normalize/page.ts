@@ -13,6 +13,7 @@ import {
   upsertRepositories,
   upsertReviews,
 } from "../store";
+import { unhandled } from "../unhandled";
 import {
   type ContributionRows,
   contributionRows,
@@ -37,11 +38,11 @@ export const UNCHANGED: RowsChanged = {
   commitDays: 0,
 };
 
-type NodesByKind = {
+interface NodesByKind {
   "pr-authored": PullRequestNode;
   "pr-reviewed": ReviewedPullRequestNode;
   issue: IssueNode;
-};
+}
 
 // The kind travels with the nodes rather than beside them. Passed as separate
 // arguments the two carry no type-level tie, and every branch reading the nodes
@@ -83,6 +84,8 @@ export async function normalizeSearchPage(
       );
       return { ...UNCHANGED, repositories, issues };
     }
+    default:
+      throw unhandled(page);
   }
 }
 

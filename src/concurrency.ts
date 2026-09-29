@@ -20,7 +20,7 @@ export async function* mapConcurrent<T, R>(
     let head: Promise<R> | undefined;
     do {
       while (!exhausted && inFlight.length < limit) {
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- the source yields one item per pull
         const next = await items.next();
         if (next.done === true) {
           exhausted = true;
@@ -31,7 +31,7 @@ export async function* mapConcurrent<T, R>(
 
       head = inFlight.shift();
       if (head !== undefined) {
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- results yield in source order
         yield await head;
       }
     } while (head !== undefined);
@@ -44,6 +44,16 @@ export async function* mapConcurrent<T, R>(
 // way and can close either.
 async function* pull<T>(source: Iterable<T> | AsyncIterable<T>): AsyncGenerator<T> {
   yield* source;
+}
+
+export async function eachConcurrent<T>(
+  source: Iterable<T> | AsyncIterable<T>,
+  limit: number,
+  run: (item: T) => Promise<unknown>,
+): Promise<void> {
+  for await (const _ of mapConcurrent(source, limit, run)) {
+    // Each result is discarded once its call settles.
+  }
 }
 
 // A call behind the one that failed may reject too, after the iteration has

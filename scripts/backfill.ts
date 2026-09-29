@@ -55,7 +55,7 @@ try {
     // Kinds share one GitHub rate limit and one Worker, and a kind that stops
     // on a failed window should stop the run before the next kind spends
     // requests reaching the same wall.
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- kinds share one rate limit
     await walk(each);
   }
 } catch (error) {
@@ -66,7 +66,7 @@ async function walk(kind: SyncKind): Promise<void> {
   for (;;) {
     // Every call passes the same `--from`. The frontier keeps what finished, so
     // enqueueing the same windows again carries on rather than refetching.
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- each call resumes where the last one stopped
     const result = await backfill(kind, flags.from);
     console.log(describe(result));
 
@@ -84,7 +84,7 @@ async function walk(kind: SyncKind): Promise<void> {
     }
     if (wait !== null && wait > 0) {
       console.log(`${kind.padEnd(KIND_WIDTH)} waiting until ${result.resumeAt}`);
-      // eslint-disable-next-line no-await-in-loop
+      // oxlint-disable-next-line no-await-in-loop -- the next call waits out the rate limit
       await Bun.sleep(wait);
     }
   }
@@ -126,7 +126,7 @@ function describe(result: BackfillResult): string {
 }
 
 function adminToken(): string {
-  const value = Bun.env["ADMIN_TOKEN"];
+  const value = Bun.env.ADMIN_TOKEN;
   if (value === undefined || value === "") {
     fail("ADMIN_TOKEN is unset");
   }

@@ -1,10 +1,29 @@
 import type {
   ContributionsCollection,
   IssueNode,
+  PageInfo,
   PullRequestNode,
+  RateLimit,
   Repository,
   ReviewedPullRequestNode,
 } from "../src/github/schema";
+
+export interface GraphQLPayload<Data> {
+  data: Data & { rateLimit: RateLimit };
+}
+
+export interface ConnectionPayload {
+  totalCount: number;
+  pageInfo: PageInfo;
+  nodes: readonly unknown[];
+}
+
+type CommitDay =
+  ContributionsCollection["commitContributionsByRepository"][number]["contributions"]["nodes"][number];
+
+type ContributionsPayload = GraphQLPayload<{
+  user: { contributionsCollection: ContributionsCollection };
+}>;
 
 export interface RateLimitOverrides {
   cost?: number;
@@ -12,7 +31,7 @@ export interface RateLimitOverrides {
   resetAt?: string;
 }
 
-export function rateLimit(overrides: RateLimitOverrides = {}) {
+export function rateLimit(overrides: RateLimitOverrides = {}): RateLimit {
   return {
     cost: overrides.cost ?? 1,
     remaining: overrides.remaining ?? 4999,
@@ -113,7 +132,10 @@ export interface SearchOverrides {
 
 // The payload is the whole GraphQL response, which is what R2 archives and what
 // replay reads back, so a replay test and a fetch stub build from one shape.
-export function searchPayload(nodes: readonly unknown[], overrides: SearchOverrides = {}) {
+export function searchPayload(
+  nodes: readonly unknown[],
+  overrides: SearchOverrides = {},
+): GraphQLPayload<{ search: Omit<ConnectionPayload, "totalCount"> & { issueCount: number } }> {
   const endCursor = overrides.endCursor ?? null;
   return {
     data: {
@@ -127,7 +149,10 @@ export function searchPayload(nodes: readonly unknown[], overrides: SearchOverri
   };
 }
 
-export function searchResponse(nodes: readonly unknown[], overrides: SearchOverrides = {}) {
+export function searchResponse(
+  nodes: readonly unknown[],
+  overrides: SearchOverrides = {},
+): Response {
   return jsonResponse(searchPayload(nodes, overrides));
 }
 
@@ -136,7 +161,7 @@ export function searchResponse(nodes: readonly unknown[], overrides: SearchOverr
 export function reviewsPayload(
   nodes: readonly unknown[],
   overrides: { totalCount?: number; endCursor?: string | null } = {},
-) {
+): GraphQLPayload<{ node: { reviews: ConnectionPayload } }> {
   const endCursor = overrides.endCursor ?? null;
   return {
     data: {
@@ -169,7 +194,9 @@ export function contributionEventsPayload(
   field: ContributionEventsField,
   nodes: readonly unknown[],
   overrides: ContributionEventsOverrides = {},
-) {
+): GraphQLPayload<{
+  user: { contributionsCollection: Partial<Record<ContributionEventsField, ConnectionPayload>> };
+}> {
   const item = field === "issueContributions" ? "issue" : "pullRequest";
   const endCursor = overrides.endCursor ?? null;
   return {
@@ -195,7 +222,10 @@ const COMMITS_PER_DAY = 4;
 // that came back short.
 export const TRUNCATED_COMMIT_TOTAL = 400;
 
-export function commitDay(commitCount = COMMITS_PER_DAY, occurredAt = "2026-08-02T00:00:00Z") {
+export function commitDay(
+  commitCount = COMMITS_PER_DAY,
+  occurredAt = "2026-08-02T00:00:00Z",
+): CommitDay {
   return { commitCount, occurredAt };
 }
 
@@ -234,7 +264,7 @@ export function contributionsPayload(
   repositoryCount: number,
   commitTotal = COMMITS_PER_DAY,
   overrides: Partial<ContributionsCollection> = {},
-) {
+): ContributionsPayload {
   return {
     data: {
       user: {
@@ -245,7 +275,7 @@ export function contributionsPayload(
   };
 }
 
-export function commitDaysPayload(days: readonly string[]) {
+export function commitDaysPayload(days: readonly string[]): ContributionsPayload {
   const commits = 2 * days.length;
   return contributionsPayload(1, commits, {
     totalCommitContributions: commits,
@@ -261,7 +291,10 @@ export function commitDaysPayload(days: readonly string[]) {
   });
 }
 
-export function contributionsResponse(repositoryCount: number, commitTotal = COMMITS_PER_DAY) {
+export function contributionsResponse(
+  repositoryCount: number,
+  commitTotal = COMMITS_PER_DAY,
+): Response {
   return jsonResponse(contributionsPayload(repositoryCount, commitTotal));
 }
 

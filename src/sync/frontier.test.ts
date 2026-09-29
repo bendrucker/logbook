@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { type CrawlSource, drain, enqueue, frontierStatus, type UnitFetch } from "./frontier";
 
@@ -22,12 +22,13 @@ function fetched(overrides: Partial<UnitFetch> = {}): UnitFetch {
 function fakeSource(options: { whole: number; finest: number; failOn?: string }) {
   const fetches: string[] = [];
   const source: CrawlSource = {
-    fetch: async (window) => {
+    fetch: (window) => {
       fetches.push(window);
-      if (window === options.failOn) {
-        return fetched({ error: "BudgetRefused: floor", resumeAt: "2026-09-09T13:00:00Z" });
-      }
-      return fetched({ truncated: window.length < options.whole });
+      return Promise.resolve(
+        window === options.failOn
+          ? fetched({ error: "BudgetRefused: floor", resumeAt: "2026-09-09T13:00:00Z" })
+          : fetched({ truncated: window.length < options.whole }),
+      );
     },
     split: (window) => (window.length >= options.finest ? [] : [`${window}0`, `${window}1`]),
   };
