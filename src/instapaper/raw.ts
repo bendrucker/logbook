@@ -57,12 +57,12 @@ export function archiveInstapaperPage(
 }
 
 export function readMetadata(metadata: Record<string, string> | undefined): ArchivedMetadata {
-  const status = Number(metadata?.["status"] ?? Number.NaN);
-  const have = Number(metadata?.["have"] ?? Number.NaN);
-  const mode = metadata?.["mode"];
+  const status = Number(metadata?.status ?? Number.NaN);
+  const have = Number(metadata?.have ?? Number.NaN);
+  const mode = metadata?.mode;
   return {
     status: Number.isInteger(status) ? status : 0,
-    failure: metadata?.["failure"] ?? null,
+    failure: metadata?.failure ?? null,
     listing:
       (mode === "delta" || mode === "full") && Number.isInteger(have) ? { mode, have } : null,
   };

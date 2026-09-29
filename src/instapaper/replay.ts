@@ -39,12 +39,9 @@ export async function replayInstapaper(
   const pages = await listReplayable(bucket);
   let rowsChanged = 0;
 
-  const pending = [...pages];
-  let page = pending.shift();
-  while (page !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
+  for (const page of pages) {
+    // oxlint-disable-next-line no-await-in-loop -- pages apply in fetch order
     rowsChanged += await replayPage(db, page, await readBody(bucket, page.key));
-    page = pending.shift();
   }
 
   return { pages: pages.length, rowsChanged };
@@ -88,7 +85,7 @@ async function listReplayable(bucket: R2Bucket): Promise<Replayable[]> {
   const pages: Replayable[] = [];
   let cursor: string | undefined;
   do {
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- each listing names the next cursor
     const listed = await bucket.list({ prefix: RAW_PREFIX, cursor, include: ["customMetadata"] });
     for (const object of listed.objects) {
       const page = parseKey(object.key);
@@ -102,10 +99,12 @@ async function listReplayable(bucket: R2Bucket): Promise<Replayable[]> {
 
   return pages.toSorted(
     (a, b) =>
-      a.fetchedAt.localeCompare(b.fetchedAt) ||
-      a.kind.localeCompare(b.kind) ||
-      a.window.localeCompare(b.window) ||
-      a.page - b.page,
+      [
+        a.fetchedAt.localeCompare(b.fetchedAt),
+        a.kind.localeCompare(b.kind),
+        a.window.localeCompare(b.window),
+        a.page - b.page,
+      ].find((order) => order !== 0) ?? 0,
   );
 }
 

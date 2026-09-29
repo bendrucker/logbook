@@ -91,30 +91,13 @@ async function prompt(question: string, echo: boolean): Promise<string> {
   let line = "";
   try {
     for (;;) {
-      // eslint-disable-next-line no-await-in-loop
-      const [chunk]: unknown[] = await once(stdin, "data");
-      for (const char of String(chunk)) {
+      // oxlint-disable-next-line no-await-in-loop -- keystrokes arrive one read at a time
+      const received: unknown[] = await once(stdin, "data");
+      for (const char of String(received[0])) {
         if (char === "\r" || char === "\n") {
           return line;
         }
-        if (char === ETX) {
-          stdin.setRawMode(false);
-          stderr.write("\n");
-          process.exit(130);
-        }
-        if (DELETE.has(char)) {
-          if (line.length > 0) {
-            line = line.slice(0, -1);
-            if (echo) {
-              stderr.write("\b \b");
-            }
-          }
-        } else {
-          line += char;
-          if (echo) {
-            stderr.write(char);
-          }
-        }
+        line = edit(line, char, echo);
       }
     }
   } finally {
@@ -122,6 +105,25 @@ async function prompt(question: string, echo: boolean): Promise<string> {
     stdin.pause();
     stderr.write("\n");
   }
+}
+
+function edit(line: string, char: string, echo: boolean): string {
+  const { stdin, stderr } = process;
+  if (char === ETX) {
+    stdin.setRawMode(false);
+    stderr.write("\n");
+    process.exit(130);
+  }
+  if (DELETE.has(char)) {
+    if (echo && line.length > 0) {
+      stderr.write("\b \b");
+    }
+    return line.slice(0, -1);
+  }
+  if (echo) {
+    stderr.write(char);
+  }
+  return line + char;
 }
 
 function fail(message: string): never {

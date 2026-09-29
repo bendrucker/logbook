@@ -39,6 +39,7 @@ describe("instapaperPost", () => {
       {
         path: "/api/1/account/verify_credentials",
         form: { extra: "a b" },
+        // oxlint-disable-next-line typescript/no-unsafe-assignment -- vitest types asymmetric matchers as `any`
         authorization: expect.stringMatching(/^OAuth oauth_consumer_key="consumer-key", /),
       },
     ]);
@@ -57,10 +58,10 @@ describe("instapaperPost", () => {
       apiError(1241, "Invalid or missing bookmark_id", { status: 200 }),
     );
 
-    const error = await verify(stub.fetch).catch((caught: unknown) => caught);
+    const thrown = await verify(stub.fetch).catch((error: unknown) => error);
 
-    expect(error).toBeInstanceOf(InstapaperApiError);
-    expect(error).toMatchObject({ code: 1241, status: 200 });
+    expect(thrown).toBeInstanceOf(InstapaperApiError);
+    expect(thrown).toMatchObject({ code: 1241, status: 200 });
   });
 
   it("reads error 1040 as the rate limit, waiting as long as Retry-After says", async () => {
@@ -68,10 +69,10 @@ describe("instapaperPost", () => {
       apiError(1040, "Rate-limit exceeded", { status: 400, headers: { "Retry-After": "120" } }),
     );
 
-    const error = await verify(stub.fetch).catch((caught: unknown) => caught);
+    const thrown = await verify(stub.fetch).catch((error: unknown) => error);
 
-    expect(error).toBeInstanceOf(InstapaperRateLimited);
-    expect(error).toMatchObject({ retryAfterSeconds: 120 });
+    expect(thrown).toBeInstanceOf(InstapaperRateLimited);
+    expect(thrown).toMatchObject({ retryAfterSeconds: 120 });
   });
 
   it("waits an hour on a rate limit that names no wait", async () => {
@@ -83,10 +84,10 @@ describe("instapaperPost", () => {
   it("keeps the body of a failure that is not an error array", async () => {
     const stub = stubInstapaper(() => new Response("upstream down", { status: 503 }));
 
-    const error = await verify(stub.fetch).catch((caught: unknown) => caught);
+    const thrown = await verify(stub.fetch).catch((error: unknown) => error);
 
-    expect(error).toBeInstanceOf(InstapaperHttpError);
-    expect(error).toMatchObject({ status: 503, body: "upstream down" });
+    expect(thrown).toBeInstanceOf(InstapaperHttpError);
+    expect(thrown).toMatchObject({ status: 503, body: "upstream down" });
   });
 
   it("refuses a 200 whose body is not JSON", async () => {

@@ -14,6 +14,7 @@ import {
   upsertFolders,
   upsertHighlights,
 } from "./store";
+import { unhandled } from "../unhandled";
 
 // One folder's listing: a built-in folder, the starred view, or a folder of
 // the user's own.
@@ -45,8 +46,11 @@ function placement(listing: Listing): { folder: FolderName | null; folderId: num
       return { folder: null, folderId: null };
     case "folder":
       return { folder: "folder", folderId: listing.folderId };
-    default:
+    case "unread":
+    case "archive":
       return { folder: listing.folder, folderId: null };
+    default:
+      throw unhandled(listing);
   }
 }
 

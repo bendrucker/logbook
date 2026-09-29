@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   apiError,
@@ -200,7 +200,7 @@ describe("syncListing", () => {
     const dropped = stubInstapaper(() => listing([], { deleteIds: [2] }));
     await syncListing(env, { folder: "starred" }, "delta", options(dropped.fetch));
 
-    expect(dropped.calls[0]?.form["have"]).toBe("1:hash-1,2:hash-2");
+    expect(dropped.calls[0]?.form.have).toBe("1:hash-1,2:hash-2");
     expect(await stored(2)).toMatchObject({ folder: "unread", starred: 0, unlisted_at: null });
   });
 
@@ -210,7 +210,7 @@ describe("syncListing", () => {
 
     await syncListing(env, { folder: "unread" }, "full", options(stub.fetch));
 
-    expect(stub.calls[0]?.form["have"]).toBe("");
+    expect(stub.calls[0]?.form.have).toBe("");
     expect(await stored(1)).toMatchObject({ unlisted_at: null });
   });
 
@@ -225,12 +225,12 @@ describe("syncListing", () => {
 
   it("marks a full read truncated when have does not page past a full page", async () => {
     const full = Array.from({ length: 500 }, (_, index) => bookmark(index + 1));
-    const stub = stubInstapaper((call) => (call.form["have"] === "" ? listing(full) : listing([])));
+    const stub = stubInstapaper((call) => (call.form.have === "" ? listing(full) : listing([])));
 
     const run = await syncListing(env, { folder: "archive" }, "full", options(stub.fetch));
 
     expect(run).toMatchObject({ pages: 2, truncated: true, error: null });
-    expect(stub.calls[1]?.form["have"]?.split(",")).toHaveLength(500);
+    expect(stub.calls[1]?.form.have?.split(",")).toHaveLength(500);
     const second = await env.RAW.head(
       `raw/instapaper/instapaper-bookmarks/archive/${NOW.toISOString()}/0002.json`,
     );

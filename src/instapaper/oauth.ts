@@ -19,7 +19,7 @@ export interface Nonce {
 // RFC 3986 unreserved characters pass through. encodeURIComponent also leaves
 // !'()* alone, which OAuth requires encoded.
 export function percentEncode(value: string): string {
-  return encodeURIComponent(value).replace(
+  return encodeURIComponent(value).replaceAll(
     /[!'()*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
@@ -76,7 +76,10 @@ export function signatureBase(
 // Byte order, which for percent-encoded ASCII is code unit order. localeCompare
 // would sort by collation instead.
 function compare(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+  if (a < b) {
+    return -1;
+  }
+  return a > b ? 1 : 0;
 }
 
 async function hmacSha1(key: string, message: string): Promise<string> {

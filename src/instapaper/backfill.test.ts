@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   apiError,
@@ -58,7 +58,7 @@ describe("backfillInstapaper", () => {
       irreducible: [],
       error: null,
     });
-    expect(stub.calls.every((call) => (call.form["have"] ?? "") === "")).toBe(true);
+    expect(stub.calls.every((call) => (call.form.have ?? "") === "")).toBe(true);
     expect(await readWatermark(env.DB, "instapaper-bookmarks")).not.toBeNull();
   });
 
@@ -80,6 +80,7 @@ describe("backfillInstapaper", () => {
     });
     expect(stopped).toMatchObject({
       pending: 2,
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- vitest types asymmetric matchers as `any`
       error: expect.stringMatching(/^InstapaperRateLimited/),
     });
     expect(stopped.resumeAt).not.toBeNull();
@@ -98,9 +99,7 @@ describe("backfillInstapaper", () => {
       if (route(call) === "/api/1/folders/list") {
         return json([]);
       }
-      return route(call) === "list:archive" && call.form["have"] === ""
-        ? listing(full)
-        : listing([]);
+      return route(call) === "list:archive" && call.form.have === "" ? listing(full) : listing([]);
     });
 
     const result = await backfillInstapaper(env, "instapaper-bookmarks", {

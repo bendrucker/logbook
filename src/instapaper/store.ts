@@ -163,7 +163,7 @@ export const upsertFolders = upsertWriter(
     title: row.title,
     slug: row.slug,
     position: row.position,
-    public: row.public === null ? null : row.public ? 1 : 0,
+    public: row.public === null ? null : Number(row.public),
     fetched_at: row.fetchedAt,
   }),
 );

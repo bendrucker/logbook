@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   apiError,
@@ -120,9 +120,9 @@ describe("replayInstapaper", () => {
 
     expect(await snapshot()).toEqual(synced);
     expect(replayed.pages).toBe(10);
-    expect(synced["instapaper_folders"]).toHaveLength(1);
-    expect(synced["instapaper_highlights"]).toMatchObject([{ highlight_id: 12 }]);
-    expect(synced["instapaper_bookmarks"]).toMatchObject([
+    expect(synced.instapaper_folders).toHaveLength(1);
+    expect(synced.instapaper_highlights).toMatchObject([{ highlight_id: 12 }]);
+    expect(synced.instapaper_bookmarks).toMatchObject([
       { bookmark_id: 1, folder: "folder", folder_id: 7, unlisted_at: null },
       {
         bookmark_id: 2,
@@ -140,10 +140,10 @@ describe("replayInstapaper", () => {
       { customMetadata: { status: "200" } },
     );
 
-    const error = await replayInstapaper(env.DB, env.RAW).catch((caught: unknown) => caught);
+    const thrown = await replayInstapaper(env.DB, env.RAW).catch((error: unknown) => error);
 
-    expect(error).toBeInstanceOf(RawValidationError);
-    expect(error).toMatchObject({
+    expect(thrown).toBeInstanceOf(RawValidationError);
+    expect(thrown).toMatchObject({
       key: "raw/instapaper/instapaper-highlights/1/2026-09-10T01:00:00.000Z/0001.json",
     });
   });

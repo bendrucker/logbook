@@ -76,9 +76,8 @@ async function syncBookmarks(
   const changed: number[] = [];
   let failed = false;
   let stopped = false;
-  let listing = remaining.shift();
-  while (listing !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
+  for (const listing of remaining) {
+    // oxlint-disable-next-line no-await-in-loop -- a rate limit on one listing ends the pass
     const result = await syncDelta(env, listing, options, changed);
     if (result.error !== null) {
       failed = true;
@@ -87,7 +86,6 @@ async function syncBookmarks(
         break;
       }
     }
-    listing = remaining.shift();
   }
 
   await requeueHighlights(env.DB, changed, started.toISOString());

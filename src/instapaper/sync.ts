@@ -24,6 +24,7 @@ import {
 } from "./rows";
 import { bookmarksListResponse, foldersResponse, highlightsResponse } from "./schema";
 import { type Known, knownInFolder, knownStarred, markDeleted } from "./store";
+import { unhandled } from "../unhandled";
 
 // A full read asks for the next page by sending what it has read so far as
 // `have`. The documentation describes `have` as a filter on the newest 500
@@ -117,7 +118,7 @@ export async function syncListing(
       let page = 1;
       for (;;) {
         const request = { mode, have: have.length };
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- each page's `have` depends on the last
         const applied = await readListingPage(
           env,
           listing,
@@ -210,8 +211,11 @@ function knownFor(db: D1Database, listing: Listing): Promise<Known[]> {
       return knownStarred(db);
     case "folder":
       return knownInFolder(db, "folder", listing.folderId);
-    default:
+    case "unread":
+    case "archive":
       return knownInFolder(db, listing.folder, null);
+    default:
+      throw unhandled(listing);
   }
 }
 

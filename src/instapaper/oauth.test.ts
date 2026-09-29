@@ -68,7 +68,7 @@ describe("authorize", () => {
 
     const [first, second] = await Promise.all([sign(), sign()]);
 
-    expect(first["oauth_nonce"]).not.toBe(second["oauth_nonce"]);
+    expect(first.oauth_nonce).not.toBe(second.oauth_nonce);
   });
 });
 

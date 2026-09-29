@@ -154,5 +154,5 @@ async function formOf(request: Request): Promise<URLSearchParams> {
 
 // The folder a `bookmarks/list` call asked for, or the method path otherwise.
 export function route(call: InstapaperCall): string {
-  return call.path === "/api/1/bookmarks/list" ? `list:${call.form["folder_id"]}` : call.path;
+  return call.path === "/api/1/bookmarks/list" ? `list:${call.form.folder_id}` : call.path;
 }
