@@ -1,4 +1,3 @@
-import { eachConcurrent, OPEN_CONNECTIONS } from "../concurrency";
 import { GitHubResponseError, type GraphQLOptions, SecondaryRateLimited } from "../github/client";
 import {
   type ContributionsWindow,
@@ -381,9 +380,10 @@ async function ingest(
     page: page.page,
     body: page.body,
   });
-  await eachConcurrent(page.reviewPages, OPEN_CONNECTIONS, (reviews) =>
-    archiveSearchReviews(env.RAW, { kind, window: window.key, fetchedAt, ...reviews }),
-  );
+  for (const reviews of page.reviewPages) {
+    // oxlint-disable-next-line no-await-in-loop -- a failed write leaves the follow-ups before it archived, never a gap
+    await archiveSearchReviews(env.RAW, { kind, window: window.key, fetchedAt, ...reviews });
+  }
   const changed = await normalizeSearchPage(env.DB, page.nodes, fetchedAt);
 
   return {
