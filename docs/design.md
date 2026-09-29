@@ -124,7 +124,7 @@ Commits are per-repository daily counts because that is the finest grain `contri
 
 #### Operational Tables
 
-`sync_state` is a key/value table. One key per event type holds the last window normalized successfully, and `updated_at` says when. The watermark advances only after the pages are in R2 and the rows are in D1. A failed run re-reads its window instead of skipping past it.
+`sync_state` is a key/value table. One key per kind holds the last window normalized successfully, and `updated_at` says when. The watermark advances only after the pages are in R2 and the rows are in D1. A failed run re-reads its window instead of skipping past it.
 
 `sync_runs` holds one row per extraction attempt, written before the work starts so a run that dies mid-flight reads as one that never finished. It carries the kind, the window, page and row counts, whether the window truncated, an error, and a note the contributions cross-check writes when GitHub's yearly total disagrees with the event tables. `crawl_units` is the backfill frontier: one row per window with its parent and a status of `pending`, `done`, `split`, or `irreducible`. A unit is done only once its pages are in R2 and its rows are in D1. One the budget interrupts stays pending and restarts from its first page. `lake_builds` is that shape for the nightly build, carrying per-table row counts as JSON. `/admin/sync` reports the newest of each.
 
@@ -310,7 +310,7 @@ A bookmarks backfill reads `folders/list` and enqueues one unit per listing. A u
 
 #### Rate Limit
 
-The documentation names error 1040 for a rate limit and gives no number. `RATE_CAP_INSTAPAPER` caps one invocation at 50 requests, cron or backfill. A 1040 stops the run with `resumeAt` from `Retry-After`, or an hour when there is none. Instapaper runs record `cost` 0, so the spend ledger stays GitHub's. A highlights backfill of 5,000 bookmarks is 100 calls.
+The documentation names error 1040 for a rate limit and gives no number. `RATE_CAP_INSTAPAPER` caps one invocation at 50 requests, cron or backfill. A 1040 stops the run with `resumeAt` from `Retry-After`, or an hour when there is none. Instapaper runs record `cost` 0, so the spend ledger stays GitHub's. A highlights backfill of 5,000 bookmarks is 5,000 requests, spread over 100 capped calls.
 
 #### Replay
 
@@ -322,14 +322,16 @@ The documentation names error 1040 for a rate limit and gives no number. `RATE_C
 - No endpoint lists deletions. A deleted bookmark drops into `delete_ids` and reads as `unlisted_at`, the same as one moved to a folder the pass hasn't reached or one that aged out of the 500. `deleted_at` is set only when a highlights read answers 1241.
 - A highlight added, or a note edited, on a bookmark whose hash is unchanged waits for the next highlights read of that bookmark, unless the listing's `highlights` array carries it.
 - With more than 500 starred bookmarks, an unstar goes undetected.
-- The free tier limits highlight creation to five a month. The documentation does not limit reading the archive or the API on the free tier. A Premium-only answer would arrive as error 1041. It fails a listing run and settles each highlights unit it answers `irreducible`.
+- The free tier limits highlight creation to five a month. The documentation does not limit reading the archive or the API on the free tier. If it does, the answer arrives as error 1041, which fails a listing run and settles each highlights unit it answers `irreducible`.
 - Each hourly pass archives a page per listing, about 40,000 small objects a year with a few folders. The bucket stays small in bytes.
 
-These wait on a live check with the real token: whether `have` pages, what the listing's `highlights` array covers, how 1040 arrives, and whether the free tier answers 1041 anywhere the sync reads.
+Four questions stay open until a live check with the real token: whether `have` pages, what the listing's `highlights` array covers, how 1040 arrives, and whether the free tier answers 1041 anywhere the sync reads.
 
 ## Visibility
 
-The hub reads public activity only. `GITHUB_TOKEN` is a classic personal access token with no scopes, so GitHub filters private repositories out before any response reaches the hub. Nothing private is stored, archived, or published, and no layer downstream has a redaction path to get wrong.
+The hub reads public GitHub activity only. `GITHUB_TOKEN` is a classic personal access token with no scopes, so GitHub filters private repositories out before any response reaches the hub. Nothing private from GitHub is stored, archived, or published, and no layer downstream has a redaction path to get wrong.
+
+Instapaper is the exception. Bookmarks, highlights, and notes are private reading history, and they land in D1, the raw bucket, and the lake under `instapaper/v1/`. Nothing publishes them. A feed built from them would need its own decision about what leaves the account.
 
 Totals understate real activity by `restrictedContributionsCount`. Reversing the choice means a token with `repo` scope, a full backfill, and a filter at publish.
 

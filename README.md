@@ -41,7 +41,7 @@ flowchart TB
     d1 --> lakecron --> lake
 ```
 
-The raw bucket is the system of record. Rebuilding the event tables after a schema change replays those pages and spends no GitHub requests, which matters when a full backfill is a few hundred search calls.
+The raw bucket is the system of record. Rebuilding the event tables after a schema change replays those pages and spends no source requests, which matters when a full backfill is a few hundred search calls.
 
 Lake tables land under a prefix per source, `github/` and `instapaper/`, in the `activity-hub-lake` bucket that Activity Hub already writes. Sharing one bucket is what lets a single DuckDB session join rides against pull requests by day, and it is the only real cross-project concern.
 
@@ -51,7 +51,7 @@ See [docs/design.md](docs/design.md) for the full design, the extraction budget,
 
 ## Data Model
 
-One row per event, at the grain GitHub hands over without crawling each repository.
+GitHub rows are one per event, at the grain GitHub hands over without crawling each repository. Instapaper rows are one per bookmark, highlight, and folder.
 
 | Table                   | Grain                                                                                                                                                 |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,7 +64,7 @@ One row per event, at the grain GitHub hands over without crawling each reposito
 | `instapaper_highlights` | One highlight: bookmark, text, note, position, created at                                                                                             |
 | `instapaper_folders`    | One folder of my own: title, slug, position, public                                                                                                   |
 
-A sync state table alongside these records the last window read per event type. Commits are daily counts because that is how `contributionsCollection` already exposes them. Per-commit history, comment bodies, and individual review comments stay out of the first version. Each one needs a walk of every PR in every repository, and per-PR counts give most of the analytics value at a hundredth of the requests.
+A sync state table alongside these records the last window read per kind. Commits are daily counts because that is how `contributionsCollection` already exposes them. Per-commit history, comment bodies, and individual review comments stay out of the first version. Each one needs a walk of every PR in every repository, and per-PR counts give most of the analytics value at a hundredth of the requests.
 
 ## Sync
 
@@ -103,7 +103,7 @@ Each contributions year is checked against the event tables for that year. A dis
 
 ## Instapaper
 
-The same hourly cron reads Instapaper after GitHub settles. It lists my folders, then asks each listing (Unread, Archive, each folder, Starred) for what changed since D1's copy, sending the bookmarks D1 holds with their hashes. Bookmarks that come back changed have their highlights re-read. Pages archive under `raw/instapaper/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_INSTAPAPER` caps the requests one invocation sends, and error 1040 stops it with `resumeAt`.
+The same hourly cron reads Instapaper after GitHub settles. It lists my folders, then asks each listing (Unread, Archive, each folder, Starred) for what changed since D1's copy, sending the bookmarks D1 holds with their hashes. Bookmarks that come back changed have their highlights requeued. Pages archive under `raw/instapaper/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_INSTAPAPER` caps the requests one invocation sends, and error 1040 stops it and reports `resumeAt`.
 
 A backfill reads each listing whole, then every bookmark's highlights:
 
