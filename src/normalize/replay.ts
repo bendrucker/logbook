@@ -13,10 +13,10 @@ import {
   contributionEventsYearPrefix,
   contributionsObject,
   contributionsWithinPrefix,
-  searchPageNumber,
   searchPrefix,
   searchReviewsPullRequest,
 } from "../github/raw";
+import { pageNumber } from "../raw-object";
 import { withReviews } from "../github/reviews";
 import {
   type ContributionConnectionPage,
@@ -537,7 +537,7 @@ async function withFollowUps(
 function contiguous(pageKeys: readonly string[]): boolean {
   const last = pageKeys.at(-1);
 
-  return last !== undefined && searchPageNumber(last) === pageKeys.length;
+  return last !== undefined && pageNumber(last) === pageKeys.length;
 }
 
 // A fetch ends when GitHub announces no successor or when the paginator hits

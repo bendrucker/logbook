@@ -1,6 +1,7 @@
 import { handleBackfill, handleLakeBuild, handleSyncStatus } from "./admin";
 import { buildLake, LAKE_CRON } from "./lake";
 import { syncIncremental } from "./sync/incremental";
+import { rewalkTraktYear, syncTrakt } from "./trakt/incremental";
 
 export default {
   fetch(request, env): Response | Promise<Response> {
@@ -22,13 +23,34 @@ export default {
 
   async scheduled(controller, env): Promise<void> {
     if (controller.cron === LAKE_CRON) {
+      // The re-walk lands plays backdated into the current year before the
+      // build reads D1. A failed re-walk still leaves a build worth writing.
+      try {
+        await rewalkTraktYear(env);
+      } catch (error) {
+        console.error(`trakt-history re-walk failed: ${String(error)}`);
+      }
       // An unhandled error marks the scheduled invocation failed, so a build
       // that never wrote its tables gets noticed.
       await buildLake(env);
       return;
     }
 
-    await syncIncremental(env);
+    // One source at a time, since both draw on the invocation's six open
+    // connections. A GitHub failure still leaves Trakt to run, and either
+    // failure marks the invocation failed.
+    const github = await settled(syncIncremental(env));
+    const trakt = await settled(syncTrakt(env));
+    for (const outcome of [github, trakt]) {
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
+    }
     console.log(`sync trigger ${controller.cron} finished`);
   },
 } satisfies ExportedHandler<Env>;
+
+async function settled(run: Promise<void>): Promise<PromiseSettledResult<void>> {
+  const [outcome] = await Promise.allSettled([run]);
+  return outcome;
+}

@@ -4,6 +4,7 @@
 interface Secrets {
   ADMIN_TOKEN?: string;
   GITHUB_TOKEN?: string;
+  TRAKT_CLIENT_ID?: string;
 }
 
 interface Env extends Secrets {}

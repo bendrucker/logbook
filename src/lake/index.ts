@@ -7,3 +7,4 @@ export { pullRequests } from "./pull-requests";
 export { repositories } from "./repositories";
 export { reviews } from "./reviews";
 export { type EncodedTable, encodeTable, type LakeTable } from "./table";
+export { traktPlays, traktRatings, traktTitles } from "./trakt";

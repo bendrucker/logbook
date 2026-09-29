@@ -8,10 +8,11 @@ import {
   parseMonth,
 } from "./sync/backfill";
 import { type FrontierStatus, frontierStatus } from "./sync/frontier";
-import { byKind, SYNC_KINDS, type SyncKind } from "./sync/kinds";
+import { byKind, isTraktKind, SYNC_KINDS, type SyncKind } from "./sync/kinds";
 import { MissingSecretError } from "./sync/run";
 import { lastRuns, recentFailures, type SyncRun } from "./sync/runs";
 import { readWatermarks, type Watermark } from "./sync/state";
+import { backfillTrakt } from "./trakt/backfill";
 
 const FAILURE_LIMIT = 10;
 
@@ -75,8 +76,11 @@ export async function handleBackfill(request: Request, env: Env): Promise<Respon
   }
 
   try {
-    const from = parseMonth(url.searchParams.get("from") ?? monthWindow(BACKFILL_START).key);
-    const result: BackfillResult = await backfill(env, kind, from);
+    const from = url.searchParams.get("from");
+    // Trakt history starts at the oldest play when no `from` names a start.
+    const result: BackfillResult = isTraktKind(kind)
+      ? await backfillTrakt(env, kind, from === null ? null : parseMonth(from))
+      : await backfill(env, kind, parseMonth(from ?? monthWindow(BACKFILL_START).key));
     return Response.json(result);
   } catch (error) {
     if (error instanceof InvalidMonthError) {
