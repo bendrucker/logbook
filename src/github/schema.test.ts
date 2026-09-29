@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 import { issue, pullRequest, repository, reviewedPullRequest } from "../../test/github-fixtures";
 import {
   issueSearchPage,
@@ -25,13 +26,13 @@ describe("pageInfo", () => {
   });
 
   it("rejects a successor announced without a cursor", () => {
-    expect(() => pullRequestSearchPage.parse(page([], { hasNextPage: true }))).toThrow();
+    expect(() => pullRequestSearchPage.parse(page([], { hasNextPage: true }))).toThrow(ZodError);
   });
 
   it("rejects a null cursor on a successor", () => {
     expect(() =>
       pullRequestSearchPage.parse(page([], { hasNextPage: true, endCursor: null })),
-    ).toThrow();
+    ).toThrow(ZodError);
   });
 });
 
@@ -104,7 +105,9 @@ describe("search nodes", () => {
   it("rejects a node missing a field the query selected", () => {
     const { additions: _additions, ...incomplete } = pullRequest(7);
 
-    expect(() => pullRequestSearchPage.parse(page([incomplete], { hasNextPage: false }))).toThrow();
+    expect(() => pullRequestSearchPage.parse(page([incomplete], { hasNextPage: false }))).toThrow(
+      ZodError,
+    );
   });
 
   it("rejects a repository missing its node id", () => {
@@ -114,6 +117,6 @@ describe("search nodes", () => {
       pullRequestSearchPage.parse(
         page([{ ...pullRequest(7), repository: incomplete }], { hasNextPage: false }),
       ),
-    ).toThrow();
+    ).toThrow(ZodError);
   });
 });

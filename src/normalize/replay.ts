@@ -36,15 +36,16 @@ import {
 } from "../github/schema";
 import { SEARCH_MAX_PAGES, searchTruncated } from "../github/search";
 import type { EventKind } from "../github/windows";
+import { unhandled } from "../unhandled";
 import { ArchivedWindows } from "./commit-windows";
 import {
   normalizeContributionEvents,
   normalizeSearchPage,
   type RowsChanged,
+  type SearchPageNodes,
   UNCHANGED,
   writeContributionRows,
 } from "./page";
-import type { SearchPageNodes } from "./page";
 
 export class RawObjectError extends Error {
   readonly key: string;
@@ -221,11 +222,8 @@ export async function readContributionEvents(
   // One window at a time, so the reads of one fetch's pages are the only ones
   // open.
   const selected: ContributionEventsFetch[] = [];
-  const pending = [...reached];
-  let next = pending.shift();
-  while (next !== undefined) {
-    const [name, fetches] = next;
-    // eslint-disable-next-line no-await-in-loop
+  for (const [name, fetches] of reached) {
+    // oxlint-disable-next-line no-await-in-loop -- one window's page reads hold the connections
     const fetch = await selectFetch([...fetches.keys()], async (fetchedAt) => ({
       window: name,
       fetchedAt,
@@ -234,7 +232,6 @@ export async function readContributionEvents(
     if (fetch !== null) {
       selected.push(fetch);
     }
-    next = pending.shift();
   }
   const fetches = selected.toSorted((a, b) => a.fetchedAt.localeCompare(b.fetchedAt));
   const byWindow = new Map(fetches.map((fetch) => [fetch.window, fetch]));
@@ -259,13 +256,10 @@ export async function replayContributionEvents(
   let rows = UNCHANGED;
   // One fetch after another, since a later fetch of the same event or
   // repository has to land after the earlier one it supersedes.
-  const pending = [...archived.fetches];
-  let fetch = pending.shift();
-  while (fetch !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
+  for (const fetch of archived.fetches) {
+    // oxlint-disable-next-line no-await-in-loop -- a later fetch supersedes an earlier one
     const changed = await normalizeContributionEvents(db, fetch.nodes, login, fetch.fetchedAt);
     rows = added(rows, changed);
-    fetch = pending.shift();
   }
 
   return {
@@ -333,6 +327,8 @@ async function readEventsFetch(
         ...connectionCoverage(pageKeys, parsed),
       };
     }
+    default:
+      throw unhandled(kind);
   }
 }
 
@@ -402,19 +398,16 @@ async function selectFetch<Fetch extends { complete: boolean }>(
   candidates: readonly string[],
   readCandidate: (candidate: string) => Promise<Fetch>,
 ): Promise<Fetch | null> {
-  const remaining = [...candidates];
   let newest: Fetch | null = null;
-  let candidate = remaining.pop();
 
-  while (candidate !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
+  for (const candidate of candidates.toReversed()) {
+    // oxlint-disable-next-line no-await-in-loop -- an older fetch is read only when every newer one stopped short
     const archived = await readCandidate(candidate);
     if (archived.complete) {
       return archived;
     }
 
     newest ??= archived;
-    candidate = remaining.pop();
   }
 
   return newest;
@@ -471,7 +464,6 @@ async function writeFetch(
   let rows = UNCHANGED;
   let truncated = false;
   for await (const page of pages) {
-    // ast-grep-ignore: await-in-for-of
     rows = added(rows, await normalizeSearchPage(db, page.nodes, fetch.fetchedAt));
     truncated ||= page.truncated;
   }
@@ -493,6 +485,8 @@ function parseSearchPage(kind: EventKind, page: RawPage): SearchPageRead {
       const { search } = parse(issueSearchPage, page);
       return searchPageRead(page.key, { kind, nodes: search.nodes }, search);
     }
+    default:
+      throw unhandled(kind);
   }
 }
 
@@ -523,15 +517,12 @@ async function withFollowUps(
   const nodes: ReviewedPullRequestNode[] = [];
   // One follow-up read at a time, since the page reads beside this one already
   // hold the other connections. Almost no pull request has one.
-  const pending = [...page.nodes.nodes];
-  let node = pending.shift();
-  while (node !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
+  for (const node of page.nodes.nodes) {
+    // oxlint-disable-next-line no-await-in-loop -- the page reads beside this one hold the other connections
     const reviews = await readParsed(bucket, reviewKeys.get(node.id) ?? [], 1, (followUp) =>
       parse(pullRequestReviewsPage, followUp),
     );
     nodes.push(withReviews(node, reviews));
-    node = pending.shift();
   }
 
   return {
@@ -576,7 +567,7 @@ async function* listed(bucket: R2Bucket, options: R2ListOptions): AsyncGenerator
   let remaining = true;
 
   while (remaining) {
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- each listing needs the cursor the last one returned
     const listing = await bucket.list({ ...options, cursor });
     yield listing;
     remaining = listing.truncated;

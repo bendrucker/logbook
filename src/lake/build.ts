@@ -1,3 +1,4 @@
+import { eachConcurrent, OPEN_CONNECTIONS } from "../concurrency";
 import { failBuild, finishBuild, startBuild } from "./builds";
 import { commitDays } from "./commit-days";
 import { issues } from "./issues";
@@ -53,14 +54,12 @@ export async function buildLake(
     // encode one at a time, so only one table's rows are held beside the
     // compressed files already built.
     const encoded: EncodedLakeTable[] = [];
-    const pending = [...LAKE_TABLES];
-    let table = pending.shift();
-    while (table !== undefined) {
-      // eslint-disable-next-line no-await-in-loop
+    for (const table of LAKE_TABLES) {
+      // oxlint-disable-next-line no-await-in-loop -- one table's rows in memory at a time
       encoded.push(await encodeOne(env.DB, table));
-      table = pending.shift();
     }
-    await Promise.all(encoded.map((each) => writeTable(env.LAKE, each)));
+
+    await eachConcurrent(encoded, OPEN_CONNECTIONS, (each) => writeTable(env.LAKE, each));
 
     const rowCounts = Object.fromEntries(encoded.map((each) => [each.table.name, each.rows]));
     const finishedAt = new Date().toISOString();

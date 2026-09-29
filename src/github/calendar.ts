@@ -4,6 +4,7 @@
 // Each window's key names its prefix in R2 and its row in the crawl frontier.
 
 import { Temporal } from "temporal-polyfill";
+import { unhandled } from "../unhandled";
 import {
   dayHalves,
   type HourRange,
@@ -55,6 +56,8 @@ function key(span: Span): string {
       return span.day.toString();
     case "hours":
       return hourRangeKey(span);
+    default:
+      throw unhandled(span);
   }
 }
 
@@ -70,6 +73,8 @@ function start(span: Span): Temporal.PlainDateTime {
       return span.day.toPlainDateTime();
     case "hours":
       return span.start;
+    default:
+      throw unhandled(span);
   }
 }
 
@@ -87,6 +92,8 @@ function after(span: Span): Temporal.PlainDateTime {
       return start(span).add({ days: 1 });
     case "hours":
       return hourRangeEnd(span);
+    default:
+      throw unhandled(span);
   }
 }
 
@@ -107,6 +114,8 @@ function children(span: Span): Span[] {
       return dayHalves(span.day);
     case "hours":
       return splitHourRange(span);
+    default:
+      throw unhandled(span);
   }
 }
 

@@ -47,7 +47,7 @@ export async function* cursorPages<T>(
   // pages are requested one at a time. A cursor that fails to advance ends the
   // loop before the page bound, as an error.
   while (remaining && page < options.maxPages) {
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- each request needs the previous response's cursor
     const response = await graphql(
       options.token,
       options.document,

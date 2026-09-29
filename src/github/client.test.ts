@@ -22,11 +22,12 @@ function recordingBudget(refusal?: Error) {
   const admitted: number[] = [];
   const readings: RateLimit[] = [];
   const budget: RequestBudget = {
-    admit: async () => {
+    admit: () => {
       if (refusal !== undefined) {
-        throw refusal;
+        return Promise.reject(refusal);
       }
       admitted.push(admitted.length + 1);
+      return Promise.resolve();
     },
     spend: (reading) => {
       readings.push(reading);
@@ -67,12 +68,12 @@ describe("graphql", () => {
   it("carries the status and body on a non-200", async () => {
     const stub = stubFetch(() => new Response("bad credentials", { status: 401 }));
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(GitHubHttpError);
-    expect(error).toMatchObject({ status: 401, body: "bad credentials" });
+    expect(thrown).toBeInstanceOf(GitHubHttpError);
+    expect(thrown).toMatchObject({ status: 401, body: "bad credentials" });
   });
 
   it("throws on GraphQL errors even under a 200", async () => {
@@ -80,23 +81,23 @@ describe("graphql", () => {
       jsonResponse({ data: null, errors: [{ message: "Field 'nope' doesn't exist" }] }),
     );
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(GraphQLQueryError);
-    expect(error).toMatchObject({ errors: [{ message: "Field 'nope' doesn't exist" }] });
+    expect(thrown).toBeInstanceOf(GraphQLQueryError);
+    expect(thrown).toMatchObject({ errors: [{ message: "Field 'nope' doesn't exist" }] });
   });
 
   it("throws the typed error when a request-level failure omits data entirely", async () => {
     const stub = stubFetch(() => jsonResponse({ errors: [{ message: "Query has node limit" }] }));
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(GraphQLQueryError);
-    expect(error).toMatchObject({ errors: [{ message: "Query has node limit" }] });
+    expect(thrown).toBeInstanceOf(GraphQLQueryError);
+    expect(thrown).toMatchObject({ errors: [{ message: "Query has node limit" }] });
   });
 
   it("asks the budget before sending and tells it what the response cost", async () => {
@@ -116,7 +117,7 @@ describe("graphql", () => {
     const refusal = new Error("over budget");
     const { budget } = recordingBudget(refusal);
 
-    const error = await graphql(
+    const thrown = await graphql(
       "t0ken",
       "query Q { x }",
       {},
@@ -124,9 +125,9 @@ describe("graphql", () => {
         ...options(stub.fetch),
         budget,
       },
-    ).catch((thrown: unknown) => thrown);
+    ).catch((error: unknown) => error);
 
-    expect(error).toBe(refusal);
+    expect(thrown).toBe(refusal);
     expect(stub.requests).toHaveLength(0);
   });
 
@@ -152,12 +153,12 @@ describe("graphql", () => {
       () => new Response(body, { status: 403, headers: { "Retry-After": "120" } }),
     );
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(SecondaryRateLimited);
-    expect(error).toMatchObject({
+    expect(thrown).toBeInstanceOf(SecondaryRateLimited);
+    expect(thrown).toMatchObject({
       name: "SecondaryRateLimited",
       status: 403,
       retryAfterSeconds: 120,
@@ -170,22 +171,22 @@ describe("graphql", () => {
       () => new Response("You have exceeded a secondary rate limit", { status: 429 }),
     );
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toMatchObject({ name: "SecondaryRateLimited", retryAfterSeconds: 60 });
+    expect(thrown).toMatchObject({ name: "SecondaryRateLimited", retryAfterSeconds: 60 });
   });
 
   it("keeps a 403 that names no limit a plain HTTP failure", async () => {
     const stub = stubFetch(() => new Response("Resource not accessible", { status: 403 }));
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(GitHubHttpError);
-    expect(error).not.toBeInstanceOf(SecondaryRateLimited);
+    expect(thrown).toBeInstanceOf(GitHubHttpError);
+    expect(thrown).not.toBeInstanceOf(SecondaryRateLimited);
   });
 
   it("rejects a response that selected no rate limit", async () => {
@@ -199,24 +200,24 @@ describe("graphql", () => {
   it("keeps the body reachable when a 200 carries no JSON at all", async () => {
     const stub = stubFetch(() => new Response("<html>maintenance</html>", { status: 200 }));
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(ResponseValidationError);
-    expect(error).toMatchObject({ body: "<html>maintenance</html>" });
+    expect(thrown).toBeInstanceOf(ResponseValidationError);
+    expect(thrown).toMatchObject({ body: "<html>maintenance</html>" });
   });
 
   it("keeps the body reachable when the schema rejects the response", async () => {
     const body = JSON.stringify({ data: { rateLimit: { cost: "free" } } });
     const stub = stubFetch(() => new Response(body, { status: 200 }));
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(ResponseValidationError);
-    expect(error).toMatchObject({ body });
+    expect(thrown).toBeInstanceOf(ResponseValidationError);
+    expect(thrown).toMatchObject({ body });
   });
 
   it("carries the body and the reported budget out of a partial failure", async () => {
@@ -227,22 +228,22 @@ describe("graphql", () => {
       }),
     );
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toBeInstanceOf(GraphQLQueryError);
-    expect(error).toMatchObject({ rateLimit: { remaining: 4200 } });
-    expect(error).toHaveProperty("body", expect.stringContaining("Something went wrong"));
+    expect(thrown).toBeInstanceOf(GraphQLQueryError);
+    expect(thrown).toMatchObject({ rateLimit: { remaining: 4200 } });
+    expect(thrown).toHaveProperty("body", expect.stringContaining("Something went wrong"));
   });
 
   it("names each error class so a caller can branch on it across the RPC boundary", async () => {
     const stub = stubFetch(() => new Response("nope", { status: 500 }));
 
-    const error = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
-      (thrown: unknown) => thrown,
+    const thrown = await graphql("t0ken", "query Q { x }", {}, options(stub.fetch)).catch(
+      (error: unknown) => error,
     );
 
-    expect(error).toMatchObject({ name: "GitHubHttpError" });
+    expect(thrown).toMatchObject({ name: "GitHubHttpError" });
   });
 });

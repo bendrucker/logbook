@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { beforeEach } from "vitest";
 import { emptyTables } from "./tables";
 

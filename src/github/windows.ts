@@ -4,6 +4,7 @@
 // a day to halves, and a half to hours. Each window's key names its prefix in
 // R2 and its row in the crawl frontier.
 import { Temporal } from "temporal-polyfill";
+import { unhandled } from "../unhandled";
 import {
   dayHalves,
   fromUtc,
@@ -71,6 +72,8 @@ function after(span: Span): Temporal.PlainDateTime {
       return start(span).add({ days: span.days });
     case "hours":
       return hourRangeEnd(span);
+    default:
+      throw unhandled(span);
   }
 }
 
@@ -87,6 +90,8 @@ function key(span: Span): string {
     }
     case "hours":
       return hourRangeKey(span);
+    default:
+      throw unhandled(span);
   }
 }
 
@@ -122,6 +127,8 @@ function children(span: Span): Span[] {
       return span.days === 1 ? dayHalves(span.start) : halves(span.start, span.days);
     case "hours":
       return splitHourRange(span);
+    default:
+      throw unhandled(span);
   }
 }
 

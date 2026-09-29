@@ -121,16 +121,16 @@ describe("searchPages", () => {
     const stub = stubFetch(() => searchResponse([pullRequest(1)], { endCursor: "Y3Vy" }));
 
     const results: SearchPageResult<PullRequestNode>[] = [];
-    const error = await (async () => {
+    const thrown = await (async () => {
       for await (const result of pages(stub)) {
         results.push(result);
       }
-    })().catch((thrown: unknown) => thrown);
+    })().catch((error: unknown) => error);
 
     expect(results.map((result) => result.page)).toEqual([1]);
     expect(stub.requests).toHaveLength(2);
-    expect(error).toBeInstanceOf(RepeatedCursorError);
-    expect(error).toMatchObject({ cursor: "Y3Vy" });
+    expect(thrown).toBeInstanceOf(RepeatedCursorError);
+    expect(thrown).toMatchObject({ cursor: "Y3Vy" });
   });
 
   it("stops paging when the budget refuses the next request", async () => {
@@ -138,22 +138,21 @@ describe("searchPages", () => {
     const refusal = new Error("over budget");
     let admitted = 0;
     const budget: RequestBudget = {
-      admit: async () => {
+      admit: () => {
         admitted += 1;
-        if (admitted > 1) {
-          throw refusal;
-        }
+        return admitted > 1 ? Promise.reject(refusal) : Promise.resolve();
       },
-      spend: () => {},
+      spend: () => undefined,
     };
 
     const iterator = pages(stub, budget);
 
     const first = await iterator.next();
-    expect(first.value?.page).toBe(1);
+    const result = first.done === true ? undefined : first.value;
+    expect(result?.page).toBe(1);
 
-    const error = await iterator.next().catch((thrown: unknown) => thrown);
-    expect(error).toBe(refusal);
+    const thrown = await iterator.next().catch((error: unknown) => error);
+    expect(thrown).toBe(refusal);
     expect(stub.requests).toHaveLength(1);
   });
 });
@@ -189,8 +188,9 @@ describe("search entry points", () => {
       endpoint: ENDPOINT,
     });
     const first = await iterator.next();
+    const page = first.done === true ? undefined : first.value;
 
-    expect(first.value?.truncated).toBe(true);
+    expect(page?.truncated).toBe(true);
   });
 
   it("reads a pull request's reviews past its nested page", async () => {
@@ -265,8 +265,8 @@ describe("search entry points", () => {
     expect(page?.failure).toMatchObject({ pullRequest: "PR_9", page: 1 });
     expect(page?.truncated).toBe(true);
 
-    const error = await iterator.next().catch((thrown: unknown) => thrown);
-    expect(error).toBe(page?.failure?.error);
+    const thrown = await iterator.next().catch((error: unknown) => error);
+    expect(thrown).toBe(page?.failure?.error);
     expect(stub.requests).toHaveLength(3);
   });
 
@@ -295,9 +295,11 @@ describe("search entry points", () => {
     });
     const first = await iterator.next();
 
-    expect(first.value?.reviewPages).toEqual([]);
-    expect(first.value?.failure?.error).toBeInstanceOf(RepeatedCursorError);
-    expect(first.value?.failure?.error).toMatchObject({ cursor: "cmV2" });
+    const page = first.done === true ? undefined : first.value;
+
+    expect(page?.reviewPages).toEqual([]);
+    expect(page?.failure?.error).toBeInstanceOf(RepeatedCursorError);
+    expect(page?.failure?.error).toMatchObject({ cursor: "cmV2" });
     await expect(iterator.next()).rejects.toBeInstanceOf(RepeatedCursorError);
     expect(stub.requests).toHaveLength(2);
   });
@@ -327,9 +329,9 @@ describe("search entry points", () => {
     });
     const stub = stubFetch(() => new Response(body, { status: 200 }));
 
-    const error = await collect(pages(stub)).catch((thrown: unknown) => thrown);
+    const thrown = await collect(pages(stub)).catch((error: unknown) => error);
 
-    expect(error).toBeInstanceOf(ResponseValidationError);
-    expect(error).toMatchObject({ body });
+    expect(thrown).toBeInstanceOf(ResponseValidationError);
+    expect(thrown).toMatchObject({ body });
   });
 });

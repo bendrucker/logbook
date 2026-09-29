@@ -44,6 +44,7 @@ describe("mapConcurrent", () => {
 
   it("pulls from an async source only as calls finish", async () => {
     let pulled = 0;
+    // oxlint-disable-next-line typescript/require-await -- the test needs an async source, not an async step
     async function* source(): AsyncGenerator<number> {
       for (let index = 0; index < 10; index += 1) {
         pulled += 1;
@@ -62,6 +63,7 @@ describe("mapConcurrent", () => {
   it("rejects at the first failure in source order and closes the source", async () => {
     let pulled = 0;
     let closed = false;
+    // oxlint-disable-next-line typescript/require-await -- the test needs an async source, not an async step
     async function* source(): AsyncGenerator<number> {
       try {
         for (let index = 0; index < 10; index += 1) {

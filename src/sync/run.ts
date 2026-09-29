@@ -1,3 +1,4 @@
+import { eachConcurrent, OPEN_CONNECTIONS } from "../concurrency";
 import { GitHubResponseError, type GraphQLOptions, SecondaryRateLimited } from "../github/client";
 import {
   type ContributionsWindow,
@@ -20,6 +21,7 @@ import {
   type RowsChanged,
   type SearchPageNodes,
 } from "../normalize";
+import { unhandled } from "../unhandled";
 import { type Budget, BudgetRefused, type Clock } from "./budget";
 import { archivedYear, crossCheck } from "./cross-check";
 import { recordIrreducible } from "./frontier";
@@ -115,10 +117,10 @@ export async function syncWindow(
       // bytes.
       let page = await pages.next();
       while (page.done !== true) {
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- a page lands before the next is requested
         run.result = await ingest(env, kind, window, run.fetchedAt, page.value, run.result);
         followUp = page.value.failure;
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
         page = await pages.next();
       }
 
@@ -229,9 +231,9 @@ async function runContributions(
         let window = pending.shift();
         while (window !== undefined) {
           current = window;
-          // eslint-disable-next-line no-await-in-loop
+          // oxlint-disable-next-line no-await-in-loop -- the rate budget stops the walk between windows
           const part = await fetchContributions(token, env.GITHUB_LOGIN, window, options);
-          // eslint-disable-next-line no-await-in-loop
+          // oxlint-disable-next-line no-await-in-loop -- a window's children depend on whether it came back truncated
           run.result = await ingestContributions(env, fetchedAt, part, run.result);
           if (part.truncated) {
             const children = splitContributions(window.key, now);
@@ -379,15 +381,9 @@ async function ingest(
     page: page.page,
     body: page.body,
   });
-  // A page almost never carries a follow-up, so writing them one at a time
-  // costs nothing a run notices.
-  const pending = [...page.reviewPages];
-  let reviews = pending.shift();
-  while (reviews !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
-    await archiveSearchReviews(env.RAW, { kind, window: window.key, fetchedAt, ...reviews });
-    reviews = pending.shift();
-  }
+  await eachConcurrent(page.reviewPages, OPEN_CONNECTIONS, (reviews) =>
+    archiveSearchReviews(env.RAW, { kind, window: window.key, fetchedAt, ...reviews }),
+  );
   const changed = await normalizeSearchPage(env.DB, page.nodes, fetchedAt);
 
   return {
@@ -418,7 +414,7 @@ function archiveFailure(
   if (!(error instanceof GitHubResponseError)) {
     return Promise.resolve(null);
   }
-  if (followUp !== null && followUp.error === error) {
+  if (followUp?.error === error) {
     const { pullRequest, page } = followUp;
     return archiveSearchReviews(bucket, { ...fetch, pullRequest, page, body: error.body });
   }
@@ -441,6 +437,8 @@ function searchPages(kind: EventKind, options: PagerOptions): AsyncGenerator<Pag
       return kinded(reviewedPullRequestPages(options), (nodes) => ({ kind, nodes }));
     case "issue":
       return kinded(issuePages(options), (nodes) => ({ kind, nodes }));
+    default:
+      throw unhandled(kind);
   }
 }
 
@@ -471,7 +469,8 @@ export async function* kinded<Node>(
 }
 
 export function total(changed: RowsChanged): number {
-  return Object.values(changed).reduce((sum, count) => sum + count, 0);
+  const counts: Record<keyof RowsChanged, number> = changed;
+  return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
 
 export function describe(error: unknown): string {

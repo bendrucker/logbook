@@ -12,7 +12,7 @@ Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`), R2 (`RAW` fo
 
 - `bun run typecheck`: `tsc --noEmit` over `src/` and `test/`, then over `scripts/` under its own tsconfig
 - `bun run test`: runs `vitest run` (uses `@cloudflare/vitest-pool-workers`, config in `vitest.config.ts`)
-- `bun run lint`: runs `oxlint --report-unused-disable-directives && ast-grep scan`
+- `bun run lint`: runs `oxlint --type-aware --report-unused-disable-directives` over the layers in `lint/`, copied from [bendrucker/claude](https://github.com/bendrucker/claude)
 - `bun run backfill <base-url> [kind]`: drives `POST /admin/backfill` to completion, reading `ADMIN_TOKEN` from the environment
 - `bun run format` / `bun run format:check`: oxfmt
 - `bun run dev`: runs `wrangler dev` for local iteration

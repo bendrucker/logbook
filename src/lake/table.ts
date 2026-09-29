@@ -66,13 +66,13 @@ export async function readRows(
   );
 
   const rows: Record<string, unknown>[] = [];
-  let page: Record<string, unknown>[] = [];
+  let page: Record<string, unknown>[];
   let cursor: unknown[] | null = null;
 
   do {
     const statement = cursor === null ? first : after.bind(...cursor);
-    // eslint-disable-next-line no-await-in-loop
-    const result = await statement.all<Record<string, unknown>>();
+    // oxlint-disable-next-line no-await-in-loop -- each query needs the previous page's last key
+    const result = await statement.all();
     page = result.results;
     rows.push(...page);
 

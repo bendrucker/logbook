@@ -1,4 +1,4 @@
-import { env, SELF } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, test } from "vitest";
 import { pullRequest, seedRepository } from "../test/fixtures";
 import { emptyBucket } from "../test/r2";
@@ -10,15 +10,18 @@ import { finishRun, startRun } from "./sync/runs";
 const token = "admin-token";
 
 function get(headers: HeadersInit = {}): Promise<Response> {
-  return SELF.fetch("https://logbook.test/admin/sync", { headers });
+  return exports.default.fetch("https://logbook.test/admin/sync", { headers });
 }
 
 function post(query: string, headers: HeadersInit = {}): Promise<Response> {
-  return SELF.fetch(`https://logbook.test/admin/backfill?${query}`, { method: "POST", headers });
+  return exports.default.fetch(`https://logbook.test/admin/backfill?${query}`, {
+    method: "POST",
+    headers,
+  });
 }
 
 function postLake(headers: HeadersInit = {}): Promise<Response> {
-  return SELF.fetch("https://logbook.test/admin/lake", { method: "POST", headers });
+  return exports.default.fetch("https://logbook.test/admin/lake", { method: "POST", headers });
 }
 
 const authorization = { Authorization: `Bearer ${token}` };
@@ -194,6 +197,7 @@ describe("POST /admin/lake", () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- vitest types asymmetric matchers as `any`
       error: expect.stringContaining("is_fork"),
     });
   });

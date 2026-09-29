@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Copied from bendrucker/claude's `lint/`, so a change to either layer belongs there first.
+  "extends": ["./lint/base.json", "./lint/typescript.json"],
   "ignorePatterns": ["worker-configuration.d.ts", ".wrangler/", "tmp/"],
   "categories": {
     "correctness": "error",
@@ -8,7 +10,10 @@
   },
   "rules": {
     // `__typename` is GraphQL's own meta field, so the name is GitHub's.
-    "no-underscore-dangle": ["error", { "allow": ["__typename"] }]
+    "no-underscore-dangle": ["error", { "allow": ["__typename"] }],
+    // Error names are literals the site branches on across the service binding,
+    // so the rule's `name` and `Error`-suffix demands would rename them.
+    "unicorn/custom-error-definition": "off"
   },
   "overrides": [
     {

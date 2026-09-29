@@ -10,16 +10,13 @@ repos:
   - repo: https://github.com/oxc-project/mirrors-oxfmt
     rev: v0.67.0
     hooks: [{ id: oxfmt }]
-  - repo: https://github.com/oxc-project/mirrors-oxlint
-    rev: v1.82.0
-    hooks: [{ id: oxlint }]
-  # ast-grep runs from the pinned devDependency rather than a mirror, so the
-  # rule and the binary that reads it move together.
+  # oxlint runs from the pinned devDependencies rather than a mirror, since the
+  # type-aware rules need oxlint-tsgolint beside it.
   - repo: local
     hooks:
-      - id: ast-grep
-        name: ast-grep
-        entry: bun run --silent ast-grep scan
+      - id: oxlint
+        name: oxlint
+        entry: bun run --silent lint
         language: system
-        types_or: [ts]
+        types_or: [ts, json]
         pass_filenames: false

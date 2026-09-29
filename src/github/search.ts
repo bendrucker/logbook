@@ -104,7 +104,6 @@ export async function* reviewedPullRequestPages(
   for await (const result of pages) {
     // Each page's follow-ups finish before the next page is requested, so the
     // budget sees their cost before it admits the search's next page.
-    // ast-grep-ignore: await-in-for-of
     const followed = await followPage(result, options);
     // The page goes out before the failure does, so the search page and the
     // follow-ups read before it are archived and normalized rather than lost
@@ -126,19 +125,16 @@ async function followPage(
   // One pull request at a time, so the budget sees each follow-up's cost
   // before it admits the next. A failure leaves the pull requests after it with
   // only their nested pages.
-  const pending = [...result.nodes];
-  let node = pending.shift();
-  while (node !== undefined) {
+  for (const node of result.nodes) {
     if (failure !== null) {
       nodes.push(node);
     } else {
-      // eslint-disable-next-line no-await-in-loop
+      // oxlint-disable-next-line no-await-in-loop -- the budget admits each follow-up after seeing the last one's cost
       const followed = await followReviews(node, options);
       nodes.push(followed.node);
       reviewPages.push(...followed.pages);
       ({ failure } = followed);
     }
-    node = pending.shift();
   }
 
   return {

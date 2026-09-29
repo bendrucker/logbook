@@ -43,15 +43,12 @@ export async function syncIncremental(env: Env, options: InvocationOptions = {})
   // The kinds run one after another so the budget limit the first one reaches
   // stops the invocation, rather than three concurrent runs each spending their
   // way to the same discovery.
-  const remaining = [...SEARCH_KINDS];
-  let kind = remaining.shift();
-  while (kind !== undefined) {
-    // eslint-disable-next-line no-await-in-loop
+  for (const kind of SEARCH_KINDS) {
+    // oxlint-disable-next-line no-await-in-loop -- the first kind the budget refuses ends the invocation
     const result = await contained(kind, syncKind(env, kind, sync));
     if (result !== null && result.resumeAt !== null) {
       return;
     }
-    kind = remaining.shift();
   }
 
   const contributions = await contained(
@@ -118,7 +115,7 @@ async function syncKind(
   let range = pending.shift();
   while (range !== undefined) {
     const halves = splitUpdated(range);
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop -- a half lands before the next so the watermark climbs through it
     result = await syncWindow(
       env,
       kind,

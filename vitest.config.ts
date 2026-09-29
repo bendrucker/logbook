@@ -2,14 +2,19 @@ import path from "node:path";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 import { unstable_readConfig } from "wrangler";
+import { z } from "zod";
 
 const configPath = "./wrangler.jsonc";
+
+// Wrangler's declarations import its config type from a package it doesn't
+// install, so the config arrives untyped.
+const wranglerTriggers = z.object({ triggers: z.object({ crons: z.array(z.string()) }) });
 
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.join(import.meta.dirname, "migrations"));
   // The scheduled handler dispatches on the cron expression, so a test needs
   // the ones the deployment actually triggers.
-  const { triggers } = unstable_readConfig({ config: configPath });
+  const { triggers } = wranglerTriggers.parse(unstable_readConfig({ config: configPath }));
 
   return {
     plugins: [

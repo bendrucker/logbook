@@ -122,14 +122,14 @@ describe("issueContributionPages", () => {
     );
 
     const pages: ContributionEventsPageResult<unknown>[] = [];
-    const error = await (async () => {
+    const thrown = await (async () => {
       for await (const page of issueContributionPages(options(stub))) {
         pages.push(page);
       }
-    })().catch((thrown: unknown) => thrown);
+    })().catch((error: unknown) => error);
 
     expect(pages).toHaveLength(1);
-    expect(error).toBeInstanceOf(RepeatedCursorError);
+    expect(thrown).toBeInstanceOf(RepeatedCursorError);
   });
 
   it("throws for a login GitHub does not know", async () => {

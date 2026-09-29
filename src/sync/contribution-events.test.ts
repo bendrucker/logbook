@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { fakeClock } from "../../test/clock";
 import { stubFetch } from "../../test/fetch-stub";

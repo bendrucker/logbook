@@ -1,4 +1,5 @@
-import { createScheduledController, env, SELF } from "cloudflare:test";
+import { createScheduledController } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubFetch } from "../test/fetch-stub";
 import {
@@ -15,20 +16,22 @@ import { advance } from "./sync/state";
 
 describe("fetch", () => {
   it("reports health", async () => {
-    const response = await SELF.fetch("https://logbook.test/healthz");
+    const response = await exports.default.fetch("https://logbook.test/healthz");
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
   });
 
   it("does not answer health on a write method", async () => {
-    const response = await SELF.fetch("https://logbook.test/healthz", { method: "POST" });
+    const response = await exports.default.fetch("https://logbook.test/healthz", {
+      method: "POST",
+    });
 
     expect(response.status).toBe(404);
   });
 
   it("404s an unknown path", async () => {
-    const response = await SELF.fetch("https://logbook.test/");
+    const response = await exports.default.fetch("https://logbook.test/");
 
     expect(response.status).toBe(404);
   });
