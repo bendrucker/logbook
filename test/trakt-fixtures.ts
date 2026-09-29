@@ -115,8 +115,6 @@ export function rateLimited(retryAfter: number) {
   });
 }
 
-// Replies in the order staged, and records the path and query each request
-// carried.
 export function stubTrakt(replies: readonly (() => Response)[]) {
   const queue = [...replies];
   const { fetch, requests } = stubFetch(() => {

@@ -39,8 +39,8 @@ export interface ArchivedMetadata {
   pagination: Pagination | null;
 }
 
-// Written once and never replaced, like GitHub's pages: a rerun lands under a
-// new fetch timestamp. A false return means the key was already there.
+// Written once and never replaced: a rerun lands under a new fetch timestamp.
+// A false return means the key was already there.
 export async function archiveTraktPage(bucket: R2Bucket, archive: TraktArchive): Promise<boolean> {
   const { kind, window, fetchedAt, page, body, status, pagination } = archive;
   const written = await bucket.put(traktKey(kind, window, fetchedAt, page), body, {

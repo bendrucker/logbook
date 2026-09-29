@@ -67,8 +67,8 @@ const titleColumns = [
   "fetched_at",
 ] as const;
 
-// `fetched_at` is written but not compared, as on `repositories`: it moves on
-// every fetch, so comparing it would make every upsert a change.
+// `fetched_at` is written but not compared: it moves on every fetch, so
+// comparing it would make every upsert a change.
 export const upsertTitles = upsertWriter(
   {
     table: "trakt_titles",

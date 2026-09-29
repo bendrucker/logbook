@@ -12,9 +12,7 @@ import { syncHistoryWindow, syncRatings, traktClientId, yearWindow } from "./syn
 // Where the discovery pages that find the first year of plays archive.
 const EARLIEST_WINDOW = "earliest";
 
-// History enqueues a window per year from `from`, or from the year of the
-// oldest play, and drains them until the request cap. Trakt has no result cap,
-// so a year never splits. Ratings are one full read with nothing to enqueue.
+// Trakt has no result cap, so a year window never splits.
 export async function backfillTrakt(
   env: Env,
   kind: TraktKind,
@@ -73,8 +71,6 @@ export async function backfillTrakt(
   };
 }
 
-// The hourly cron spends what its own work left of the cap on the years a
-// backfill enqueued.
 export async function drainTraktHistory(
   env: Env,
   options: TraktInvocationOptions & { requests: RequestCap },
@@ -120,8 +116,8 @@ async function result(
   };
 }
 
-// A backfill that already enqueued its years resumes from them rather than
-// spending two requests to rediscover where they start.
+// Resumes from the years already enqueued, which skips the two requests that
+// find the oldest play.
 async function enqueuedFrom(db: D1Database): Promise<number | null> {
   const row = await db
     .prepare("SELECT MIN(window) AS first FROM crawl_units WHERE kind = 'trakt-history'")

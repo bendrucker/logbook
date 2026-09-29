@@ -2,7 +2,6 @@ import { parquetWriteBuffer } from "hyparquet-writer";
 import type { LakeColumn } from "./columns";
 
 export interface LakeTable {
-  // The D1 table.
   name: string;
   // Where the Parquet lands in the lake bucket: the source's prefix, a schema
   // version, and the table.

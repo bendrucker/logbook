@@ -31,8 +31,7 @@ export class TraktHttpError extends TraktResponseError {
   }
 }
 
-// A 429 names its wait in `Retry-After`. The window is sound, so the run stops
-// the way GitHub's secondary limit stops it and the caller waits.
+// A 429 names its wait in `Retry-After`.
 export class TraktRateLimited extends TraktResponseError {
   readonly retryAfterSeconds: number;
 
@@ -122,7 +121,7 @@ export interface TraktOptions {
 
 export interface TraktResponse<T> {
   data: T;
-  // The bytes as received, which raw storage archives before anything else.
+  // The bytes as received.
   body: string;
   pagination: Pagination | null;
 }

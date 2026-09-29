@@ -64,8 +64,7 @@ export interface InvocationOptions extends GraphQLOptions {
   clock?: Clock;
 }
 
-// What `recordRun` reads off a source's options. A source without a point
-// budget records no cost.
+// A source without a point budget records no cost.
 export interface RunOptions {
   now?: Date;
   budget?: Budget;

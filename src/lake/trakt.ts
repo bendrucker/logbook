@@ -1,8 +1,7 @@
 import { bigint, integer, text, timestamp } from "./columns";
 import type { LakeTable } from "./table";
 
-// `released` is a calendar date rather than an instant, so it stays text like
-// `commit_days.day`.
+// `released` is a calendar date, so it stays text.
 export const traktTitles: LakeTable = {
   name: "trakt_titles",
   path: "trakt/v1/titles",

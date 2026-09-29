@@ -20,8 +20,6 @@ export interface TraktInvocationOptions extends Omit<TraktOptions, "requests"> {
   now?: Date;
 }
 
-// History off its watermark, then the full ratings list, then whatever the cap
-// leaves for windows a backfill enqueued.
 export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}): Promise<void> {
   if (!configured(env)) {
     return;
@@ -98,7 +96,7 @@ function configured(env: Env): boolean {
   }
 }
 
-// One kind's storage failure is not the other kind's problem.
+// Logs a kind's failure so the other kind still runs.
 async function contained(
   kind: TraktKind,
   run: Promise<SyncResult | null>,

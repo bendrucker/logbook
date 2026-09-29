@@ -8,7 +8,6 @@ CREATE TABLE trakt_titles (
   -- Null for a season or an episode Trakt has no title for.
   title TEXT,
   year INTEGER,
-  -- The show a season or an episode belongs to.
   show_trakt_id INTEGER,
   season INTEGER,
   number INTEGER,
@@ -17,7 +16,6 @@ CREATE TABLE trakt_titles (
   tvdb_id INTEGER,
   -- A movie's release date, YYYY-MM-DD.
   released TEXT,
-  -- A show's, season's, or episode's first air instant.
   first_aired TEXT,
   runtime INTEGER,
   -- A JSON array of genre slugs.
@@ -31,7 +29,6 @@ CREATE TABLE trakt_titles (
   PRIMARY KEY (type, trakt_id)
 );
 
--- One row per play, keyed on Trakt's history ID.
 CREATE TABLE trakt_plays (
   id INTEGER PRIMARY KEY,
   watched_at TEXT NOT NULL,
