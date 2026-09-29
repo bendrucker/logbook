@@ -4,9 +4,12 @@ import { commitDay, issue, pullRequest, review, seedRepository } from "../../tes
 import { parquetRows, readParquet } from "../../test/parquet";
 import { bookmark, folder, highlight } from "../../test/instapaper-fixtures";
 import { emptyBucket, readObject } from "../../test/r2";
+import { episodePlay, movieRating } from "../../test/trakt-fixtures";
 import { applyChanges, applyFolders, applyHighlights } from "../instapaper/rows";
 import { changesResponse, foldersResponse, highlightsResponse } from "../instapaper/schema";
 import { upsertCommitDays, upsertIssues, upsertPullRequests, upsertReviews } from "../store";
+import { normalizeHistory, normalizeRatings } from "../trakt/rows";
+import { historyPage, ratingsPage } from "../trakt/schema";
 import { buildLake, LAKE_TABLES, tableKey } from "./build";
 import { readLatestBuild } from "./builds";
 import { commitDays } from "./commit-days";
@@ -15,6 +18,7 @@ import { issues } from "./issues";
 import { pullRequests } from "./pull-requests";
 import { repositories } from "./repositories";
 import { reviews } from "./reviews";
+import { traktPlays, traktRatings, traktTitles } from "./trakt";
 import type { LakeTable } from "./table";
 
 const STARTED_AT = "2026-09-10T03:00:00.000Z";
@@ -48,7 +52,10 @@ describe("buildLake", () => {
     );
     expect(
       listed.objects.every(
-        (object) => object.key.startsWith("github/v1/") || object.key.startsWith("instapaper/v1/"),
+        (object) =>
+          object.key.startsWith("github/v1/") ||
+          object.key.startsWith("trakt/v1/") ||
+          object.key.startsWith("instapaper/v1/"),
       ),
     ).toBe(true);
   });
@@ -64,6 +71,9 @@ describe("buildLake", () => {
       reviews: 1,
       issues: 1,
       commit_days: 1,
+      trakt_titles: 0,
+      trakt_plays: 0,
+      trakt_ratings: 0,
       instapaper_bookmarks: 0,
       instapaper_highlights: 0,
       instapaper_folders: 0,
@@ -227,6 +237,53 @@ describe("buildLake", () => {
         fetched_at: new Date(fetchedAt),
       },
     ]);
+  });
+
+  it("writes Trakt rows that read back as D1 holds them", async () => {
+    const fetchedAt = "2026-09-10T00:00:00.000Z";
+    await normalizeHistory(
+      env.DB,
+      historyPage.parse([episodePlay(9_007_199_254, "2026-09-02T20:00:00.000Z")]),
+      fetchedAt,
+    );
+    await normalizeRatings(
+      env.DB,
+      ratingsPage.parse([movieRating(8, "2026-08-01T00:00:00.000Z", 5)]),
+      fetchedAt,
+    );
+
+    await buildLake(env, STARTED_AT);
+
+    expect(await rowsOf(traktPlays)).toEqual([
+      {
+        id: 9_007_199_254n,
+        watched_at: new Date("2026-09-02T20:00:00.000Z"),
+        action: "scrobble",
+        type: "episode",
+        trakt_id: 16,
+        show_trakt_id: 1,
+      },
+    ]);
+    expect(await rowsOf(traktRatings)).toEqual([
+      {
+        type: "movie",
+        trakt_id: 5,
+        rating: 8,
+        rated_at: new Date("2026-08-01T00:00:00.000Z"),
+        show_trakt_id: null,
+      },
+    ]);
+    const titles = await rowsOf(traktTitles);
+    expect(titles.map((title) => [title.type, title.trakt_id])).toEqual([
+      ["episode", 16],
+      ["movie", 5],
+      ["show", 1],
+    ]);
+    expect(titles.find((title) => title.type === "movie")).toMatchObject({
+      released: "2005-06-15",
+      genres: '["action","crime"]',
+      fetched_at: new Date(fetchedAt),
+    });
   });
 
   it.each(LAKE_TABLES.map((table) => ({ name: table.name, table })))(

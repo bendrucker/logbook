@@ -12,6 +12,9 @@
     // Public identifier rather than a secret. The token that reads GitHub is a
     // Worker secret. Whose history it reads is not.
     "GITHUB_LOGIN": "bendrucker",
+    // Whose public Trakt profile the hub reads. The client ID that reads it is
+    // a Worker secret.
+    "TRAKT_USER": "bendrucker",
     // The GraphQL rate budget, 5,000 points an hour, is shared with every other
     // tool on the token. The hourly sync costs about 4 points and still runs on
     // a busy hour. A backfill yields half the budget to the other tools.
@@ -23,14 +26,19 @@
     // subrequests. A backfill call drains the frontier until its cap.
     "RATE_CAP_CRON": 40,
     "RATE_CAP_BACKFILL": 150,
+    // Trakt requests one invocation sends at most, cron or backfill. Trakt
+    // allows an application 500 GETs every five minutes and answers 429 past
+    // that, which stops the run until its Retry-After.
+    "RATE_CAP_TRAKT": 100,
     // Instapaper requests one invocation sends at most, cron or backfill.
     // Instapaper documents a rate limit without a number and answers 429 past
     // it, which stops the run until `Retry-After` or the next hour.
     "RATE_CAP_INSTAPAPER": 50,
   },
   "triggers": {
-    // Hourly incremental sync. GitHub's search API is windowed by date rather
-    // than by event, so a missed run costs nothing but a wider next window.
+    // Hourly incremental sync. GitHub's search API and Trakt's history are
+    // windowed by date rather than by event, so a missed run costs nothing but
+    // a wider next window.
     //
     // The nightly lake build sits off the hour so it never shares an instant
     // with a sync invocation. `LAKE_CRON` is the expression it dispatches on.
@@ -47,7 +55,8 @@
   "r2_buckets": [
     { "binding": "RAW", "bucket_name": "logbook-raw" },
     // Shared with activity-hub so one DuckDB session can join rides against
-    // pull requests. This project writes under `github/` and `instapaper/` prefixes.
+    // pull requests. This project writes under `github/`, `trakt/`, and
+    // `instapaper/` prefixes.
     { "binding": "LAKE", "bucket_name": "activity-hub-lake" },
   ],
 }

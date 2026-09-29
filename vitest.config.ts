@@ -28,6 +28,7 @@ export default defineConfig(async () => {
             // credentials would reach the tests. Each test sets what it needs.
             GITHUB_TOKEN: "",
             INSTAPAPER_ACCESS_TOKEN: "",
+            TRAKT_CLIENT_ID: "",
             ADMIN_TOKEN: "",
           },
         },

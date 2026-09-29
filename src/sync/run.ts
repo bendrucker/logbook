@@ -14,6 +14,7 @@ import { issuePages, pullRequestPages, reviewedPullRequestPages } from "../githu
 import type { ContributionsCollection } from "../github/schema";
 import type { EventKind } from "../github/windows";
 import { InstapaperRateLimited } from "../instapaper/client";
+import { TraktRateLimited } from "../trakt/client";
 import {
   normalizeContributions,
   normalizeSearchPage,
@@ -294,7 +295,11 @@ export function stoppedUntil(error: unknown, now: Date): string | null {
   if (error instanceof BudgetRefused) {
     return error.resetAt ?? now.toISOString();
   }
-  if (error instanceof SecondaryRateLimited || error instanceof InstapaperRateLimited) {
+  if (
+    error instanceof SecondaryRateLimited ||
+    error instanceof TraktRateLimited ||
+    error instanceof InstapaperRateLimited
+  ) {
     return new Date(now.getTime() + error.retryAfterSeconds * 1000).toISOString();
   }
   if (error instanceof RequestCapReached) {

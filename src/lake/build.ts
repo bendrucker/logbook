@@ -7,6 +7,7 @@ import { pullRequests } from "./pull-requests";
 import { repositories } from "./repositories";
 import { reviews } from "./reviews";
 import { type EncodedTable, encodeTable, type LakeTable } from "./table";
+import { traktPlays, traktRatings, traktTitles } from "./trakt";
 
 export const LAKE_TABLES: readonly LakeTable[] = [
   repositories,
@@ -17,6 +18,9 @@ export const LAKE_TABLES: readonly LakeTable[] = [
   instapaperBookmarks,
   instapaperHighlights,
   instapaperFolders,
+  traktTitles,
+  traktPlays,
+  traktRatings,
 ];
 
 // Matches the nightly trigger in wrangler.jsonc. `scheduled` runs the sync on

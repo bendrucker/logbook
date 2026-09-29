@@ -34,6 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   delete env.ADMIN_TOKEN;
   delete env.GITHUB_TOKEN;
+  delete env.TRAKT_CLIENT_ID;
 });
 
 describe("GET /admin/sync", () => {
@@ -237,6 +238,33 @@ describe("POST /admin/backfill", () => {
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
       error: "INSTAPAPER_ACCESS_TOKEN is not configured",
+    });
+  });
+
+  it("answers 503 for a Trakt kind while the client ID is unset", async () => {
+    const response = await post("kind=trakt-ratings", authorization);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: "TRAKT_CLIENT_ID is not configured" });
+  });
+
+  it("answers 400 on a Trakt from that is not a month", async () => {
+    env.TRAKT_CLIENT_ID = "client-id";
+
+    expect((await post("kind=trakt-history&from=2012", authorization)).status).toBe(400);
+  });
+
+  it("enqueues no Trakt year past the current one", async () => {
+    env.TRAKT_CLIENT_ID = "client-id";
+
+    const response = await post("kind=trakt-history&from=2099-01", authorization);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      kind: "trakt-history",
+      windows: [],
+      pending: 0,
+      error: null,
     });
   });
 
