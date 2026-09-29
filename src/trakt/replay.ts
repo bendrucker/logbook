@@ -23,7 +23,7 @@ export interface TraktReplay {
 
 interface ArchivedFetch {
   fetchedAt: string;
-  // The pages Trakt answered 200, in the order they were read.
+  // The pages Trakt answered 200 with a body that validated, in read order.
   pageKeys: string[];
   complete: boolean;
 }
@@ -77,8 +77,8 @@ function normalizePage(
   }
 }
 
-// A fetch finished when its pages run 1 to n without a gap, every one answered
-// 200, and the last reports n pages. A page answered without pagination
+// A fetch finished when its pages run 1 to n without a gap, every one a 200
+// that validated, and the last reports n pages. A page answered without pagination
 // headers is the whole list on its own.
 async function listFetches(bucket: R2Bucket, prefix: string): Promise<ArchivedFetch[]> {
   const byFetch = new Map<
@@ -102,7 +102,7 @@ async function listFetches(bucket: R2Bucket, prefix: string): Promise<ArchivedFe
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([fetchedAt, objects]) => {
       const read = objects.map(({ key, metadata }) => ({ key, ...readMetadata(metadata) }));
-      const answered = read.filter((object) => object.status === 200);
+      const answered = read.filter((object) => object.status === 200 && object.failure === null);
       const last = answered.at(-1);
       const contiguous =
         answered.length === read.length &&

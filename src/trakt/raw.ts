@@ -29,6 +29,9 @@ export interface TraktArchive {
   body: string;
   status: number;
   pagination: Pagination | null;
+  // The error that stopped the fetch at this page, since a body that failed
+  // validation still arrived with a 200.
+  failure?: string;
 }
 
 // A page's body is a bare array, and what says whether a fetch finished is the
@@ -37,17 +40,19 @@ export interface TraktArchive {
 export interface ArchivedMetadata {
   status: number;
   pagination: Pagination | null;
+  failure: string | null;
 }
 
 // Written once and never replaced: a rerun lands under a new fetch timestamp.
 // A false return means the key was already there.
 export async function archiveTraktPage(bucket: R2Bucket, archive: TraktArchive): Promise<boolean> {
-  const { kind, window, fetchedAt, page, body, status, pagination } = archive;
+  const { kind, window, fetchedAt, page, body, status, pagination, failure } = archive;
   const written = await bucket.put(traktKey(kind, window, fetchedAt, page), body, {
     onlyIf: { etagDoesNotMatch: "*" },
     httpMetadata: { contentType: "application/json" },
     customMetadata: {
       status: String(status),
+      ...(failure === undefined ? {} : { failure }),
       ...(pagination === null
         ? {}
         : {
@@ -71,6 +76,7 @@ export function readMetadata(metadata: Record<string, string> | undefined): Arch
   );
   return {
     status: number("status") ?? 0,
+    failure: metadata?.["failure"] ?? null,
     pagination:
       page == null || limit == null || pageCount == null || itemCount == null
         ? null

@@ -155,6 +155,7 @@ async function syncPages<Item extends HistoryItem | RatingItem>(
           page: run.result.pages + 1,
           body: error.body,
           status: error.status,
+          failure: error.name,
           pagination: null,
         });
       }

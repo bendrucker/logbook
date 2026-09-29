@@ -75,6 +75,19 @@ describe("replayTraktWindow", () => {
     expect(replay).toMatchObject({ fetchedAt: finished.fetchedAt, complete: true });
   });
 
+  it("passes over a newer fetch whose 200 failed validation", async () => {
+    const finished = await sync(
+      [() => traktResponse([moviePlay(1, "2026-09-01T20:00:00.000Z")])],
+      NOW,
+    );
+    await sync([() => new Response("[{}]", { status: 200 })], new Date("2026-09-10T13:00:00.000Z"));
+    await emptyTables(env.DB);
+
+    const replay = await replayTraktWindow(env.DB, env.RAW, "trakt-history", WINDOW.key);
+
+    expect(replay).toMatchObject({ fetchedAt: finished.fetchedAt, complete: true });
+  });
+
   it("reads a fetch of an empty window as complete", async () => {
     await sync([() => traktResponse([])], NOW);
 

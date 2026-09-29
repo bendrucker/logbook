@@ -69,6 +69,7 @@ describe("syncHistoryWindow", () => {
     expect(readMetadata(first?.customMetadata)).toEqual({
       status: 200,
       pagination: { page: 1, limit: 250, pageCount: 2, itemCount: 1 },
+      failure: null,
     });
     expect(await count("trakt_plays")).toEqual({ total: 2 });
     expect(await count("trakt_titles")).toEqual({ total: 3 });
