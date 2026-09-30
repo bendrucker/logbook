@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { emptyBucket } from "../../test/r2";
 import { readRow } from "../../test/tables";
 import {
@@ -19,12 +19,7 @@ import { syncHistoryWindow, syncRatings, watchedWindow, yearWindow } from "./syn
 const NOW = new Date("2026-09-10T12:00:00.000Z");
 
 beforeEach(async () => {
-  env.TRAKT_CLIENT_ID = "client-id";
   await emptyBucket(env.RAW);
-});
-
-afterEach(() => {
-  delete env.TRAKT_CLIENT_ID;
 });
 
 async function archivedKeys(): Promise<string[]> {

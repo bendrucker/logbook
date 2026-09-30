@@ -253,7 +253,7 @@ For sizing: the site's current tables report 62 repositories touched in 2026, wi
 
 - The hourly cron runs one `updated:{since}..{now}` search per event type plus one `contributionsCollection` call for the current year, then reads [Trakt](#trakt) history and ratings.
 - A second cron rebuilds the lake at 09:30 UTC. It sits off the hour so it never shares an instant with a sync invocation, and `scheduled` tells the two apart by the cron expression.
-- `GITHUB_TOKEN`, `TRAKT_CLIENT_ID`, and `ADMIN_TOKEN` are Worker secrets, set with `wrangler secret put`.
+- `GITHUB_TOKEN` and `ADMIN_TOKEN` are Worker secrets, set with `wrangler secret put`.
 - The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set, which matches how the site and Activity Hub both work. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 - An admin route reports the last successful sync per event type, the lag on the oldest window still unread, recent failures, and the last lake build, in the shape of Activity Hub's `/admin/pipeline`.
 - The `contributionsCollection` totals are checked against event table counts per year. Drift is the signal that search missed something, such as an issue in a repository that later turned Issues off. Search hides it, and the totals still count it. A backfill of the contribution connections fills it, and the note names the node IDs still behind a gap.
@@ -278,7 +278,7 @@ Trakt is the second source: every play in my watch history and every rating, wit
 
 #### Access
 
-Both endpoints read a public profile with the application's client ID alone. `GET /users/{TRAKT_USER}/history` and `GET /users/{TRAKT_USER}/ratings` carry `trakt-api-version: 2` and `trakt-api-key` and no OAuth token, so there is no refresh flow to keep alive. `TRAKT_CLIENT_ID` is a Worker secret and `TRAKT_USER` a var. Making the profile private would stop the sync. Switching to OAuth would fix it.
+Both endpoints read a public profile with the application's client ID alone. `GET /users/{TRAKT_USER}/history` and `GET /users/{TRAKT_USER}/ratings` carry `trakt-api-version: 2` and `trakt-api-key` and no OAuth token, so there is no refresh flow to keep alive. `TRAKT_CLIENT_ID` and `TRAKT_USER` are both vars. Trakt sends the client ID as a header and pairs it with no secret for public reads. Making the profile private would stop the sync. Switching to OAuth would fix it.
 
 #### Tables
 

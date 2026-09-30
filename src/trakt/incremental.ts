@@ -1,13 +1,12 @@
 import { frontierStatus } from "../sync/frontier";
 import type { TraktKind } from "../sync/kinds";
-import { MissingSecretError, type SyncResult } from "../sync/run";
+import type { SyncResult } from "../sync/run";
 import { readWatermark } from "../sync/state";
 import { drainTraktHistory } from "./backfill";
 import { RequestCap, type TraktOptions } from "./client";
 import {
   syncHistoryWindow,
   syncRatings,
-  traktClientId,
   type TraktSyncOptions,
   watchedWindow,
   yearWindow,
@@ -22,9 +21,6 @@ export interface TraktInvocationOptions extends Omit<TraktOptions, "requests"> {
 }
 
 export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}): Promise<void> {
-  if (!configured(env)) {
-    return;
-  }
   const now = options.now ?? new Date();
   const requests = new RequestCap(env.RATE_CAP_TRAKT);
   const sync = { ...options, now, requests };
@@ -56,10 +52,7 @@ export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}):
 export async function rewalkTraktYear(
   env: Env,
   options: TraktInvocationOptions = {},
-): Promise<SyncResult | null> {
-  if (!configured(env)) {
-    return null;
-  }
+): Promise<SyncResult> {
   const now = options.now ?? new Date();
   return syncHistoryWindow(env, yearWindow(now.getUTCFullYear(), now, false), {
     ...options,
@@ -87,21 +80,6 @@ async function syncHistory(
   }
   const since = new Date(Date.parse(watermark.window) - OVERLAP_MS).toISOString();
   return syncHistoryWindow(env, watchedWindow(since, options.now.toISOString()), options);
-}
-
-// A cron that throws retries on the next hour and reports nothing useful in
-// between, and no amount of retrying sets a secret.
-function configured(env: Env): boolean {
-  try {
-    traktClientId(env);
-    return true;
-  } catch (error) {
-    if (!(error instanceof MissingSecretError)) {
-      throw error;
-    }
-    console.error(error.message);
-    return false;
-  }
 }
 
 // Logs a kind's failure so the other kind still runs.

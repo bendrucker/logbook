@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import type { TraktKind } from "../sync/kinds";
-import { MissingSecretError, recordRun, type SyncResult, syncedThrough } from "../sync/run";
+import { recordRun, type SyncResult, syncedThrough } from "../sync/run";
 import { advance } from "../sync/state";
 import {
   PAGE_LIMIT,
@@ -13,14 +13,6 @@ import {
 import { archiveTraktPage } from "./raw";
 import { normalizeHistory, normalizeRatings, type TraktRowsChanged } from "./rows";
 import { type HistoryItem, historyPage, type RatingItem, ratingsPage } from "./schema";
-
-export function traktClientId(env: Env): string {
-  const id = env.TRAKT_CLIENT_ID;
-  if (id === undefined || id === "") {
-    throw new MissingSecretError("TRAKT_CLIENT_ID");
-  }
-  return id;
-}
 
 export interface TraktSyncOptions extends TraktOptions {
   now?: Date;
@@ -112,7 +104,13 @@ async function syncPages<Item extends HistoryItem | RatingItem>(
     window,
     options,
     async (run) => {
-      const pages = traktPages(traktClientId(env), fetch.path, fetch.params, fetch.schema, options);
+      const pages = traktPages(
+        env.TRAKT_CLIENT_ID,
+        fetch.path,
+        fetch.params,
+        fetch.schema,
+        options,
+      );
 
       // Each page is archived before its rows are written, so a normalization
       // bug stays diagnosable against the bytes.

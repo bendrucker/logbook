@@ -7,7 +7,7 @@ import { PAGE_LIMIT, RequestCap, type TraktOptions, traktGet } from "./client";
 import type { TraktInvocationOptions } from "./incremental";
 import { archiveTraktPage } from "./raw";
 import { historyPage } from "./schema";
-import { syncHistoryWindow, syncRatings, traktClientId, yearWindow } from "./sync";
+import { syncHistoryWindow, syncRatings, yearWindow } from "./sync";
 
 // Where the discovery pages that find the first year of plays archive.
 const EARLIEST_WINDOW = "earliest";
@@ -19,8 +19,6 @@ export async function backfillTrakt(
   from: Month | null,
   options: TraktInvocationOptions = {},
 ): Promise<BackfillResult> {
-  // Read before anything else so an unconfigured deployment answers the caller.
-  const clientId = traktClientId(env);
   const requests = new RequestCap(env.RATE_CAP_TRAKT);
 
   if (kind === "trakt-ratings") {
@@ -45,7 +43,7 @@ export async function backfillTrakt(
     first =
       from?.year ??
       (await enqueuedFrom(env.DB)) ??
-      (await oldestPlayYear(env, clientId, { ...options, requests }, now));
+      (await oldestPlayYear(env, { ...options, requests }, now));
   } catch (error) {
     // Answered like a failed window, so a looping caller stops and reruns
     // rather than reading a 500.
@@ -130,17 +128,12 @@ async function enqueuedFrom(db: D1Database): Promise<number | null> {
 
 // History lists the most recent play first, so the oldest is the last item of
 // the last page. Null when there are no plays at all.
-async function oldestPlayYear(
-  env: Env,
-  clientId: string,
-  options: TraktOptions,
-  now: Date,
-): Promise<number | null> {
+async function oldestPlayYear(env: Env, options: TraktOptions, now: Date): Promise<number | null> {
   const fetchedAt = now.toISOString();
   const path = `/users/${encodeURIComponent(env.TRAKT_USER)}/history`;
   const read = async (page: number) => {
     const response = await traktGet(
-      clientId,
+      env.TRAKT_CLIENT_ID,
       path,
       { page: String(page), limit: String(PAGE_LIMIT) },
       historyPage,
