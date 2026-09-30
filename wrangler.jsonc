@@ -12,9 +12,11 @@
     // Public identifier rather than a secret. The token that reads GitHub is a
     // Worker secret. Whose history it reads is not.
     "GITHUB_LOGIN": "bendrucker",
-    // Whose public Trakt profile the hub reads. The client ID that reads it is
-    // a Worker secret.
+    // Whose public Trakt profile the hub reads, and the application that reads
+    // it. Trakt sends the client ID as a request header and pairs it with no
+    // secret for public reads.
     "TRAKT_USER": "bendrucker",
+    "TRAKT_CLIENT_ID": "nmJ1tcJ_TIpoxVhlhTcahD3851pQs2tUR1CCRxwJUaA",
     // The GraphQL rate budget, 5,000 points an hour, is shared with every other
     // tool on the token. The hourly sync costs about 4 points and still runs on
     // a busy hour. A backfill yields half the budget to the other tools.

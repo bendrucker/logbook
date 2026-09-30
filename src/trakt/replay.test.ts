@@ -17,7 +17,6 @@ const NOW = new Date("2026-09-10T12:00:00.000Z");
 const WINDOW = yearWindow(2026, NOW, false);
 
 beforeEach(async () => {
-  env.TRAKT_CLIENT_ID = "client-id";
   await emptyBucket(env.RAW);
 });
 

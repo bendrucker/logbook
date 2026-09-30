@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { emptyBucket } from "../../test/r2";
 import {
   movieRating,
@@ -8,19 +8,13 @@ import {
   stubTrakt,
   traktResponse,
 } from "../../test/trakt-fixtures";
-import { MissingSecretError } from "../sync/run";
 import { readWatermark } from "../sync/state";
 import { backfillTrakt } from "./backfill";
 
 const NOW = new Date("2026-09-10T12:00:00.000Z");
 
 beforeEach(async () => {
-  env.TRAKT_CLIENT_ID = "client-id";
   await emptyBucket(env.RAW);
-});
-
-afterEach(() => {
-  delete env.TRAKT_CLIENT_ID;
 });
 
 function play(year: number) {
@@ -113,13 +107,5 @@ describe("backfillTrakt", () => {
     });
 
     expect(result).toMatchObject({ windows: ["all"], pages: 1, pending: 0, error: null });
-  });
-
-  it("refuses without a client ID before sending anything", async () => {
-    delete env.TRAKT_CLIENT_ID;
-
-    await expect(backfillTrakt(env, "trakt-ratings", null)).rejects.toBeInstanceOf(
-      MissingSecretError,
-    );
   });
 });

@@ -144,16 +144,13 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/lake"
 
 ## Secrets
 
-| Secret                    | Location                              | Consumer                                |
-| ------------------------- | ------------------------------------- | --------------------------------------- |
-| `GITHUB_TOKEN`            | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request            |
-| `TRAKT_CLIENT_ID`         | Worker secret (`wrangler secret put`) | Every Trakt request, as `trakt-api-key` |
-| `INSTAPAPER_ACCESS_TOKEN` | Worker secret (`wrangler secret put`) | Every Instapaper request                |
-| `ADMIN_TOKEN`             | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes         |
+| Secret                    | Location                              | Consumer                        |
+| ------------------------- | ------------------------------------- | ------------------------------- |
+| `GITHUB_TOKEN`            | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request    |
+| `INSTAPAPER_ACCESS_TOKEN` | Worker secret (`wrangler secret put`) | Every Instapaper request        |
+| `ADMIN_TOKEN`             | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes |
 
 The GitHub token is a classic personal access token with no scopes, so the hub sees and publishes public activity only. [docs/design.md](docs/design.md#visibility) records the decision.
-
-Without `TRAKT_CLIENT_ID` the cron skips Trakt and a Trakt backfill answers 503.
 
 The Instapaper access token is a personal access token, generated for my own account on the [Applications page](https://www.instapaper.com/developers/applications). It doesn't expire. Without it the cron skips Instapaper and an Instapaper backfill answers 503.
 
@@ -161,7 +158,7 @@ The Instapaper access token is a personal access token, generated for my own acc
 
 ## Infrastructure
 
-`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` and `TRAKT_USER` for whose history the hub reads, the [rate budget](#rate-budget), `RATE_CAP_TRAKT`, and `RATE_CAP_INSTAPAPER`. The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
+`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` and `TRAKT_USER` for whose history the hub reads, `TRAKT_CLIENT_ID` for the Trakt application, sent as `trakt-api-key` and paired with no secret for public reads, the [rate budget](#rate-budget), `RATE_CAP_TRAKT`, and `RATE_CAP_INSTAPAPER`. The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
 
 There is no Terraform here. Activity Hub needs it for a DNS record, a Workers route, and the Cloudflare Access applications in front of its admin routes. This hub is reached by cron and by a service binding. It has no hostname to manage. `/admin/sync` sits behind `ADMIN_TOKEN` alone, with no Access application in front of it.
 
@@ -173,7 +170,7 @@ cp .dev.vars.example .dev.vars
 bun run dev
 ```
 
-`wrangler dev` reads `GITHUB_TOKEN`, `TRAKT_CLIENT_ID`, `INSTAPAPER_ACCESS_TOKEN`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
+`wrangler dev` reads `GITHUB_TOKEN`, `INSTAPAPER_ACCESS_TOKEN`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
 
 | Command             | What it does                                   |
 | ------------------- | ---------------------------------------------- |
