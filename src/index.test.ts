@@ -42,7 +42,6 @@ describe("scheduled", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete env.GITHUB_TOKEN;
-    delete env.TRAKT_CLIENT_ID;
   });
 
   it("runs the incremental sync on the cron", async () => {
@@ -58,13 +57,12 @@ describe("scheduled", () => {
 
     await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
 
-    expect(requests).toHaveLength(2);
+    expect(toGitHub(requests)).toHaveLength(2);
     expect(await recentRuns(env.DB, "issue", 1)).toMatchObject([{ pages: 1, error: null }]);
     expect(await recentRuns(env.DB, "contributions", 1)).toMatchObject([{ error: null }]);
   });
 
   it("syncs Trakt beside GitHub on the same cron", async () => {
-    env.TRAKT_CLIENT_ID = "client-id";
     const { fetch, requests } = stubFetch(() => traktResponse([], null));
     vi.stubGlobal("fetch", fetch);
 
@@ -91,7 +89,6 @@ describe("the nightly lake cron", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete env.GITHUB_TOKEN;
-    delete env.TRAKT_CLIENT_ID;
   });
 
   it("is one the deployment triggers", () => {
@@ -108,7 +105,7 @@ describe("the nightly lake cron", () => {
 
     await worker.scheduled(createScheduledController({ cron: LAKE_CRON }), env);
 
-    expect(requests).toEqual([]);
+    expect(toGitHub(requests)).toEqual([]);
     // `buildLake` finishes the row only once every table is in R2, so a build
     // that carries counts and no error is one that wrote.
     expect(await readLatestBuild(env.DB)).toMatchObject({
@@ -118,7 +115,6 @@ describe("the nightly lake cron", () => {
   });
 
   it("re-reads the current year of Trakt history before building", async () => {
-    env.TRAKT_CLIENT_ID = "client-id";
     const { fetch, requests } = stubFetch(() =>
       traktResponse([moviePlay(1, "2026-02-01T20:00:00.000Z")]),
     );
@@ -136,3 +132,8 @@ describe("the nightly lake cron", () => {
     });
   });
 });
+
+// Trakt runs on the same crons, so a GitHub assertion counts GitHub's requests.
+function toGitHub(requests: readonly Request[]): Request[] {
+  return requests.filter((request) => new URL(request.url).hostname === "api.github.com");
+}

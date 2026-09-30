@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { emptyBucket } from "../../test/r2";
 import {
   movieRating,
@@ -16,24 +16,10 @@ const NOW = new Date("2026-09-10T12:00:00.000Z");
 const WATERMARK = "2026-09-10T11:00:00.000Z";
 
 beforeEach(async () => {
-  env.TRAKT_CLIENT_ID = "client-id";
   await emptyBucket(env.RAW);
 });
 
-afterEach(() => {
-  delete env.TRAKT_CLIENT_ID;
-});
-
 describe("syncTrakt", () => {
-  it("sends nothing without a client ID", async () => {
-    delete env.TRAKT_CLIENT_ID;
-    const trakt = stubTrakt([]);
-
-    await syncTrakt(env, { fetch: trakt.fetch, now: NOW });
-
-    expect(trakt.requests).toHaveLength(0);
-  });
-
   it("opens the history window a day behind the watermark, then reads ratings", async () => {
     await advance(env.DB, "trakt-history", WATERMARK, WATERMARK);
     const trakt = stubTrakt([
@@ -105,14 +91,8 @@ describe("rewalkTraktYear", () => {
 
     const run = await rewalkTraktYear(env, { fetch: trakt.fetch, now: NOW });
 
-    expect(run?.error).toBeNull();
+    expect(run.error).toBeNull();
     expect(trakt.urls()[0]?.searchParams.get("start_at")).toBe("2026-01-01T00:00:00.000Z");
     expect((await readWatermark(env.DB, "trakt-history"))?.window).toBe(WATERMARK);
-  });
-
-  it("does nothing without a client ID", async () => {
-    delete env.TRAKT_CLIENT_ID;
-
-    expect(await rewalkTraktYear(env, { fetch: stubTrakt([]).fetch, now: NOW })).toBeNull();
   });
 });
