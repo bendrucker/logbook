@@ -13,7 +13,7 @@
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "^0.22.0",
         "@types/bun": "^1.4.2",
-        "hyparquet": "^1.30.0",
+        "hyparquet": "^1.31.2",
         "oxfmt": "0.67.0",
         "oxlint": "1.86.0",
         "oxlint-tsgolint": "^7.0.2001",
@@ -384,7 +384,7 @@
 
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
-    "hyparquet": ["hyparquet@1.30.0", "", {}, "sha512-HlvW+Luuo2RtvTzDnTJN4F2rXxKQMcmAVNnT1khytf1MR/vDS6ALeYyWwbU1X9rrOLLIG0fjRa0Y5q3XxvOXdA=="],
+    "hyparquet": ["hyparquet@1.31.2", "", {}, "sha512-dpVTCGkPPIdfDExa7YZGaJpuBTmLFDKGeZ6meHUj1mz/Q3qmaQHGLLqCyPBkQjfxrYNb08YTax682qeGO+zkVA=="],
 
     "hyparquet-writer": ["hyparquet-writer@0.16.9", "", { "dependencies": { "hyparquet": "1.29.2" } }, "sha512-VZvH4Vq9lQwZa/+1y4YrEwF9+FAe5pED+mVN4AHflCoFk5LG2RemMHW9iwVlVqug7fO3ATwEMSG68cr3uZAkjQ=="],
 
