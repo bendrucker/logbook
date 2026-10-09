@@ -124,6 +124,9 @@ export function parseCsv(text: string): ExportRecord[] {
       field += char;
     }
   }
+  if (quoted) {
+    throw new Error("the CSV ends inside a quoted field");
+  }
   if (field !== "" || row.length > 0) {
     row.push(field);
     rows.push(row);
@@ -135,5 +138,12 @@ export function parseCsv(text: string): ExportRecord[] {
   }
   return body
     .filter((cells) => cells.length > 1 || cells[0] !== "")
-    .map((cells) => Object.fromEntries(header.map((name, index) => [name, cells[index] ?? ""])));
+    .map((cells, index) => {
+      if (cells.length !== header.length) {
+        throw new Error(
+          `CSV row ${index + 1} has ${cells.length} fields where the header has ${header.length}`,
+        );
+      }
+      return Object.fromEntries(header.map((name, column) => [name, cells[column]]));
+    });
 }

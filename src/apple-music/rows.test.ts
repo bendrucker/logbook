@@ -23,6 +23,8 @@ import {
   playActivityRecord,
 } from "./schema";
 
+const EXPORT_ID = "2026-10-03";
+
 function play(overrides: ExportRecord) {
   return playRow(playActivityRecord.parse(playEvent("e1", overrides)));
 }
@@ -136,7 +138,9 @@ describe("libraryTrackRow", () => {
     { name: "a disliked rating", overrides: { "Track Like Rating": "disliked" }, loved: false },
     { name: "neither", overrides: {}, loved: false },
   ])("reads $name as loved: $loved", ({ overrides, loved }) => {
-    expect(libraryTrackRow(libraryTrackRecord.parse(libraryTrack(1, overrides))).loved).toBe(loved);
+    expect(
+      libraryTrackRow(libraryTrackRecord.parse(libraryTrack(1, overrides)), EXPORT_ID).loved,
+    ).toBe(loved);
   });
 });
 
@@ -172,12 +176,14 @@ describe("favoriteRow", () => {
       expected: { type: "playlist", artistKey: "", titleKey: "" },
     },
   ])("reads $name", ({ overrides, expected }) => {
-    expect(favoriteRow(favoriteRecord.parse(favorite("r1", overrides)))).toMatchObject(expected);
+    expect(favoriteRow(favoriteRecord.parse(favorite("r1", overrides)), EXPORT_ID)).toMatchObject(
+      expected,
+    );
   });
 
   it("skips a type nothing matches against", () => {
     expect(
-      favoriteRow(favoriteRecord.parse(favorite("r1", { "Favorite Type": "Station" }))),
+      favoriteRow(favoriteRecord.parse(favorite("r1", { "Favorite Type": "Station" })), EXPORT_ID),
     ).toBeNull();
   });
 });
@@ -191,6 +197,7 @@ describe("likedRadioTrackRow", () => {
   ])("reads %s as %s", (eventType, preference) => {
     const row = likedRadioTrackRow(
       likedRadioTrackRecord.parse(radioEvent("r1", { "Event Type": eventType })),
+      EXPORT_ID,
     );
 
     expect(row?.preference ?? null).toBe(preference);

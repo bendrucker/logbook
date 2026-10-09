@@ -15,8 +15,8 @@ function importPage(query: string, records: ExportRecord[], token = TOKEN): Prom
   });
 }
 
-function finish(): Promise<Response> {
-  return exports.default.fetch("https://logbook.test/admin/import/apple-music/finish", {
+function finish(query = "export=2026-10-03"): Promise<Response> {
+  return exports.default.fetch(`https://logbook.test/admin/import/apple-music/finish?${query}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
@@ -103,6 +103,19 @@ describe("POST /admin/import/apple-music", () => {
     expect(await response.json()).toMatchObject({ archived: false, rowsChanged: 0 });
   });
 
+  it("refuses a page archived with a different body", async () => {
+    await importPage(PLAYS, [playEvent("e1")]);
+
+    const response = await importPage(PLAYS, [playEvent("e2")]);
+
+    expect(response.status).toBe(409);
+    expect(
+      await env.DB.prepare("SELECT id FROM music_plays")
+        .all()
+        .then(({ results }) => results),
+    ).toEqual([{ id: "e1" }]);
+  });
+
   it("writes rows a replay of the archive reproduces", async () => {
     await importPage(PLAYS, [playEvent("e1")]);
     await importPage("export=2026-10-03&file=play-activity&page=2", [playEvent("e2")]);
@@ -130,5 +143,9 @@ describe("POST /admin/import/apple-music/finish", () => {
       unresolved: 0,
       tracks: 1,
     });
+  });
+
+  it("refuses a finish without the export", async () => {
+    expect((await finish("")).status).toBe(400);
   });
 });

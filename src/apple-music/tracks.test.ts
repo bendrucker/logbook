@@ -11,8 +11,14 @@ import type { ExportFile, ExportRecord } from "./export";
 import { readPage } from "./import";
 import { refreshTracks } from "./tracks";
 
-async function load(file: ExportFile, records: ExportRecord[]): Promise<void> {
-  await readPage(file, JSON.stringify(records)).write(env.DB);
+const EXPORT_ID = "2026-10-03";
+
+async function load(
+  file: ExportFile,
+  records: ExportRecord[],
+  exportId = EXPORT_ID,
+): Promise<void> {
+  await readPage(file, JSON.stringify(records)).write(env.DB, exportId);
 }
 
 async function plays(): Promise<
@@ -57,7 +63,7 @@ describe("refreshTracks", () => {
         }),
       ]);
 
-      await refreshTracks(env.DB);
+      await refreshTracks(env.DB, EXPORT_ID);
 
       expect(await plays()).toEqual([{ id: "e1", artist: "Radiohead", artist_match: "same-day" }]);
     });
@@ -66,7 +72,7 @@ describe("refreshTracks", () => {
       await load("play-activity", [PLAY]);
       await load("library-tracks", [libraryTrack(1)]);
 
-      await refreshTracks(env.DB);
+      await refreshTracks(env.DB, EXPORT_ID);
 
       expect(await plays()).toEqual([{ id: "e1", artist: "Radiohead", artist_match: "library" }]);
     });
@@ -75,7 +81,7 @@ describe("refreshTracks", () => {
       await load("play-activity", [PLAY]);
       await load("daily-tracks", [dailyTrack({ "Date Played": "20200101" })]);
 
-      await refreshTracks(env.DB);
+      await refreshTracks(env.DB, EXPORT_ID);
 
       expect(await plays()).toEqual([{ id: "e1", artist: "Radiohead", artist_match: "title" }]);
     });
@@ -90,7 +96,7 @@ describe("refreshTracks", () => {
         }),
       ]);
 
-      const refresh = await refreshTracks(env.DB);
+      const refresh = await refreshTracks(env.DB, EXPORT_ID);
 
       expect(await plays()).toEqual([{ id: "e1", artist: null, artist_match: null }]);
       expect(refresh.unresolved).toBe(1);
@@ -99,7 +105,7 @@ describe("refreshTracks", () => {
     it("keeps a resolved artist when the plays are imported again", async () => {
       await load("play-activity", [PLAY]);
       await load("library-tracks", [libraryTrack(1)]);
-      await refreshTracks(env.DB);
+      await refreshTracks(env.DB, EXPORT_ID);
 
       await load("play-activity", [PLAY]);
 
@@ -114,7 +120,7 @@ describe("refreshTracks", () => {
     ]);
     await load("library-tracks", [libraryTrack(1)]);
 
-    const refresh = await refreshTracks(env.DB);
+    const refresh = await refreshTracks(env.DB, EXPORT_ID);
 
     expect(await track()).toEqual({
       artist: "Radiohead",
@@ -132,9 +138,12 @@ describe("refreshTracks", () => {
   it("changes nothing on a second refresh", async () => {
     await load("play-activity", [PLAY]);
     await load("library-tracks", [libraryTrack(1)]);
-    await refreshTracks(env.DB);
+    await refreshTracks(env.DB, EXPORT_ID);
 
-    expect(await refreshTracks(env.DB)).toMatchObject({ artistsChanged: 0, tracksChanged: 0 });
+    expect(await refreshTracks(env.DB, EXPORT_ID)).toMatchObject({
+      artistsChanged: 0,
+      tracksChanged: 0,
+    });
   });
 
   describe("signals", () => {
@@ -221,7 +230,7 @@ describe("refreshTracks", () => {
       await load("library-tracks", [libraryTrack(1)]);
       await load(file, records);
 
-      await refreshTracks(env.DB);
+      await refreshTracks(env.DB, EXPORT_ID);
 
       expect(await track()).toMatchObject(expected);
     });
@@ -232,13 +241,28 @@ describe("refreshTracks", () => {
     await load("daily-tracks", [
       dailyTrack({ "Track Description": "Cover Band - Paranoid Android" }),
     ]);
-    await refreshTracks(env.DB);
+    await refreshTracks(env.DB, EXPORT_ID);
 
     await env.DB.prepare("DELETE FROM apple_music_daily_tracks").run();
     await load("daily-tracks", [dailyTrack()]);
-    await refreshTracks(env.DB);
+    await refreshTracks(env.DB, EXPORT_ID);
 
     const { results } = await env.DB.prepare("SELECT artist FROM music_tracks").all();
     expect(results).toEqual([{ artist: "Radiohead" }]);
+  });
+
+  it("drops a library track and a preference a newer export no longer holds", async () => {
+    await load("play-activity", [PLAY]);
+    await load("library-tracks", [
+      libraryTrack(1),
+      libraryTrack(2, { "Favorite Status - Track": true }),
+    ]);
+    await load("favorites", [favorite("r1")]);
+    await refreshTracks(env.DB, EXPORT_ID);
+
+    await load("library-tracks", [libraryTrack(1)], "2026-12-01");
+    await refreshTracks(env.DB, "2026-12-01");
+
+    expect(await track()).toMatchObject({ artist: "Radiohead", loved: 0 });
   });
 });

@@ -100,6 +100,7 @@ const libraryColumns = [
   "purchased",
   "play_count",
   "skip_count",
+  "export_id",
 ] as const;
 
 export const upsertLibraryTracks = upsertWriter(
@@ -123,6 +124,7 @@ export const upsertLibraryTracks = upsertWriter(
     purchased: row.purchased === null ? null : Number(row.purchased),
     play_count: row.playCount,
     skip_count: row.skipCount,
+    export_id: row.exportId,
   }),
 );
 
@@ -135,6 +137,7 @@ const preferenceColumns = [
   "title_key",
   "preference",
   "changed_at",
+  "export_id",
 ] as const;
 
 export const upsertPreferences = upsertWriter(
@@ -152,5 +155,6 @@ export const upsertPreferences = upsertWriter(
     title_key: row.titleKey,
     preference: row.preference,
     changed_at: row.changedAt,
+    export_id: row.exportId,
   }),
 );

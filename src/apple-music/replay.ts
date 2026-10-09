@@ -28,7 +28,7 @@ export async function replayAppleMusicFile(
   // keeps the later page's copy.
   let rowsChanged = 0;
   for await (const page of pages) {
-    rowsChanged += await page.write(db);
+    rowsChanged += await page.write(db, exportId);
   }
   return { pages: keys.length, rowsChanged };
 }

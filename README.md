@@ -138,7 +138,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kin
 
 ## Apple Music
 
-Apple's privacy export holds the listening history. `bun run import:apple-music` reads its `Apple Music Activity` folder on the laptop, keeps an allowlist of columns from each file, and posts pages of 500 to `POST /admin/import/apple-music`. The IP address, location, device, and account fields on every play event never upload, and the Worker refuses a page carrying any column outside the allowlist. A last call to `/admin/import/apple-music/finish` names each play's artist from the daily rollup and the library, then rebuilds `music_tracks`.
+Apple's privacy export holds the listening history. `bun run import:apple-music` reads its `Apple Music Activity` folder on the laptop, keeps an allowlist of columns from each file, and posts pages of 500 to `POST /admin/import/apple-music`. The IP address, location, device, and account fields on every play event never upload, and the Worker refuses a page carrying any column outside the allowlist. A last call to `/admin/import/apple-music/finish` drops library tracks and favorites the export no longer holds, names each play's artist from the daily rollup and the library, then rebuilds `music_tracks`.
 
 ```sh
 ADMIN_TOKEN=... bun run import:apple-music "<export>/Apple Music Activity" "$WORKER"

@@ -100,7 +100,10 @@ CREATE TABLE apple_music_library_tracks (
   loved INTEGER NOT NULL,
   purchased INTEGER,
   play_count INTEGER,
-  skip_count INTEGER
+  skip_count INTEGER,
+  -- The export that last held the track. Finishing a newer import deletes the
+  -- tracks it no longer holds.
+  export_id TEXT NOT NULL
 );
 
 CREATE INDEX apple_music_library_tracks_title ON apple_music_library_tracks (title_key, album_key);
@@ -118,5 +121,7 @@ CREATE TABLE apple_music_preferences (
   -- like or dislike.
   preference TEXT NOT NULL,
   changed_at TEXT,
+  -- The export that last held the preference, as on library tracks.
+  export_id TEXT NOT NULL,
   PRIMARY KEY (source, type, reference)
 );

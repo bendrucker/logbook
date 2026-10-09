@@ -105,15 +105,19 @@ function poster(base: URL, exportId: string): Sender {
       return ImportResult.parse(await post(url, JSON.stringify(records))).rowsChanged;
     },
     finish: async () => {
-      const result = FinishResult.parse(
-        await post(new URL("/admin/import/apple-music/finish", base)),
-      );
+      const result = FinishResult.parse(await post(finishUrl(base, exportId)));
       console.log(
         `tracks ${result.tracks} from ${result.plays} plays, ` +
           `${result.unresolved} with no artist, ${result.tracksChanged} tracks changed`,
       );
     },
   };
+}
+
+function finishUrl(base: URL, exportId: string): URL {
+  const url = new URL("/admin/import/apple-music/finish", base);
+  url.search = new URLSearchParams({ export: exportId }).toString();
+  return url;
 }
 
 function writer(out: string): Sender {

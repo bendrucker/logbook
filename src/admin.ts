@@ -14,7 +14,13 @@ import { lastRuns, recentFailures, type SyncRun } from "./sync/runs";
 import { readWatermarks, type Watermark } from "./sync/state";
 import { backfillInstapaper } from "./instapaper/backfill";
 import { backfillTrakt } from "./trakt/backfill";
-import { ImportRequestError, importPage, importPageRequest } from "./apple-music/import";
+import {
+  exportIdParam,
+  ImportConflictError,
+  importPage,
+  importPageRequest,
+  ImportRequestError,
+} from "./apple-music/import";
 import { refreshTracks } from "./apple-music/tracks";
 
 const FAILURE_LIMIT = 10;
@@ -132,6 +138,9 @@ export async function handleAppleMusicImport(request: Request, env: Env): Promis
     if (error instanceof ImportRequestError) {
       return Response.json({ error: error.message }, { status: 400 });
     }
+    if (error instanceof ImportConflictError) {
+      return Response.json({ error: error.message }, { status: 409 });
+    }
     return serverError(error);
   }
 }
@@ -144,8 +153,12 @@ export async function handleAppleMusicFinish(request: Request, env: Env): Promis
   }
 
   try {
-    return Response.json(await refreshTracks(env.DB));
+    const exportId = exportIdParam(new URL(request.url).searchParams);
+    return Response.json(await refreshTracks(env.DB, exportId));
   } catch (error) {
+    if (error instanceof ImportRequestError) {
+      return Response.json({ error: error.message }, { status: 400 });
+    }
     return serverError(error);
   }
 }

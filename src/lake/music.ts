@@ -92,6 +92,7 @@ export const appleMusicLibraryTracks: LakeTable = {
     boolean("purchased"),
     integer("play_count"),
     integer("skip_count"),
+    text("export_id"),
   ],
 };
 
@@ -108,5 +109,6 @@ export const appleMusicPreferences: LakeTable = {
     text("title_key"),
     text("preference"),
     timestamp("changed_at"),
+    text("export_id"),
   ],
 };

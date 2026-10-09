@@ -178,13 +178,18 @@ export interface TracksRefresh {
 }
 
 // Runs after an import's last page, since the artist a play resolves to
-// depends on the daily rollup and the library, which may land after it.
-export async function refreshTracks(db: D1Database): Promise<TracksRefresh> {
-  const [resolved, upserted, deleted] = await db.batch([
+// depends on the daily rollup and the library, which may land after it. The
+// library and preferences are snapshots, so rows older than `exportId` are
+// ones the export dropped.
+export async function refreshTracks(db: D1Database, exportId: string): Promise<TracksRefresh> {
+  const results = await db.batch([
+    db.prepare("DELETE FROM apple_music_library_tracks WHERE export_id < ?1").bind(exportId),
+    db.prepare("DELETE FROM apple_music_preferences WHERE export_id < ?1").bind(exportId),
     db.prepare(RESOLVE_ARTISTS).bind(APPLE_SOURCE),
     db.prepare(UPSERT_TRACKS),
     db.prepare(DELETE_ORPHANED_TRACKS),
   ]);
+  const [resolved, upserted, deleted] = results.slice(2);
   const counts = await db
     .prepare(
       `SELECT

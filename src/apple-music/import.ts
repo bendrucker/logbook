@@ -36,17 +36,29 @@ export class ImportRequestError extends Error {
   }
 }
 
+export class ImportConflictError extends Error {
+  constructor(key: string) {
+    super(`${key} is already archived with a different body`);
+    this.name = "ImportConflictError";
+  }
+}
+
 export interface ImportPage {
   exportId: string;
   file: ExportFile;
   page: number;
 }
 
-export function importPageRequest(params: URLSearchParams): ImportPage {
+export function exportIdParam(params: URLSearchParams): string {
   const exportId = params.get("export") ?? "";
   if (!EXPORT_ID.test(exportId)) {
     throw new ImportRequestError("export must be the export's date, YYYY-MM-DD");
   }
+  return exportId;
+}
+
+export function importPageRequest(params: URLSearchParams): ImportPage {
+  const exportId = exportIdParam(params);
   const file = EXPORT_FILES.find((each) => each === params.get("file"));
   if (file === undefined) {
     throw new ImportRequestError(`file must be one of ${EXPORT_FILES.join(", ")}`);
@@ -77,13 +89,22 @@ export async function importPage(
   const validated = readPage(file, body);
   const key = appleMusicKey(exportId, file, page);
   const archived = await writeOnce(env.RAW, key, body);
-  const rowsChanged = await validated.write(env.DB);
+  // D1 must stay what a replay of R2 would write.
+  if (!archived && (await archivedBody(env.RAW, key)) !== body) {
+    throw new ImportConflictError(key);
+  }
+  const rowsChanged = await validated.write(env.DB, exportId);
   return { key, archived, records: validated.records, rowsChanged };
+}
+
+async function archivedBody(bucket: R2Bucket, key: string): Promise<string | null> {
+  const object = await bucket.get(key);
+  return object === null ? null : object.text();
 }
 
 export interface ValidatedPage {
   records: number;
-  write: (db: D1Database) => Promise<number>;
+  write: (db: D1Database, exportId: string) => Promise<number>;
 }
 
 export function readPage(file: ExportFile, body: string): ValidatedPage {
@@ -100,14 +121,17 @@ type PageReader = (file: ExportFile, data: unknown) => ValidatedPage;
 
 function pageReader<Parsed>(
   record: z.ZodType<Parsed>,
-  write: (db: D1Database, records: Parsed[]) => Promise<number>,
+  write: (db: D1Database, records: Parsed[], exportId: string) => Promise<number>,
 ): PageReader {
   return (file, data) => {
     const parsed = record.array().safeParse(data);
     if (!parsed.success) {
       throw new ImportRequestError(`the ${file} page did not validate: ${parsed.error.message}`);
     }
-    return { records: parsed.data.length, write: (db) => write(db, parsed.data) };
+    return {
+      records: parsed.data.length,
+      write: (db, exportId) => write(db, parsed.data, exportId),
+    };
   };
 }
 
@@ -123,14 +147,17 @@ const PAGES: Record<ExportFile, PageReader> = {
       ),
     ),
   ),
-  "library-tracks": pageReader(libraryTrackRecord, (db, records) =>
-    upsertLibraryTracks(db, records.map(libraryTrackRow)),
+  "library-tracks": pageReader(libraryTrackRecord, (db, records, exportId) =>
+    upsertLibraryTracks(
+      db,
+      records.map((record) => libraryTrackRow(record, exportId)),
+    ),
   ),
-  favorites: pageReader(favoriteRecord, (db, records) =>
-    upsertPreferences(db, present(records.map(favoriteRow))),
+  favorites: pageReader(favoriteRecord, (db, records, exportId) =>
+    upsertPreferences(db, present(records.map((record) => favoriteRow(record, exportId)))),
   ),
-  "liked-radio-tracks": pageReader(likedRadioTrackRecord, (db, records) =>
-    upsertPreferences(db, present(records.map(likedRadioTrackRow))),
+  "liked-radio-tracks": pageReader(likedRadioTrackRecord, (db, records, exportId) =>
+    upsertPreferences(db, present(records.map((record) => likedRadioTrackRow(record, exportId)))),
   ),
 };
 

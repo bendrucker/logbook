@@ -138,9 +138,10 @@ export interface LibraryTrack {
   purchased: boolean | null;
   playCount: number | null;
   skipCount: number | null;
+  exportId: string;
 }
 
-export function libraryTrackRow(record: LibraryTrackRecord): LibraryTrack {
+export function libraryTrackRow(record: LibraryTrackRecord, exportId: string): LibraryTrack {
   return {
     trackId: record["Track Identifier"],
     catalogId: record["Apple Music Track Identifier"],
@@ -162,6 +163,7 @@ export function libraryTrackRow(record: LibraryTrackRecord): LibraryTrack {
     purchased: record["Is Purchased"],
     playCount: record["Track Play Count"],
     skipCount: record["Skip Count"],
+    exportId,
   };
 }
 
@@ -176,10 +178,11 @@ export interface Preference {
   titleKey: string;
   preference: "like" | "dislike";
   changedAt: string | null;
+  exportId: string;
 }
 
 // A song or an album is described as `Artist - Name`, an artist by its name.
-export function favoriteRow(record: FavoriteRecord): Preference | null {
+export function favoriteRow(record: FavoriteRecord, exportId: string): Preference | null {
   const type = preferenceType(record["Favorite Type"]);
   if (type === null) {
     return null;
@@ -196,10 +199,14 @@ export function favoriteRow(record: FavoriteRecord): Preference | null {
     titleKey: nameKey(named.title),
     preference: record.Preference === "LIKE" ? "like" : "dislike",
     changedAt: instant(record["Last Modified"]),
+    exportId,
   };
 }
 
-export function likedRadioTrackRow(record: LikedRadioTrackRecord): Preference | null {
+export function likedRadioTrackRow(
+  record: LikedRadioTrackRecord,
+  exportId: string,
+): Preference | null {
   const preference = RADIO_EVENTS[record["Event Type"]];
   if (preference === undefined) {
     return null;
@@ -216,6 +223,7 @@ export function likedRadioTrackRow(record: LikedRadioTrackRecord): Preference | 
     titleKey: nameKey(title),
     preference,
     changedAt: instant(record.Created),
+    exportId,
   };
 }
 

@@ -41,6 +41,28 @@ describe("parseCsv", () => {
   });
 });
 
+describe("parseCsv errors", () => {
+  test.each<{ name: string; text: string; message: string }>([
+    {
+      name: "an unclosed quote",
+      text: 'Song Name,Album Name\n"Creep,Pablo Honey\n',
+      message: "the CSV ends inside a quoted field",
+    },
+    {
+      name: "a short row",
+      text: "Song Name,Album Name\nCreep\n",
+      message: "CSV row 1 has 1 fields where the header has 2",
+    },
+    {
+      name: "a long row",
+      text: "Song Name,Album Name\nCreep,Pablo Honey,1993\n",
+      message: "CSV row 1 has 3 fields where the header has 2",
+    },
+  ])("refuses $name", ({ text, message }) => {
+    expect(() => parseCsv(text)).toThrow(message);
+  });
+});
+
 describe("project", () => {
   it("drops every column outside the allowlist", () => {
     const projected = project("play-activity", {

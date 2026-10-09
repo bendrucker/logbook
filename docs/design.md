@@ -415,7 +415,7 @@ No play event names an artist. The artist comes from the other files, matched on
 
 A step that names two artists is skipped rather than guessed between, and a play no step resolves keeps a null artist. The step that matched lands in `artist_match`. The rollup only starts in mid-2016, and a song played on the radio and never added to the library has no library row, so the earliest plays resolve least often.
 
-Resolution runs as SQL in `POST /admin/import/apple-music/finish`, after every page, since a play's artist depends on files that land after it. The play upsert leaves the artist columns alone, so a re-import keeps them.
+Resolution runs as SQL in `POST /admin/import/apple-music/finish?export=`, after every page, since a play's artist depends on files that land after it. The play upsert leaves the artist columns alone, so a re-import keeps them.
 
 #### Candidate Tracks
 
@@ -433,7 +433,9 @@ A track whose plays resolved no artist matches no signal, since every signal nam
 ADMIN_TOKEN=... bun run import:apple-music "<export>/Apple Music Activity" "$WORKER"
 ```
 
-The script reads the five files, projects each record, and posts pages of 500 to `POST /admin/import/apple-music?export=&file=&page=`, then calls the finish route. `export` names the export by the day Apple produced it, from the Play Activity file's modification time unless `--export` names it. Each page archives under `raw/apple-music/{export}/{file}/{page}.json` the first time it arrives, and every upsert writes only rows that changed, so rerunning an import is a no-op. A newer export holds the whole history again and lands beside the older one.
+The script reads the five files, projects each record, and posts pages of 500 to `POST /admin/import/apple-music?export=&file=&page=`, then calls the finish route. `export` names the export by the day Apple produced it, from the Play Activity file's modification time unless `--export` names it. Each page archives under `raw/apple-music/{export}/{file}/{page}.json` the first time it arrives, and every upsert writes only rows that changed, so rerunning an import is a no-op. A page sent again with a different body answers 409, since D1 must stay what a replay of R2 writes. A newer export holds the whole history again and lands beside the older one.
+
+The library, favorites, and radio likes are snapshots: a track removed from the library or unfavorited is absent from the next export. Their rows carry the export that last held them, and the finish call deletes rows older than the export it names. Plays and the daily rollup are history and only accumulate. Exports import oldest first.
 
 The daily rollup has no unique key. Its rows can repeat across every column Apple writes, so a row is keyed by a hash of its whole record. A rerun of the same export writes nothing, and a day a newer export revised lands as a new row beside the old one.
 
