@@ -118,8 +118,7 @@ export async function handleLakeBuild(request: Request, env: Env): Promise<Respo
   }
 }
 
-// One page of Apple's privacy export, projected by `bun run import:apple-music`
-// on the laptop that holds the export.
+// One page of Apple's privacy export, as projected by the import script.
 export async function handleAppleMusicImport(request: Request, env: Env): Promise<Response> {
   const refused = await authorize(request, env);
   if (refused !== null) {
@@ -137,8 +136,7 @@ export async function handleAppleMusicImport(request: Request, env: Env): Promis
   }
 }
 
-// Resolves the artists of every Apple play and refreshes the candidate tracks,
-// once an import's last page has landed.
+// Call once an import's last page has landed.
 export async function handleAppleMusicFinish(request: Request, env: Env): Promise<Response> {
   const refused = await authorize(request, env);
   if (refused !== null) {

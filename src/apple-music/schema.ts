@@ -3,9 +3,8 @@ import { COLUMNS } from "./export";
 
 const cell = z.string().nullable();
 
-// Strict, and each shape written out against its allowlist, so a page that
-// kept a column the projection drops, like the IP address on a play event,
-// fails here rather than landing in R2.
+// Strict, so a page that kept a column the projection drops, like the IP
+// address on a play event, fails here rather than landing in R2.
 
 export const playActivityRecord = z.strictObject({
   "Event ID": z.string(),

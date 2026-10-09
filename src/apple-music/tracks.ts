@@ -81,8 +81,8 @@ const TRACK_COLUMNS = [
   "disliked",
 ] as const;
 
-// A track takes its names from its most recent play. A track whose plays
-// resolved no artist matches no signal, since every signal names one.
+// A track whose plays resolved no artist matches no signal, since every signal
+// names one.
 //
 // A dislike reaches past the song to its album and its artist, unlike a love,
 // because a dislike only seeds a rejection the site can reverse.

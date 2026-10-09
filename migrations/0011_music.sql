@@ -1,7 +1,6 @@
--- One listen, from any music source. Apple's privacy export is the first, and
--- Last.fm scrobbles join it under their own `source`. Each `*_key` column is
--- its name trimmed and lowercased, which is what tracks match on across
--- sources that don't share an ID.
+-- One listen, from any music source. Each `*_key` column is its name trimmed
+-- and lowercased, which is what tracks match on across sources that don't
+-- share an ID.
 CREATE TABLE music_plays (
   -- apple-export.
   source TEXT NOT NULL,
@@ -33,9 +32,8 @@ CREATE TABLE music_plays (
 CREATE INDEX music_plays_played_at ON music_plays (played_at);
 CREATE INDEX music_plays_track ON music_plays (artist_key, title_key);
 
--- What the site reviews: one row per track across every source's plays, with
--- the signals that sort the review queue. Nothing here is approved or
--- published. The site holds those decisions.
+-- What the site reviews: one row per track across every source's plays. The
+-- site holds the approve and publish decisions.
 CREATE TABLE music_tracks (
   -- Empty when no play of the track resolved an artist.
   artist_key TEXT NOT NULL,
@@ -67,7 +65,7 @@ CREATE TABLE apple_music_daily_tracks (
   track_id TEXT NOT NULL,
   -- IPHONE, MACINTOSH, HOMEPOD, IPAD, or empty.
   device TEXT NOT NULL,
-  -- The hours of the day the track played, as Apple lists them, or empty.
+  -- As Apple lists them, or empty.
   hours TEXT NOT NULL,
   track_reference TEXT,
   description TEXT,
@@ -107,7 +105,6 @@ CREATE TABLE apple_music_library_tracks (
 
 CREATE INDEX apple_music_library_tracks_title ON apple_music_library_tracks (title_key, album_key);
 
--- Likes and dislikes from the Favorites export and the radio's likes and bans.
 CREATE TABLE apple_music_preferences (
   -- favorites or radio.
   source TEXT NOT NULL,

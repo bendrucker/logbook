@@ -1,6 +1,3 @@
-// What every script driving the Worker's admin routes needs: the token it
-// presents and a base URL it can safely present it to.
-
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 export function adminToken(): string {

@@ -26,8 +26,8 @@ const USAGE =
   "usage: ADMIN_TOKEN=... bun run import:apple-music <Apple Music Activity dir> <base-url> [--export YYYY-MM-DD]\n" +
   "       bun run import:apple-music <Apple Music Activity dir> --out <dir> [--export YYYY-MM-DD]";
 
-// A play page of 500 events is a few hundred kilobytes and one D1 batch of 500
-// upserts, the same batch an Instapaper page writes.
+// A page of 500 events is a few hundred kilobytes and one D1 batch of 500
+// upserts.
 const PAGE_SIZE = 500;
 
 const FILE_WIDTH = Math.max(...EXPORT_FILES.map((file) => file.length));

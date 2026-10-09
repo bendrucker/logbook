@@ -68,9 +68,7 @@ export interface ImportResult {
 }
 
 // The page validates before it is archived, so everything under the prefix is
-// a page `replayAppleMusic` can apply. An upload is the projection the import
-// script made rather than a response from Apple, and one that fails validation
-// is the script's bug to fix and resend.
+// a page `replayAppleMusic` can apply.
 export async function importPage(
   env: Env,
   { exportId, file, page }: ImportPage,

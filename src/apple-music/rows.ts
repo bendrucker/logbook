@@ -36,9 +36,8 @@ export interface MusicPlay {
   containerName: string | null;
 }
 
-// Null for an event that is not a listen: a start, a lyrics view, a video, a
-// radio stream with no track, or a track skipped before the rule counts it.
-// Events from before mid-2016 carry no event type and stand for finished plays.
+// Null for an event that is not a listen. Events from before mid-2016 carry no
+// event type and stand for finished plays.
 export function playRow(record: PlayActivityRecord): MusicPlay | null {
   const eventType = record["Event Type"];
   if (eventType !== null && eventType !== "PLAY_END") {
@@ -180,7 +179,6 @@ export interface Preference {
 }
 
 // A song or an album is described as `Artist - Name`, an artist by its name.
-// Null for a favorite type nothing matches against.
 export function favoriteRow(record: FavoriteRecord): Preference | null {
   const type = preferenceType(record["Favorite Type"]);
   if (type === null) {
@@ -201,8 +199,6 @@ export function favoriteRow(record: FavoriteRecord): Preference | null {
   };
 }
 
-// The radio records a like, a like of the track that seeded a station, or a
-// ban. Null for any other event.
 export function likedRadioTrackRow(record: LikedRadioTrackRecord): Preference | null {
   const preference = RADIO_EVENTS[record["Event Type"]];
   if (preference === undefined) {
@@ -277,8 +273,8 @@ export function splitDescription(description: string | null): {
   };
 }
 
-// Hex SHA-256 of the record, which validation hands over with its keys in the
-// schema's order whichever order the page wrote them in.
+// Validation returns the record's keys in schema order, which keeps the
+// serialized JSON stable.
 export async function recordId(record: DailyTrackRecord): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",

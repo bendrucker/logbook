@@ -1,6 +1,5 @@
 // Rebuilds one file of an export from R2 without the export on hand, so a
-// schema change replays the pages already archived. `refreshTracks` runs after
-// the last file, as it does after an import.
+// schema change replays the pages already archived.
 import { mapConcurrent, OPEN_CONNECTIONS } from "../concurrency";
 import { MissingRawObjectError } from "../normalize";
 import type { ExportFile } from "./export";
@@ -26,7 +25,7 @@ export async function replayAppleMusicFile(
     return readPage(file, await object.text());
   });
   // Reads land in key order and write one at a time, so a row two pages hold
-  // keeps the later page's copy, as it did on import.
+  // keeps the later page's copy.
   let rowsChanged = 0;
   for await (const page of pages) {
     rowsChanged += await page.write(db);

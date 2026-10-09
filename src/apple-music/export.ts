@@ -89,8 +89,7 @@ export function project(file: ExportFile, record: ExportRecord): ExportRecord {
   return kept;
 }
 
-// RFC 4180: fields separated by commas, quoted when they hold a comma, quote,
-// or newline, with a quote inside a quoted field written twice.
+// Parses RFC 4180 CSV.
 export function parseCsv(text: string): ExportRecord[] {
   const rows: string[][] = [];
   let row: string[] = [];
