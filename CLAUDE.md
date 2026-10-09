@@ -23,7 +23,7 @@ Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`), R2 (`RAW` fo
 
 CI runs on every PR and on push to `main` (`.github/workflows/ci.yml`): typecheck, test, lint, format check, a check that `worker-configuration.d.ts` is current, and the `.pre-commit-config.yaml` hooks under `prek`. Those hooks also run locally on every commit, and one of them refuses a commit on `main`.
 
-The `deploy` job applies D1 migrations and runs `wrangler deploy` on push to `main`, gated on `check`. It needs a `CLOUDFLARE_API_TOKEN` repository secret, which is not set. While the secret is empty the job's first step writes a `::notice::` and every later step skips. A merge to `main` then does not fail on a credential no commit can supply. Setting the secret is the only change the workflow needs. Until then, migrations in `migrations/` apply by hand with `bun run wrangler d1 migrations apply DB --remote`, which writes to the live database.
+The `deploy` job runs on push to `main`, gated on `check`, so merging to `main` deploys. It applies the D1 migrations in `migrations/` to the live database with `bun run wrangler d1 migrations apply DB --remote`, then runs `wrangler deploy`. It authenticates with the `CLOUDFLARE_API_TOKEN` repository secret. If that secret is ever empty, the job's first step writes a `::notice::` and every later step skips, so a merge does not fail on a credential no commit can supply.
 
 ## Cloudflare Configuration
 
