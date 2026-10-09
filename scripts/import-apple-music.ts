@@ -1,12 +1,7 @@
 #!/usr/bin/env bun
-// Imports the Apple Music files of an Apple privacy export. Each file is read
-// here, cut down to the columns `src/apple-music/export.ts` allows, and posted
-// to /admin/import/apple-music a page at a time, so the IP address, location,
-// and device identifiers on every play event never leave this machine. A last
-// call resolves artists and refreshes the candidate tracks.
-//
-// `--out <dir>` writes the pages there instead of posting them, to read what
-// an import would send.
+// Imports an Apple privacy export's Apple Music files, posting only the
+// columns `src/apple-music/export.ts` allows, so the network and device fields
+// on every play event never leave this machine.
 
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
