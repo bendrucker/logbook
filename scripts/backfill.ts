@@ -9,12 +9,11 @@
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { SYNC_KINDS, type SyncKind } from "../src/sync/kinds";
+import { adminToken, fail, parseUrl } from "./admin-client";
 
 const USAGE = `usage: ADMIN_TOKEN=... bun run backfill <base-url> [${SYNC_KINDS.join("|")}] [--from YYYY-MM]\n  --from on trakt-history starts at its year, and without it the oldest play decides`;
 
 const KIND_WIDTH = Math.max(...SYNC_KINDS.map((kind) => kind.length));
-
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 // The route answers 200 with an `error` for a window that failed mid-walk, so
 // the shape is the same either way and the fields decide whether to continue.
@@ -125,35 +124,6 @@ function describe(result: BackfillResult): string {
   return result.error === null ? `${line}${irreducible}` : `${line}${irreducible}  ${result.error}`;
 }
 
-function adminToken(): string {
-  const value = Bun.env.ADMIN_TOKEN;
-  if (value === undefined || value === "") {
-    fail("ADMIN_TOKEN is unset");
-  }
-  return value;
-}
-
 function isSyncKind(value: string): value is SyncKind {
   return SYNC_KINDS.some((each) => each === value);
-}
-
-// Every call carries ADMIN_TOKEN as a bearer, so a mistyped scheme would put
-// the Worker's admin credential on the wire in the clear. wrangler dev serves
-// loopback over http, which is the one place that cannot be helped.
-function parseUrl(value: string): URL {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    fail(`${value} is not a URL`);
-  }
-  if (url.protocol !== "https:" && !LOOPBACK.has(url.hostname)) {
-    fail(`${value} is not https, and ADMIN_TOKEN would travel in the clear`);
-  }
-  return url;
-}
-
-function fail(message: string): never {
-  console.error(message);
-  process.exit(1);
 }

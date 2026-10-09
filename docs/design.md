@@ -2,7 +2,7 @@
 
 Logbook owns the personal data I pull from simple polled APIs. Webhooks and file decoding stay in [Activity Hub](https://github.com/bendrucker/activity-hub).
 
-Three sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts through its GraphQL API. [Trakt](#trakt) supplies watch history and ratings through its REST API. [Instapaper](#instapaper) supplies bookmarks, highlights, and the notes on them through its API v2. Logbook archives every response page in R2, normalizes them into D1, publishes a GitHub feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. Most of it describes GitHub, the first source. The [README](../README.md) is the short version.
+Four sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts through its GraphQL API. [Trakt](#trakt) supplies watch history and ratings through its REST API. [Instapaper](#instapaper) supplies bookmarks, highlights, and the notes on them through its API v2. [Apple Music](#apple-music) supplies listening history from Apple's privacy export, imported by a script. Logbook archives every response page and imported page in R2, normalizes them into D1, publishes a GitHub feed to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me), and writes Parquet into the lake [Activity Hub](https://github.com/bendrucker/activity-hub) already maintains. This document records the architecture and the decisions behind it. Most of it describes GitHub, the first source. The [README](../README.md) is the short version.
 
 ## Goals
 
@@ -51,7 +51,9 @@ flowchart TB
         lakebuild[Nightly lake build]
     end
 
-    lake[(R2 activity-hub-lake, github/, trakt/, and instapaper/ prefixes)]
+    export[Apple privacy export on the laptop]
+    importer[Import script]
+    lake[(R2 activity-hub-lake, github/, trakt/, instapaper/, and music/ prefixes)]
     site[bendrucker.me Publish entrypoint]
 
     cron --> extract
@@ -67,6 +69,7 @@ flowchart TB
     highlights --> raw
     search --> raw
     contrib --> raw
+    export --> importer -->|allowlisted pages| raw
     raw --> normalize --> d1
     d1 --> feed --> site
     d1 --> lakebuild --> lake
@@ -88,6 +91,7 @@ raw/
   contribution-events/{kind}/{window}/{fetched_at}/{page}.json                  # kind as in search, window as in contributions
   trakt/{kind}/{window}/{fetched_at}/{page}.json                                # kind is trakt-history or trakt-ratings
   instapaper/{kind}/{window}/{fetched_at}/{page}.json                           # instapaper-bookmarks by changes or folders, instapaper-highlights by bookmark ID
+  apple-music/{export}/{file}/{page}.json                                       # export is the day Apple produced it, file as in Apple Music
 ```
 
 An object is written once and never rewritten. Re-running a window writes new pages under a new fetch timestamp rather than replacing what a previous run saw. A normalization bug stays diagnosable against the bytes that caused it. The bucket is small: a search page of 100 nodes is tens of kilobytes and the whole history is a few hundred pages.
@@ -100,7 +104,7 @@ Upserts are keyed on GitHub's node ID, so re-normalizing the same page changes n
 
 #### Lake
 
-A nightly build reads D1 and writes Snappy Parquet in the `activity-hub-lake` bucket, one file set per table, under a prefix per source: `github/v1/`, `trakt/v1/`, and `instapaper/v1/`. The build is a full rebuild rather than an incremental merge, which is affordable because the corpus is tens of thousands of rows rather than millions of telemetry samples.
+A nightly build reads D1 and writes Snappy Parquet in the `activity-hub-lake` bucket, one file set per table, under a prefix per source: `github/v1/`, `trakt/v1/`, `instapaper/v1/`, and `music/v1/`. The build is a full rebuild rather than an incremental merge, which is affordable because the corpus is tens of thousands of rows rather than millions of telemetry samples.
 
 Sharing Activity Hub's bucket is deliberate. A query that asks which weeks had both high mileage and high review volume is one DuckDB session over two prefixes, and any other arrangement makes it a data transfer problem.
 
@@ -373,11 +377,81 @@ Instapaper documents a rate limit without a number and answers 429 past it. `RAT
 
 Four questions stay open until a live check with the real token: whether `since=1` returns the whole account, whether a new highlight or an edited note marks its bookmark changed, whether a 429 carries `Retry-After`, and what a highlights read answers for a deleted bookmark.
 
+## Apple Music
+
+Apple Music is the fourth source, and the first that isn't an API. Apple's API returns only a short list of recently played items, so the history comes from the privacy export Apple produces on request at [privacy.apple.com](https://privacy.apple.com). A script on the laptop reads the export and posts it to the Worker. Plays land in `music_plays`, a table shaped for any music source, so Last.fm can join later under its own `source` without a migration.
+
+#### Curation
+
+Nothing about my listening reaches bendrucker.me automatically. Logbook will send every candidate track to the site, and the site holds the approvals in its own storage, beside a review screen of its own. One approval covers a track, its past plays and its future ones. Logbook keeps no curation state.
+
+This change builds the candidate side only: `music_tracks`, one row per track with its play count, first and last play, and the signals a review screen sorts by. The feed and its contract wait for the site's schema and review screen.
+
+#### Privacy
+
+Every play event in the export carries the IP address it came from, a location derived from it, device identifiers, and Apple account fields. None of those leave the laptop. The import script keeps an allowlist of columns per file, in `src/apple-music/export.ts`, and drops everything else before a request goes out. The Worker validates each page against strict zod schemas written against the same allowlist, so a page that kept any other column answers 400 and is never archived. `bun run import:apple-music <dir> --out <dir>` writes the pages locally instead of posting them, to read what an import would send.
+
+#### Files
+
+| File                 | Export file                                   | Table                        |
+| -------------------- | --------------------------------------------- | ---------------------------- |
+| `play-activity`      | `Apple Music Play Activity.csv`               | `music_plays`                |
+| `daily-tracks`       | `Apple Music - Play History Daily Tracks.csv` | `apple_music_daily_tracks`   |
+| `library-tracks`     | `Apple Music Library Tracks.json.zip`         | `apple_music_library_tracks` |
+| `favorites`          | `Apple Music - Favorites.csv`                 | `apple_music_preferences`    |
+| `liked-radio-tracks` | `Music - Liked Radio Tracks.csv`              | `apple_music_preferences`    |
+
+#### Plays
+
+Play Activity logs every event the player raised: starts, ends, skips, lyrics views, videos, and radio streams. A play is a `PLAY_END` event for an audio track that passes Last.fm's scrobble rule: the track runs longer than 30 seconds and played for half its length or four minutes, whichever is less. Events from before mid-2016 carry no event type and count as finished plays under the same rule. A few events report days of play time for one track, so played time is capped at the track's length. A play is keyed by Apple's event ID.
+
+#### Artists
+
+No play event names an artist. The artist comes from the other files, matched on lowercased, trimmed names, since no two files share an ID. Each play takes the first of these that names exactly one artist:
+
+1. The daily rollup's `Artist - Song` for the same title within a day of the play. The window absorbs whether the rollup's day is local or UTC.
+2. The library track with the same title and album.
+3. The daily rollup's only artist for the title on any day.
+
+A step that names two artists is skipped rather than guessed between, and a play no step resolves keeps a null artist. The step that matched lands in `artist_match`. The rollup only starts in mid-2016, and a song played on the radio and never added to the library has no library row, so the earliest plays resolve least often.
+
+Resolution runs as SQL in `POST /admin/import/apple-music/finish`, after every page, since a play's artist depends on files that land after it. The play upsert leaves the artist columns alone, so a re-import keeps them.
+
+#### Candidate Tracks
+
+`music_tracks` groups plays by artist and title key across every source, and takes the names from the latest play. The same finish call rebuilds it and deletes a track no play still matches. Three signals come with each track:
+
+- `loved`: a library favorite, an older library's liked rating, a favorited song, or a radio like.
+- `stars`: the library's star rating, out of five.
+- `disliked`: a disliked song, a disliked album the track was played from, a disliked artist, or a radio ban. The site seeds its rejections from this flag. A dislike reaches past the song where a like does not, because a rejection is reversible on the site.
+
+A track whose plays resolved no artist matches no signal, since every signal names one.
+
+#### Import
+
+```sh
+ADMIN_TOKEN=... bun run import:apple-music "<export>/Apple Music Activity" "$WORKER"
+```
+
+The script reads the five files, projects each record, and posts pages of 500 to `POST /admin/import/apple-music?export=&file=&page=`, then calls the finish route. `export` names the export by the day Apple produced it, from the Play Activity file's modification time unless `--export` names it. Each page archives under `raw/apple-music/{export}/{file}/{page}.json` the first time it arrives, and every upsert writes only rows that changed, so rerunning an import is a no-op. A newer export holds the whole history again and lands beside the older one.
+
+The daily rollup has no unique key. Its rows can repeat across every column Apple writes, so a row is keyed by a hash of its whole record. A rerun of the same export writes nothing, and a day a newer export revised lands as a new row beside the old one.
+
+`replayAppleMusicFile` rebuilds a file's rows from R2, in page order, without the export on hand. `refreshTracks` runs after it, as after an import.
+
+#### Gaps
+
+- The export is a snapshot. New plays arrive only with the next export, which Apple takes days to produce.
+- Two different songs with the same title by artists the steps can't tell apart stay unresolved.
+- Name matching treats a remaster or a live version under a different title as a separate track.
+
 ## Visibility
 
 The hub reads public GitHub activity only. `GITHUB_TOKEN` is a classic personal access token with no scopes, so GitHub filters private repositories out before any response reaches the hub. Nothing private from GitHub is stored, archived, or published, and no layer downstream has a redaction path to get wrong.
 
-Instapaper is the exception. Bookmarks, highlights, and notes are private reading history, and they land in D1, the raw bucket, and the lake under `instapaper/v1/`. Nothing publishes them. A feed built from them would need its own decision about what leaves the account.
+Instapaper and Apple Music are the exceptions. Bookmarks, highlights, and notes are private reading history, and they land in D1, the raw bucket, and the lake under `instapaper/v1/`. Nothing publishes them. A feed built from them would need its own decision about what leaves the account.
+
+Listening history is private too, and lands in D1, the raw bucket, and the lake under `music/v1/`. It reaches the site only as candidates the site holds back until I approve each track, as [Curation](#curation) describes. The network and device fields of the export never leave the laptop.
 
 Totals understate real activity by `restrictedContributionsCount`. Reversing the choice means a token with `repo` scope, a full backfill, and a filter at publish.
 

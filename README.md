@@ -2,7 +2,7 @@
 
 System of record for the personal data I pull from APIs on a schedule. A cron-driven Worker polls a source, archives every response page in R2, normalizes it into D1, and publishes one row per event to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me).
 
-Three sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts from its GraphQL API. [Trakt](#trakt) supplies watch history and ratings from its REST API. [Instapaper](#instapaper) supplies bookmarks, highlights, and notes from its API v2. Other simple polled APIs can join them. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
+Three sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts from its GraphQL API. [Trakt](#trakt) supplies watch history and ratings from its REST API. [Instapaper](#instapaper) supplies bookmarks, highlights, and notes from its API v2. [Apple Music](#apple-music) supplies listening history, imported by a script from Apple's privacy export since no API offers it. Other simple polled APIs can join them. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
 
 ## Why
 
@@ -29,7 +29,8 @@ flowchart TB
 
     trakt[Trakt API]
     instapaper[Instapaper API v2]
-    lake[(R2 activity-hub-lake, github/, trakt/, and instapaper/ prefixes)]
+    export[Apple Music export import]
+    lake[(R2 activity-hub-lake, github/, trakt/, instapaper/, and music/ prefixes)]
     site[bendrucker.me Publish]
 
     cron --> worker
@@ -39,6 +40,7 @@ flowchart TB
     api -->|response pages| raw
     trakt -->|response pages| raw
     instapaper -->|response pages| raw
+    export -->|allowlisted pages via admin route| raw
     raw -->|normalize| d1
     d1 --> feed -->|code feed rows| site
     d1 --> lakecron --> lake
@@ -46,7 +48,7 @@ flowchart TB
 
 The raw bucket is the system of record. Rebuilding the event tables after a schema change replays those pages and spends no source requests, which matters when a full backfill is a few hundred search calls.
 
-Lake tables land under a prefix per source, `github/`, `trakt/`, and `instapaper/`, in the `activity-hub-lake` bucket that Activity Hub already writes. Sharing one bucket is what lets a single DuckDB session join rides against pull requests by day, and it is the only real cross-project concern.
+Lake tables land under a prefix per source, `github/`, `trakt/`, `instapaper/`, and `music/`, in the `activity-hub-lake` bucket that Activity Hub already writes. Sharing one bucket is what lets a single DuckDB session join rides against pull requests by day, and it is the only real cross-project concern.
 
 The site is a read-only consumer. The design routes writes to its D1 through the `Publish` entrypoint it exposes over a service binding, which validates every row on arrival and answers a bad shape with a `ValidationError`. The binding would carry no credential and tell the callee nothing about who called, leaving that method list as the whole security boundary. None of it exists yet: the service binding and the publish path land with the feed.
 
@@ -54,7 +56,7 @@ See [docs/design.md](docs/design.md) for the full design, the extraction budget,
 
 ## Data Model
 
-GitHub rows are one per event, at the grain GitHub hands over without crawling each repository. Instapaper rows are one per bookmark, highlight, and folder.
+GitHub rows are one per event, at the grain GitHub hands over without crawling each repository. Instapaper rows are one per bookmark, highlight, and folder. Music rows are one per play, with one row per track for review.
 
 | Table                   | Grain                                                                                                                                                 |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -69,6 +71,8 @@ GitHub rows are one per event, at the grain GitHub hands over without crawling e
 | `instapaper_bookmarks`  | One bookmark: url, title, author, saved at, liked, archived, folder, progress, tags, and when it was deleted                                          |
 | `instapaper_highlights` | One highlight: bookmark, text, note, position, created at                                                                                             |
 | `instapaper_folders`    | One folder of my own: title, slug, position, public                                                                                                   |
+| `music_plays`           | One play from any music source: source, title, artist, album, played at, track length, time played                                                    |
+| `music_tracks`          | One track for review: names, play count, first and last played, loved, stars, disliked                                                                |
 
 A sync state table alongside these records the last window read per kind. Commits are daily counts because that is how `contributionsCollection` already exposes them. Per-commit history, comment bodies, and individual review comments stay out of the first version. Each one needs a walk of every PR in every repository, and per-PR counts give most of the analytics value at a hundredth of the requests.
 
@@ -132,9 +136,20 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kin
 
 [docs/design.md](docs/design.md#gaps) covers the gaps: highlight edits on an unchanged bookmark, the backfill's size per invocation, and offset paging.
 
+## Apple Music
+
+Apple's privacy export holds the listening history. `bun run import:apple-music` reads its `Apple Music Activity` folder on the laptop, keeps an allowlist of columns from each file, and posts pages of 500 to `POST /admin/import/apple-music`. The IP address, location, device, and account fields on every play event never upload, and the Worker refuses a page carrying any column outside the allowlist. A last call to `/admin/import/apple-music/finish` names each play's artist from the daily rollup and the library, then rebuilds `music_tracks`.
+
+```sh
+ADMIN_TOKEN=... bun run import:apple-music "<export>/Apple Music Activity" "$WORKER"
+bun run import:apple-music "<export>/Apple Music Activity" --out tmp/apple-music-pages
+```
+
+The second form writes the pages it would send. A play is one that passes Last.fm's scrobble rule, and `music_plays` has a `source` column so Last.fm can join it. Pages archive under `raw/apple-music/{export}/{file}/{page}.json`, and rerunning an import changes nothing. Nothing publishes the history. The site will hold approvals per track, and [docs/design.md](docs/design.md#apple-music) covers the design.
+
 ## Lake
 
-A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/`, `trakt/v1/`, and `instapaper/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones. Every source's tables build as one set. Before it builds, the cron re-reads the current year of Trakt history, and a failed re-read still leaves a build worth writing. `lake_builds` records each build with its per-table row counts, or the reason it failed.
+A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/`, `trakt/v1/`, `instapaper/v1/`, and `music/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones. Every source's tables build as one set. Before it builds, the cron re-reads the current year of Trakt history, and a failed re-read still leaves a build worth writing. `lake_builds` records each build with its per-table row counts, or the reason it failed.
 
 To rewrite the tables before the next nightly build, run the same build from an admin route:
 
@@ -172,15 +187,16 @@ bun run dev
 
 `wrangler dev` reads `GITHUB_TOKEN`, `INSTAPAPER_ACCESS_TOKEN`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
 
-| Command             | What it does                                   |
-| ------------------- | ---------------------------------------------- |
-| `bun run dev`       | Runs the Worker locally                        |
-| `bun run test`      | Runs the test suite                            |
-| `bun run typecheck` | Type checks without emitting                   |
-| `bun run lint`      | Lints                                          |
-| `bun run format`    | Formats                                        |
-| `bun run types`     | Regenerates Worker types from `wrangler.jsonc` |
-| `bun run backfill`  | Walks `POST /admin/backfill` to completion     |
+| Command                      | What it does                                   |
+| ---------------------------- | ---------------------------------------------- |
+| `bun run dev`                | Runs the Worker locally                        |
+| `bun run test`               | Runs the test suite                            |
+| `bun run typecheck`          | Type checks without emitting                   |
+| `bun run lint`               | Lints                                          |
+| `bun run format`             | Formats                                        |
+| `bun run types`              | Regenerates Worker types from `wrangler.jsonc` |
+| `bun run backfill`           | Walks `POST /admin/backfill` to completion     |
+| `bun run import:apple-music` | Imports an Apple privacy export                |
 
 ## Status
 

@@ -14,6 +14,8 @@ import { lastRuns, recentFailures, type SyncRun } from "./sync/runs";
 import { readWatermarks, type Watermark } from "./sync/state";
 import { backfillInstapaper } from "./instapaper/backfill";
 import { backfillTrakt } from "./trakt/backfill";
+import { ImportRequestError, importPage, importPageRequest } from "./apple-music/import";
+import { refreshTracks } from "./apple-music/tracks";
 
 const FAILURE_LIMIT = 10;
 
@@ -111,6 +113,40 @@ export async function handleLakeBuild(request: Request, env: Env): Promise<Respo
 
   try {
     return Response.json(await buildLake(env));
+  } catch (error) {
+    return serverError(error);
+  }
+}
+
+// One page of Apple's privacy export, projected by `bun run import:apple-music`
+// on the laptop that holds the export.
+export async function handleAppleMusicImport(request: Request, env: Env): Promise<Response> {
+  const refused = await authorize(request, env);
+  if (refused !== null) {
+    return refused;
+  }
+
+  try {
+    const page = importPageRequest(new URL(request.url).searchParams);
+    return Response.json(await importPage(env, page, await request.text()));
+  } catch (error) {
+    if (error instanceof ImportRequestError) {
+      return Response.json({ error: error.message }, { status: 400 });
+    }
+    return serverError(error);
+  }
+}
+
+// Resolves the artists of every Apple play and refreshes the candidate tracks,
+// once an import's last page has landed.
+export async function handleAppleMusicFinish(request: Request, env: Env): Promise<Response> {
+  const refused = await authorize(request, env);
+  if (refused !== null) {
+    return refused;
+  }
+
+  try {
+    return Response.json(await refreshTracks(env.DB));
   } catch (error) {
     return serverError(error);
   }

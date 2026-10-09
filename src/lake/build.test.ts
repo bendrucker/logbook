@@ -55,7 +55,8 @@ describe("buildLake", () => {
         (object) =>
           object.key.startsWith("github/v1/") ||
           object.key.startsWith("trakt/v1/") ||
-          object.key.startsWith("instapaper/v1/"),
+          object.key.startsWith("instapaper/v1/") ||
+          object.key.startsWith("music/v1/"),
       ),
     ).toBe(true);
   });
@@ -77,6 +78,11 @@ describe("buildLake", () => {
       instapaper_bookmarks: 0,
       instapaper_highlights: 0,
       instapaper_folders: 0,
+      music_plays: 0,
+      music_tracks: 0,
+      apple_music_daily_tracks: 0,
+      apple_music_library_tracks: 0,
+      apple_music_preferences: 0,
     });
     expect(built.startedAt).toBe(STARTED_AT);
   });

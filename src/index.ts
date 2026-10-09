@@ -1,4 +1,10 @@
-import { handleBackfill, handleLakeBuild, handleSyncStatus } from "./admin";
+import {
+  handleAppleMusicFinish,
+  handleAppleMusicImport,
+  handleBackfill,
+  handleLakeBuild,
+  handleSyncStatus,
+} from "./admin";
 import { buildLake, LAKE_CRON } from "./lake";
 import { syncIncremental } from "./sync/incremental";
 import { syncInstapaper } from "./instapaper/incremental";
@@ -18,6 +24,12 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/admin/lake") {
       return handleLakeBuild(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/admin/import/apple-music") {
+      return handleAppleMusicImport(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/admin/import/apple-music/finish") {
+      return handleAppleMusicFinish(request, env);
     }
     return new Response("Not Found", { status: 404 });
   },
