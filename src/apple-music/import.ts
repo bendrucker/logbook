@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { pageName, writeOnce } from "../raw-object";
-import { EXPORT_FILES, type ExportFile } from "./export";
+import { EXPORT_FILES, EXPORT_ID, type ExportFile } from "./export";
 import {
   dailyTrackRow,
   favoriteRow,
@@ -19,11 +19,6 @@ import {
 import { upsertDailyTracks, upsertLibraryTracks, upsertPlays, upsertPreferences } from "./store";
 
 export const APPLE_MUSIC_PREFIX = "raw/apple-music/";
-
-// An export is named for the day Apple produced it. Apple's export holds the
-// whole history each time, so a newer one is a superset that lands beside the
-// older one rather than over it.
-const EXPORT_ID = /^\d{4}-\d{2}-\d{2}$/;
 
 export function appleMusicKey(exportId: string, file: ExportFile, page: number): string {
   return `${APPLE_MUSIC_PREFIX}${exportId}/${file}/${pageName(page)}`;

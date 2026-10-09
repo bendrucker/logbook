@@ -64,7 +64,8 @@ export const appleMusicDailyTracks: LakeTable = {
     text("title_key"),
     integer("play_count"),
     integer("skip_count"),
-    integer("played_ms"),
+    // Apple reports some plays hundreds of hours long, past INT32.
+    bigint("played_ms"),
     text("end_reason"),
   ],
 };

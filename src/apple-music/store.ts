@@ -104,7 +104,12 @@ const libraryColumns = [
 ] as const;
 
 export const upsertLibraryTracks = upsertWriter(
-  { table: "apple_music_library_tracks", columns: libraryColumns, conflict: ["track_id"] },
+  {
+    table: "apple_music_library_tracks",
+    columns: libraryColumns,
+    conflict: ["track_id"],
+    monotonic: "export_id",
+  },
   (row: LibraryTrack): Record<(typeof libraryColumns)[number], BindValue> => ({
     track_id: row.trackId,
     catalog_id: row.catalogId,
@@ -145,6 +150,7 @@ export const upsertPreferences = upsertWriter(
     table: "apple_music_preferences",
     columns: preferenceColumns,
     conflict: ["source", "type", "reference"],
+    monotonic: "export_id",
   },
   (row: Preference): Record<(typeof preferenceColumns)[number], BindValue> => ({
     source: row.source,

@@ -261,8 +261,36 @@ describe("refreshTracks", () => {
     await refreshTracks(env.DB, EXPORT_ID);
 
     await load("library-tracks", [libraryTrack(1)], "2026-12-01");
+    await load(
+      "favorites",
+      [favorite("r2", { "Favorite Type": "Artist", "Item Description": "Portishead" })],
+      "2026-12-01",
+    );
     await refreshTracks(env.DB, "2026-12-01");
 
     expect(await track()).toMatchObject({ artist: "Radiohead", loved: 0 });
+  });
+
+  it("keeps the library when the export named landed none of it", async () => {
+    await load("play-activity", [PLAY]);
+    await load("library-tracks", [libraryTrack(1, { "Favorite Status - Track": true })]);
+
+    await refreshTracks(env.DB, "2099-01-01");
+
+    expect(await track()).toMatchObject({ loved: 1 });
+  });
+
+  it("keeps a newer export's library row when an older export arrives later", async () => {
+    await load("play-activity", [PLAY]);
+    await load(
+      "library-tracks",
+      [libraryTrack(1, { "Favorite Status - Track": true })],
+      "2026-12-01",
+    );
+    await load("library-tracks", [libraryTrack(1)]);
+
+    await refreshTracks(env.DB, "2026-12-01");
+
+    expect(await track()).toMatchObject({ loved: 1 });
   });
 });

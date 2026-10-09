@@ -167,6 +167,13 @@ WHERE NOT EXISTS (
   WHERE play.artist_key = music_tracks.artist_key AND play.title_key = music_tracks.title_key
 )`;
 
+// Only once the export has landed rows in the table, so a mistyped export or an
+// export whose file was empty or never sent leaves the older rows in place.
+function pruneSnapshot(table: string): string {
+  return `DELETE FROM ${table}
+    WHERE export_id < ?1 AND EXISTS (SELECT 1 FROM ${table} WHERE export_id = ?1)`;
+}
+
 export interface TracksRefresh {
   // Apple plays whose artist changed.
   artistsChanged: number;
@@ -183,8 +190,8 @@ export interface TracksRefresh {
 // ones the export dropped.
 export async function refreshTracks(db: D1Database, exportId: string): Promise<TracksRefresh> {
   const results = await db.batch([
-    db.prepare("DELETE FROM apple_music_library_tracks WHERE export_id < ?1").bind(exportId),
-    db.prepare("DELETE FROM apple_music_preferences WHERE export_id < ?1").bind(exportId),
+    db.prepare(pruneSnapshot("apple_music_library_tracks")).bind(exportId),
+    db.prepare(pruneSnapshot("apple_music_preferences")).bind(exportId),
     db.prepare(RESOLVE_ARTISTS).bind(APPLE_SOURCE),
     db.prepare(UPSERT_TRACKS),
     db.prepare(DELETE_ORPHANED_TRACKS),

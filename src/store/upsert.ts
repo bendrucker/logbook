@@ -11,6 +11,10 @@ export interface UpsertSpec<Column extends string> {
   // Tables carrying a publish marker clear it on every change, which is what
   // returns the row to the publisher's queue.
   clearsPublishedAt?: boolean;
+  // A column that only moves forward. A row carrying an older value than the
+  // stored one is not written, so a late import of an older snapshot cannot
+  // overwrite a newer one.
+  monotonic?: Column;
 }
 
 // Every table here writes the same shape: insert the row, and on a key collision
@@ -50,10 +54,14 @@ function upsertSql<Column extends string>(spec: UpsertSpec<Column>): string {
   const changed = (spec.compared ?? updated)
     .map((column) => `${spec.table}.${column} IS NOT excluded.${column}`)
     .join(" OR ");
+  const where =
+    spec.monotonic === undefined
+      ? changed
+      : `(${changed}) AND ${spec.table}.${spec.monotonic} <= excluded.${spec.monotonic}`;
   return [
     `INSERT INTO ${spec.table} (${spec.columns.join(", ")})`,
     `VALUES (${placeholders})`,
     `ON CONFLICT (${spec.conflict.join(", ")}) DO UPDATE SET ${assignments.join(", ")}`,
-    `WHERE ${changed}`,
+    `WHERE ${where}`,
   ].join(" ");
 }

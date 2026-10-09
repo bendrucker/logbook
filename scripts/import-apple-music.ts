@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import {
   EXPORT_FILES,
+  EXPORT_ID,
   type ExportFile,
   type ExportRecord,
   parseCsv,
@@ -54,7 +55,7 @@ if (exportDir === undefined || (target === undefined) === (flags.out === undefin
 
 try {
   const exportId = flags.export ?? (await exportDate(exportDir));
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(exportId)) {
+  if (!EXPORT_ID.test(exportId)) {
     fail(`--export ${exportId} is not YYYY-MM-DD`);
   }
   const send =

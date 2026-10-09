@@ -13,6 +13,11 @@ export const EXPORT_FILES = [
 
 export type ExportFile = (typeof EXPORT_FILES)[number];
 
+// An export is named for the day Apple produced it. Apple's export holds the
+// whole history each time, so a newer one is a superset that lands beside the
+// older one rather than over it.
+export const EXPORT_ID = /^\d{4}-\d{2}-\d{2}$/;
+
 export const SOURCE_FILES: Record<ExportFile, string> = {
   "play-activity": "Apple Music Play Activity.csv",
   "daily-tracks": "Apple Music - Play History Daily Tracks.csv",

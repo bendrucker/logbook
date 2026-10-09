@@ -445,6 +445,7 @@ The daily rollup has no unique key. Its rows can repeat across every column Appl
 
 - The export is a snapshot. New plays arrive only with the next export, which Apple takes days to produce.
 - Two different songs with the same title by artists the steps can't tell apart stay unresolved.
+- A day a newer export revised keeps both versions in `apple_music_daily_tracks`, so summing its play counts across exports double counts. The table exists to name artists.
 - Name matching treats a remaster or a live version under a different title as a separate track.
 
 ## Visibility
