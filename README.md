@@ -2,7 +2,7 @@
 
 System of record for the personal data I pull from APIs on a schedule. A cron-driven Worker polls a source, archives every response page in R2, normalizes it into D1, and publishes one row per event to [bendrucker/bendrucker.me](https://github.com/bendrucker/bendrucker.me).
 
-Three sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts from its GraphQL API. [Trakt](#trakt) supplies watch history and ratings from its REST API. [Instapaper](#instapaper) supplies bookmarks, highlights, and notes from its API v2. [Apple Music](#apple-music) supplies listening history, imported by a script from Apple's privacy export since no API offers it. Other simple polled APIs can join them. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
+Four sources feed it. GitHub supplies pull requests, reviews, issues, and commit counts from its GraphQL API. [Trakt](#trakt) supplies watch history and ratings from its REST API. [Instapaper](#instapaper) supplies bookmarks, highlights, and notes from its API v2. [Apple Music](#apple-music) supplies listening history, imported by a script from Apple's privacy export since no API offers it. Other simple polled APIs can join them. Sources that deliver webhooks or files to decode belong in [Activity Hub](https://github.com/bendrucker/activity-hub) instead.
 
 ## Why
 
@@ -138,14 +138,14 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/backfill?kin
 
 ## Apple Music
 
-Apple's privacy export holds the listening history. `bun run import:apple-music` reads its `Apple Music Activity` folder on the laptop, keeps an allowlist of columns from each file, and posts pages of 500 to `POST /admin/import/apple-music`. The IP address, location, device, and account fields on every play event never upload, and the Worker refuses a page carrying any column outside the allowlist. A last call to `/admin/import/apple-music/finish` drops library tracks and favorites the export no longer holds, names each play's artist from the daily rollup and the library, then rebuilds `music_tracks`.
+Apple's privacy export holds the listening history. `bun run import:apple-music` reads its `Apple Music Activity` folder on the laptop, keeps an allowlist of columns from each file, and posts pages of 500 to `POST /admin/import/apple-music`. The IP address, location, device identifiers, and account fields on every play event never upload, and the Worker refuses a page carrying any column outside the allowlist. A last call to `/admin/import/apple-music/finish` drops library tracks, favorites, and radio likes the export no longer holds. It then names each play's artist from the daily rollup and the library, and rebuilds `music_tracks`.
 
 ```sh
 ADMIN_TOKEN=... bun run import:apple-music "<export>/Apple Music Activity" "$WORKER"
 bun run import:apple-music "<export>/Apple Music Activity" --out tmp/apple-music-pages
 ```
 
-The second form writes the pages it would send. A play is one that passes Last.fm's scrobble rule, and `music_plays` has a `source` column so Last.fm can join it. Pages archive under `raw/apple-music/{export}/{file}/{page}.json`, and rerunning an import changes nothing. Nothing publishes the history. The site will hold approvals per track, and [docs/design.md](docs/design.md#apple-music) covers the design.
+The second form writes the pages it would send. A play is one that passes Last.fm's scrobble rule, and `music_plays` has a `source` column so Last.fm can join it. Pages archive under `raw/apple-music/{export}/{file}/{page}.json`, and rerunning an import rewrites nothing. Once a feed exists, the site will hold approvals per track, as [docs/design.md](docs/design.md#apple-music) describes. Nothing publishes the history.
 
 ## Lake
 
@@ -169,7 +169,7 @@ The GitHub token is a classic personal access token with no scopes, so the hub s
 
 The Instapaper access token is a personal access token, generated for my own account on the [Applications page](https://www.instapaper.com/developers/applications). It doesn't expire. Without it the cron skips Instapaper and an Instapaper backfill answers 503.
 
-`ADMIN_TOKEN` is optional. `/admin/sync`, `/admin/backfill`, and `/admin/lake` answer 404 while it is unset. A deployment that never sets one exposes no admin surface.
+`ADMIN_TOKEN` is optional. `/admin/sync`, `/admin/backfill`, `/admin/lake`, and the Apple Music import routes answer 404 while it is unset. A deployment that never sets one exposes no admin surface.
 
 ## Infrastructure
 
