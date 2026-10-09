@@ -158,7 +158,7 @@ The Instapaper access token is a personal access token, generated for my own acc
 
 ## Infrastructure
 
-`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` and `TRAKT_USER` for whose history the hub reads, `TRAKT_CLIENT_ID` for the Trakt application, sent as `trakt-api-key` and paired with no secret for public reads, the [rate budget](#rate-budget), `RATE_CAP_TRAKT`, and `RATE_CAP_INSTAPAPER`. The service binding to the site joins them when publishing lands. The deploy job applies migrations on merge to `main` once `CLOUDFLARE_API_TOKEN` is set. Until then they apply by hand with `wrangler d1 migrations apply DB --remote`.
+`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` and `TRAKT_USER` for whose history the hub reads, `TRAKT_CLIENT_ID` for the Trakt application, sent as `trakt-api-key` and paired with no secret for public reads, the [rate budget](#rate-budget), `RATE_CAP_TRAKT`, and `RATE_CAP_INSTAPAPER`. The service binding to the site joins them when publishing lands. A merge to `main` deploys: the deploy job applies D1 migrations, then runs `wrangler deploy`.
 
 There is no Terraform here. Activity Hub needs it for a DNS record, a Workers route, and the Cloudflare Access applications in front of its admin routes. This hub is reached by cron and by a service binding. It has no hostname to manage. `/admin/sync` sits behind `ADMIN_TOKEN` alone, with no Access application in front of it.
 
