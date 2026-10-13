@@ -338,6 +338,17 @@ describe("buildLake", () => {
     expect(await keysOf(pullRequests)).toEqual([tableKey(pullRequests, second.id)]);
   });
 
+  // A build prunes everything under each table's prefix, so a table nested in
+  // another's path would lose its file to the other table's prune.
+  it("gives every table a path outside every other table's", () => {
+    const paths = LAKE_TABLES.map((table) => table.path);
+
+    expect(
+      paths.filter((path) => paths.some((other) => other !== path && path.startsWith(`${other}/`))),
+    ).toEqual([]);
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
   it("removes the unversioned file builds wrote before build keys", async () => {
     await env.LAKE.put(`${pullRequests.path}/part-0.parquet`, new ArrayBuffer(0));
 
