@@ -3,6 +3,13 @@ import { failBuild, finishBuild, startBuild } from "./builds";
 import { commitDays } from "./commit-days";
 import { instapaperBookmarks, instapaperFolders, instapaperHighlights } from "./instapaper";
 import { issues } from "./issues";
+import {
+  appleMusicDailyTracks,
+  appleMusicLibraryTracks,
+  appleMusicPreferences,
+  musicPlays,
+  musicTracks,
+} from "./music";
 import { pullRequests } from "./pull-requests";
 import { repositories } from "./repositories";
 import { reviews } from "./reviews";
@@ -21,6 +28,11 @@ export const LAKE_TABLES: readonly LakeTable[] = [
   traktTitles,
   traktPlays,
   traktRatings,
+  musicPlays,
+  musicTracks,
+  appleMusicDailyTracks,
+  appleMusicLibraryTracks,
+  appleMusicPreferences,
 ];
 
 // Matches the nightly trigger in wrangler.jsonc. `scheduled` runs the sync on

@@ -4,6 +4,13 @@ export { type Cell, type LakeColumn, LakeValueError } from "./columns";
 export { commitDays } from "./commit-days";
 export { instapaperBookmarks, instapaperFolders, instapaperHighlights } from "./instapaper";
 export { issues } from "./issues";
+export {
+  appleMusicDailyTracks,
+  appleMusicLibraryTracks,
+  appleMusicPreferences,
+  musicPlays,
+  musicTracks,
+} from "./music";
 export { pullRequests } from "./pull-requests";
 export { repositories } from "./repositories";
 export { reviews } from "./reviews";
