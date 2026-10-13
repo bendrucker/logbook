@@ -46,12 +46,15 @@ export const LAKE_CRON = "30 9 * * *";
 const CONTENT_TYPE = "application/vnd.apache.parquet";
 
 // Activity Hub owns the bucket and writes its own tables under `lake/v1/`, so
-// each source's own prefix keeps one DuckDB session able to read them all.
-export function tableKey(table: LakeTable): string {
-  return `${table.path}/part-0.parquet`;
+// each source's own prefix keeps one DuckDB session able to read them all. A
+// build writes new keys rather than overwriting, so a catalog can later register
+// each file as written instead of copying it.
+export function tableKey(table: LakeTable, build: number): string {
+  return `${table.path}/build=${build}/part-0.parquet`;
 }
 
 export interface LakeBuildResult {
+  id: number;
   startedAt: string;
   finishedAt: string;
   rowCounts: Record<string, number>;
@@ -77,13 +80,17 @@ export async function buildLake(
       encoded.push(await encodeOne(env.DB, table));
     }
 
-    await eachConcurrent(encoded, OPEN_CONNECTIONS, (each) => writeTable(env.LAKE, each));
+    await eachConcurrent(encoded, OPEN_CONNECTIONS, (each) => writeTable(env.LAKE, id, each));
+
+    // Earlier builds go only once every table has its new file, so a reader
+    // globbing a prefix sees two builds for a moment rather than none.
+    await eachConcurrent(LAKE_TABLES, OPEN_CONNECTIONS, (table) => pruneTable(env.LAKE, table, id));
 
     const rowCounts = Object.fromEntries(encoded.map((each) => [each.table.name, each.rows]));
     const finishedAt = new Date().toISOString();
     await finishBuild(env.DB, id, rowCounts, finishedAt);
 
-    return { startedAt, finishedAt, rowCounts };
+    return { id, startedAt, finishedAt, rowCounts };
   } catch (error) {
     await failBuild(env.DB, id, message(error), new Date().toISOString());
     throw error;
@@ -98,8 +105,33 @@ async function encodeOne(db: D1Database, table: LakeTable): Promise<EncodedLakeT
   return { table, ...(await encodeTable(db, table)) };
 }
 
-function writeTable(bucket: R2Bucket, { table, buffer }: EncodedLakeTable): Promise<unknown> {
-  return bucket.put(tableKey(table), buffer, { httpMetadata: { contentType: CONTENT_TYPE } });
+function writeTable(
+  bucket: R2Bucket,
+  build: number,
+  { table, buffer }: EncodedLakeTable,
+): Promise<unknown> {
+  return bucket.put(tableKey(table, build), buffer, {
+    httpMetadata: { contentType: CONTENT_TYPE },
+  });
+}
+
+// Deletes everything under the table's prefix but this build's file, which
+// includes the unversioned `part-0.parquet` builds wrote before build keys.
+async function pruneTable(bucket: R2Bucket, table: LakeTable, build: number): Promise<void> {
+  const keep = tableKey(table, build);
+  let cursor: string | undefined;
+
+  do {
+    // oxlint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
+    const listed = await bucket.list({ prefix: `${table.path}/`, cursor });
+    const stale = listed.objects.map((object) => object.key).filter((key) => key !== keep);
+    if (stale.length > 0) {
+      // oxlint-disable-next-line no-await-in-loop -- one page's deletes before the next list
+      await bucket.delete(stale);
+    }
+
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor !== undefined);
 }
 
 function message(error: unknown): string {

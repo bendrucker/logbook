@@ -31,11 +31,24 @@ async function seed(): Promise<void> {
   await upsertCommitDays(env.DB, [commitDay()]);
 }
 
-async function rowsOf(table: LakeTable): Promise<Record<string, unknown>[]> {
-  const buffer = await readObject(env.LAKE, tableKey(table));
-  expect(buffer, `${table.name} was not written`).not.toBeNull();
+async function keysOf(table: LakeTable): Promise<string[]> {
+  const listed = await env.LAKE.list({ prefix: `${table.path}/` });
 
-  return readParquet(buffer ?? new ArrayBuffer(0));
+  return listed.objects.map((object) => object.key);
+}
+
+// Reads the table's one file, which also holds a build to leaving nothing else
+// under the table's prefix for a glob to pick up.
+async function bufferOf(table: LakeTable): Promise<ArrayBuffer> {
+  const [key, ...rest] = await keysOf(table);
+  expect(key, `${table.name} was not written`).toBeDefined();
+  expect(rest, `${table.name} holds more than one file`).toEqual([]);
+
+  return (await readObject(env.LAKE, key ?? "")) ?? new ArrayBuffer(0);
+}
+
+async function rowsOf(table: LakeTable): Promise<Record<string, unknown>[]> {
+  return readParquet(await bufferOf(table));
 }
 
 beforeEach(() => emptyBucket(env.LAKE));
@@ -44,11 +57,11 @@ describe("buildLake", () => {
   it("writes every table under its source's prefix in the shared bucket", async () => {
     await seed();
 
-    await buildLake(env, STARTED_AT);
+    const built = await buildLake(env, STARTED_AT);
 
     const listed = await env.LAKE.list();
     expect(listed.objects.map((object) => object.key).toSorted()).toEqual(
-      LAKE_TABLES.map(tableKey).toSorted(),
+      LAKE_TABLES.map((table) => tableKey(table, built.id)).toSorted(),
     );
     expect(
       listed.objects.every(
@@ -312,8 +325,25 @@ describe("buildLake", () => {
     await env.DB.prepare("DELETE FROM pull_requests").run();
     await buildLake(env, STARTED_AT);
 
-    const buffer = await readObject(env.LAKE, tableKey(pullRequests));
-    expect(parquetRows(buffer ?? new ArrayBuffer(0))).toBe(0);
+    expect(parquetRows(await bufferOf(pullRequests))).toBe(0);
+  });
+
+  it("removes the previous build's files once the new build is written", async () => {
+    await seed();
+    const first = await buildLake(env, STARTED_AT);
+
+    const second = await buildLake(env, STARTED_AT);
+
+    expect(second.id).not.toBe(first.id);
+    expect(await keysOf(pullRequests)).toEqual([tableKey(pullRequests, second.id)]);
+  });
+
+  it("removes the unversioned file builds wrote before build keys", async () => {
+    await env.LAKE.put(`${pullRequests.path}/part-0.parquet`, new ArrayBuffer(0));
+
+    const built = await buildLake(env, STARTED_AT);
+
+    expect(await keysOf(pullRequests)).toEqual([tableKey(pullRequests, built.id)]);
   });
 
   it("writes a readable empty file for a table with no rows", async () => {

@@ -149,7 +149,7 @@ The second form writes the pages it would send. A play is one that passes Last.f
 
 ## Lake
 
-A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/`, `trakt/v1/`, `instapaper/v1/`, and `music/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones. Every source's tables build as one set. Before it builds, the cron re-reads the current year of Trakt history, and a failed re-read still leaves a build worth writing. `lake_builds` records each build with its per-table row counts, or the reason it failed.
+A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/`, `trakt/v1/`, `instapaper/v1/`, and `music/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones. Every source's tables build as one set. Each build writes new keys under `build={id}/` and then deletes the previous build's files, so read a table with a glob such as `github/v1/pull_requests/*/*.parquet`. Before it builds, the cron re-reads the current year of Trakt history, and a failed re-read still leaves a build worth writing. `lake_builds` records each build with its per-table row counts, or the reason it failed.
 
 To rewrite the tables before the next nightly build, run the same build from an admin route:
 
