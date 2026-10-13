@@ -31,53 +31,11 @@ async function seed(): Promise<void> {
   await upsertCommitDays(env.DB, [commitDay()]);
 }
 
-async function keysOf(table: LakeTable): Promise<string[]> {
-  const listed = await env.LAKE.list({ prefix: `${table.path}/` });
-
-  return listed.objects.map((object) => object.key);
-}
-
-// Reads the table's one file, which also holds a build to leaving nothing else
-// under the table's prefix for a glob to pick up.
-async function bufferOf(table: LakeTable): Promise<ArrayBuffer> {
-  const [key, ...rest] = await keysOf(table);
-  expect(key, `${table.name} was not written`).toBeDefined();
-  expect(rest, `${table.name} holds more than one file`).toEqual([]);
-
-  return (await readObject(env.LAKE, key ?? "")) ?? new ArrayBuffer(0);
-}
-
-// The lake bucket with puts or deletes refused for keys under one prefix.
-function bucketFailing(refuse: { put?: string; delete?: string }): R2Bucket {
-  const refused = (prefix: string | undefined, keys: string | string[]): boolean =>
-    prefix !== undefined && [keys].flat().some((key) => key.startsWith(`${prefix}/`));
-
-  return new Proxy(env.LAKE, {
-    get(target, property) {
-      if (property === "put") {
-        return async (...args: Parameters<R2Bucket["put"]>) => {
-          if (refused(refuse.put, args[0])) {
-            throw new Error("put failed");
-          }
-          return target.put(...args);
-        };
-      }
-      if (property === "delete") {
-        return async (keys: string | string[]) => {
-          if (refused(refuse.delete, keys)) {
-            throw new Error("delete failed");
-          }
-          return target.delete(keys);
-        };
-      }
-      const value: unknown = Reflect.get(target, property);
-      return typeof value === "function" ? (value.bind(target) as unknown) : value;
-    },
-  });
-}
-
 async function rowsOf(table: LakeTable): Promise<Record<string, unknown>[]> {
-  return readParquet(await bufferOf(table));
+  const buffer = await readObject(env.LAKE, tableKey(table));
+  expect(buffer, `${table.name} was not written`).not.toBeNull();
+
+  return readParquet(buffer ?? new ArrayBuffer(0));
 }
 
 beforeEach(() => emptyBucket(env.LAKE));
@@ -86,11 +44,11 @@ describe("buildLake", () => {
   it("writes every table under its source's prefix in the shared bucket", async () => {
     await seed();
 
-    const built = await buildLake(env, STARTED_AT);
+    await buildLake(env, STARTED_AT);
 
     const listed = await env.LAKE.list();
     expect(listed.objects.map((object) => object.key).toSorted()).toEqual(
-      LAKE_TABLES.map((table) => tableKey(table, built.id)).toSorted(),
+      LAKE_TABLES.map(tableKey).toSorted(),
     );
     expect(
       listed.objects.every(
@@ -354,88 +312,8 @@ describe("buildLake", () => {
     await env.DB.prepare("DELETE FROM pull_requests").run();
     await buildLake(env, STARTED_AT);
 
-    expect(parquetRows(await bufferOf(pullRequests))).toBe(0);
-  });
-
-  it("removes the previous build's files once the new build is written", async () => {
-    await seed();
-    const first = await buildLake(env, STARTED_AT);
-
-    const second = await buildLake(env, STARTED_AT);
-
-    expect(second.id).not.toBe(first.id);
-    expect(await keysOf(pullRequests)).toEqual([tableKey(pullRequests, second.id)]);
-  });
-
-  // A build prunes everything under each table's prefix, so a table nested in
-  // another's path would lose its file to the other table's prune.
-  it("gives every table a path outside every other table's", () => {
-    const paths = LAKE_TABLES.map((table) => table.path);
-
-    expect(
-      paths.filter((path) => paths.some((other) => other !== path && path.startsWith(`${other}/`))),
-    ).toEqual([]);
-    expect(new Set(paths).size).toBe(paths.length);
-  });
-
-  it("leaves overlapping builds on the newer one's file", async () => {
-    await seed();
-
-    const built = await Promise.all([buildLake(env, STARTED_AT), buildLake(env, STARTED_AT)]);
-
-    const newest = Math.max(...built.map((each) => each.id));
-    for (const table of LAKE_TABLES) {
-      expect(await keysOf(table)).toEqual([tableKey(table, newest)]);
-    }
-  });
-
-  it("prunes past a page of listed keys", async () => {
-    const stale = Array.from(
-      { length: 1001 },
-      (_, index) => `${pullRequests.path}/build=0/part-${index}.parquet`,
-    );
-    await Promise.all(stale.map((key) => env.LAKE.put(key, new ArrayBuffer(0))));
-
-    const built = await buildLake(env, STARTED_AT);
-
-    expect(await keysOf(pullRequests)).toEqual([tableKey(pullRequests, built.id)]);
-  });
-
-  it("deletes its own files when a write fails, leaving the previous build", async () => {
-    await seed();
-    const first = await buildLake(env, STARTED_AT);
-
-    const failing = bucketFailing({ put: reviews.path });
-    await expect(buildLake({ ...env, LAKE: failing }, STARTED_AT)).rejects.toThrow(
-      "write failed for reviews",
-    );
-
-    for (const table of LAKE_TABLES) {
-      expect(await keysOf(table)).toEqual([tableKey(table, first.id)]);
-    }
-  });
-
-  it("prunes every other table when one table's prune fails", async () => {
-    await seed();
-    const first = await buildLake(env, STARTED_AT);
-
-    const failing = bucketFailing({ delete: reviews.path });
-    await expect(buildLake({ ...env, LAKE: failing }, STARTED_AT)).rejects.toThrow(
-      "prune failed for reviews",
-    );
-
-    const stored = await readLatestBuild(env.DB);
-    expect(await keysOf(pullRequests)).toEqual([tableKey(pullRequests, stored?.id ?? 0)]);
-    expect(await keysOf(reviews)).toHaveLength(2);
-    expect(await keysOf(reviews)).toContain(tableKey(reviews, first.id));
-  });
-
-  it("removes the unversioned file builds wrote before build keys", async () => {
-    await env.LAKE.put(`${pullRequests.path}/part-0.parquet`, new ArrayBuffer(0));
-
-    const built = await buildLake(env, STARTED_AT);
-
-    expect(await keysOf(pullRequests)).toEqual([tableKey(pullRequests, built.id)]);
+    const buffer = await readObject(env.LAKE, tableKey(pullRequests));
+    expect(parquetRows(buffer ?? new ArrayBuffer(0))).toBe(0);
   });
 
   it("writes a readable empty file for a table with no rows", async () => {

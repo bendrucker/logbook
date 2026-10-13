@@ -149,50 +149,13 @@ The second form writes the pages it would send. A play is one that passes Last.f
 
 ## Lake
 
-The lake is the analytical copy of everything in D1, written as Parquet into `activity-hub-lake`, the bucket Activity Hub also writes. DuckDB reads both projects' tables in one session, which is what lets a query join rides against pull requests by day.
+The lake is a nightly Parquet copy of the event tables in D1, written into `activity-hub-lake`, the bucket Activity Hub also writes. [DuckDB](https://duckdb.org/), a SQL engine that reads Parquet straight from R2, sees both projects' tables in one session, which is what lets a query join rides against pull requests by day. The lake lags D1 by up to a day. Sync bookkeeping (`sync_state`, `sync_runs`, `crawl_units`, `lake_builds`) stays out of it.
 
-### Layers
-
-Data moves through three stores, and each one is rebuildable from the one before it.
-
-```mermaid
-flowchart LR
-    subgraph sources [Sources]
-        github[GitHub]
-        trakt[Trakt]
-        instapaper[Instapaper]
-        apple[Apple Music export]
-    end
-
-    subgraph logbook [logbook Worker]
-        raw[(R2 logbook-raw<br/>response pages)]
-        d1[(D1<br/>normalized rows)]
-        build[Nightly lake build]
-    end
-
-    subgraph lakebucket [R2 activity-hub-lake]
-        ours[github/v1, trakt/v1,<br/>instapaper/v1, music/v1]
-        theirs[lake/v1<br/>Activity Hub]
-    end
-
-    duckdb[DuckDB]
-
-    sources -->|sync or import| raw
-    raw -->|normalize| d1
-    d1 --> build -->|Parquet per build| ours
-    ours --> duckdb
-    theirs --> duckdb
-```
-
-- **Raw** pages in `logbook-raw` are the system of record. Every API response lands there before anything parses it.
-- **D1** holds normalized rows, one per event. Replaying raw pages rebuilds it without spending source requests.
-- **The lake** is a nightly full copy of D1 tables as Parquet. Each night replaces it, so it never holds anything D1 lacks.
-
-Sources that describe the same thing merge in D1, at normalization. `music_plays` holds plays from the Apple Music export with `source = 'apple-export'`, and Last.fm scrobbles will land in the same table under their own `source`. The lake copies that merged table as `music/v1/plays`, so a reader sees one plays table rather than one per service.
+Sources that describe the same thing merge in D1 at normalization, so the lake has one table per concept. `music_plays` holds plays from the Apple Music export under `source = 'apple-export'`, and Last.fm scrobbles will land in the same table under their own `source`. A listen both sources saw is two rows until a dedupe rule exists, which [docs/design.md](docs/design.md#cross-source-listens) keeps open.
 
 ### Build
 
-A second cron runs the build nightly at 09:30 UTC. Before it builds, it re-reads the current year of Trakt history, and a failed re-read still leaves a build worth writing.
+A second cron runs the build at 09:30 UTC. It first re-reads the current year of Trakt history, and a failed re-read does not stop the build.
 
 ```mermaid
 sequenceDiagram
@@ -200,95 +163,71 @@ sequenceDiagram
     participant D1
     participant Lake as R2 activity-hub-lake
 
-    Cron->>D1: insert lake_builds row (id)
+    Cron->>D1: insert lake_builds row
     loop each table
         Cron->>D1: page rows by key
         Cron->>Cron: encode Parquet in memory
     end
     Note over Cron: a table that fails to encode<br/>ends the build before any write
-    Cron->>Lake: put {table}/build={id}/part-0.parquet, every table
-    Cron->>Lake: delete every other key under each table
-    Cron->>D1: record finished_at and row counts
+    Cron->>Lake: overwrite {table}/part-0.parquet, six at a time
+    alt every write succeeded
+        Cron->>D1: record finished_at and row counts
+    else a write failed
+        Cron->>D1: record the error
+    end
 ```
 
-The ordering is what readers rely on:
+- **Every table encodes before any is written.** A table that fails to encode leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones.
+- **Each file is replaced whole.** An R2 put is atomic, so a reader opening a table sees the old file or the new one. A query that is mid-read when its file is replaced can fail and needs a rerun.
+- **A failed write can leave tables from two builds.** Writes run concurrently, so the tables written before the failure hold the new build and the rest hold the old one until the next build succeeds.
+- **`lake_builds` records the outcome**, with per-table row counts or the reason the build failed. `GET /admin/sync` reports the latest.
 
-- **Every table encodes before any is written.** A table that fails leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones.
-- **New files land under new keys.** A build never overwrites a file, so a reader mid-query keeps a consistent file until the prune.
-- **Earlier builds go only after every table has its new file.** For a moment between the writes and the deletes, a glob matches two builds. A query that runs exactly then double counts, and one still reading a file the prune deletes fails and needs a rerun.
-- **`lake_builds` records the outcome**, with per-table row counts or the reason the build failed. A failed prune marks the build failed, and the next build deletes what it left.
-
-To rebuild before the next night, run the same build from an admin route:
+To rebuild before the next night, run the same build from an admin route. It skips the Trakt re-read.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/lake"
 ```
 
+It answers with the build's `startedAt`, `finishedAt`, and `rowCounts`, or a 500 carrying the error.
+
 ### Layout
 
 ```text
 activity-hub-lake/
-├── github/v1/
-│   ├── pull_requests/build=412/part-0.parquet
-│   ├── reviews/build=412/part-0.parquet
-│   └── ...
-├── trakt/v1/{titles,plays,ratings}/build=412/part-0.parquet
-├── instapaper/v1/{bookmarks,highlights,folders}/build=412/part-0.parquet
-├── music/v1/{plays,tracks,...}/build=412/part-0.parquet
+├── github/v1/{pull_requests,reviews,issues,commit_days,repositories}/part-0.parquet
+├── trakt/v1/{titles,plays,ratings}/part-0.parquet
+├── instapaper/v1/{bookmarks,highlights,folders}/part-0.parquet
+├── music/v1/{plays,tracks,apple_daily_tracks,apple_library_tracks,apple_preferences}/part-0.parquet
 └── lake/v1/...            Activity Hub's tables
 ```
 
-`v1` is the schema version of a source's tables. `build=412` is the `lake_builds` row that wrote the file.
+`v1` is the schema version of a source's tables. `LAKE_TABLES` in `src/lake/build.ts` is the authoritative list.
 
 ### Reading
 
-Create an R2 secret in DuckDB (`CREATE SECRET (TYPE r2, KEY_ID ..., SECRET ..., ACCOUNT_ID ...)`), then point it at a table's directory with one wildcard for the build:
+Create an R2 API token under R2 > Manage API tokens with read access to the bucket, then give DuckDB its key pair and the account ID from `wrangler.jsonc`:
 
 ```sql
+CREATE SECRET (TYPE r2, KEY_ID '...', SECRET '...', ACCOUNT_ID '...');
+
 SELECT date_trunc('week', merged_at) AS week, count(*) AS merged
-FROM 'r2://activity-hub-lake/github/v1/pull_requests/*/*.parquet'
+FROM 'r2://activity-hub-lake/github/v1/pull_requests/part-0.parquet'
 WHERE merged_at IS NOT NULL
 GROUP BY week
 ORDER BY week;
 ```
 
-DuckDB reads the `build=` directory as a `build` column. Selecting `DISTINCT build` shows which build a query read. Seeing two values means the query ran during a prune.
-
 ### Schema Changes
 
 The full rebuild keeps most schema changes cheap:
 
-- **Adding a column** is a migration in D1 and a column in the table's `LakeTable`. The next build writes every file with it.
-- **Renaming, retyping, or dropping a column** breaks queries that name it. That kind of change moves the source to `v2/` beside `v1/` so readers switch on their own schedule, then `v1/` is deleted.
-- **A change to normalization** replays raw pages into D1, and the next build carries it into the lake.
+- **Adding a column** is a D1 migration and a column in the table's `LakeTable` definition. The next build writes the file with it.
+- **Renaming, retyping, or dropping a column** breaks queries that name it. Such a change moves the source to `v2/` beside `v1/` so readers switch on their own schedule. A `LakeTable` has one path, so writing both versions for a while means two definitions, and deleting `v1/` afterward is a `wrangler r2 object delete` per file.
+- **A change to normalization** replays raw pages into D1, and the next build carries it into the lake with no version bump. Readers see history change under the same path.
 
-### Cloudflare Data Products
+### Querying From Claude
 
-Cloudflare groups its analytics storage under the name Basin. Each product was weighed against this lake:
-
-| Product                                  | What it does                                                                                                                                                                                           | Fit here                                                                |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| Basin Catalog (formerly R2 Data Catalog) | Tracks Parquet files in an R2 bucket as [Apache Iceberg](https://iceberg.apache.org/) tables, behind a REST catalog that DuckDB, Spark, and PyIceberg speak. Compacts files and expires old snapshots. | Next step, once a consumer needs it                                     |
-| Basin SQL (formerly R2 SQL)              | Runs SQL over catalog tables from a REST endpoint, billed per GB scanned.                                                                                                                              | Follows the catalog. Lets a Worker or an agent query the lake over HTTP |
-| Basin Pipelines                          | Takes events from a Worker binding or HTTP, applies stateless SQL, and appends them to Iceberg tables or files.                                                                                        | Poor fit                                                                |
-| K2 Streams                               | A durable log that consumers read through subscriptions, with up to 30 days of retention.                                                                                                              | Nothing here needs a log                                                |
-| Artifacts                                | Git-compatible versioned file storage.                                                                                                                                                                 | Unrelated to the lake                                                   |
-
-Iceberg adds a metadata layer over Parquet. A catalog records which files make up each table at each point in time (a snapshot), the table's schema, and its history. Readers ask the catalog for a table by name rather than globbing paths, and they never see a half-written build. Renaming or adding a column becomes a metadata change instead of a rewrite.
-
-Pipelines doesn't fit this lake for three reasons:
-
-- A stream's schema and a pipeline's SQL can't change after creation. Each schema change means a new stream, sink, and table.
-- A sink only appends. The nightly build replaces every table in full, so feeding it through a sink would duplicate every row each night.
-- The data arrives as API pages on a schedule, and the build already has it in D1. Pipelines is built for events arriving one at a time.
-
-Adopting the catalog would work like this:
-
-1. Enable Basin Catalog on `activity-hub-lake`.
-2. After each build, register its new files in Iceberg tables with `add_files`, which records existing Parquet files without copying them. PyIceberg and Spark support it. Per-build keys exist so that registration never points at a file a later build overwrites.
-3. Hand deletion to Iceberg. Once a snapshot references a file, the build's prune must stop. Snapshot expiration in Basin Catalog removes files that no snapshot needs.
-
-Which process runs `add_files` is open. The Worker has no Iceberg writer, so it would be a script, Activity Hub's DuckDB container, or a small new service. [docs/design.md](docs/design.md) tracks it with the other open decisions.
+The likeliest consumer beyond DuckDB on a laptop is a tool that lets Claude search this history, served as a remote MCP server over OAuth. [Basin SQL](https://developers.cloudflare.com/basin-sql/) answers SQL over HTTP, but only against tables in [Basin Catalog](https://developers.cloudflare.com/basin-catalog/), Cloudflare's [Apache Iceberg](https://iceberg.apache.org/) catalog. Iceberg is a metadata layer that records which Parquet files make up each table at each point in time. Adopting it changes how the lake is written, and [docs/design.md](docs/design.md#lake-catalog) weighs it against querying D1 directly, along with the rest of Cloudflare's data products.
 
 ## Secrets
 
