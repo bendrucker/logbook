@@ -149,13 +149,85 @@ The second form writes the pages it would send. A play is one that passes Last.f
 
 ## Lake
 
-A second cron rebuilds the lake nightly at 09:30 UTC, reading D1 and writing Snappy Parquet under `github/v1/`, `trakt/v1/`, `instapaper/v1/`, and `music/v1/` in `activity-hub-lake`. Every table encodes before any is written, so a table that fails leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones. Every source's tables build as one set. Before it builds, the cron re-reads the current year of Trakt history, and a failed re-read still leaves a build worth writing. `lake_builds` records each build with its per-table row counts, or the reason it failed.
+The lake is a nightly Parquet copy of the event tables in D1, written into `activity-hub-lake`, the bucket Activity Hub also writes. [DuckDB](https://duckdb.org/), a SQL engine that reads Parquet straight from R2, sees both projects' tables in one session, which is what lets a query join rides against pull requests by day. The lake lags D1 by up to a day. Sync bookkeeping (`sync_state`, `sync_runs`, `crawl_units`, `lake_builds`) stays out of it.
 
-To rewrite the tables before the next nightly build, run the same build from an admin route:
+Sources that describe the same thing merge in D1 at normalization, so the lake has one table per concept. `music_plays` holds plays from the Apple Music export under `source = 'apple-export'`, and Last.fm scrobbles will land in the same table under their own `source`. A listen both sources saw is two rows until a dedupe rule exists, which [docs/design.md](docs/design.md#cross-source-listens) keeps open.
+
+### Build
+
+A second cron runs the build at 09:30 UTC. It first re-reads the current year of Trakt history, and a failed re-read does not stop the build.
+
+```mermaid
+sequenceDiagram
+    participant Cron as Nightly cron
+    participant D1
+    participant Lake as R2 activity-hub-lake
+
+    Cron->>D1: insert lake_builds row
+    loop each table
+        Cron->>D1: page rows by key
+        Cron->>Cron: encode Parquet in memory
+    end
+    Note over Cron: a table that fails to encode<br/>ends the build before any write
+    Cron->>Lake: overwrite {table}/part-0.parquet, six at a time
+    alt every write succeeded
+        Cron->>D1: record finished_at and row counts
+    else a write failed
+        Cron->>D1: record the error
+    end
+```
+
+- **Every table encodes before any is written.** A table that fails to encode leaves the bucket on the last complete build rather than mixing rebuilt tables with stale ones.
+- **Each file is replaced whole.** An R2 put is atomic, so a reader opening a table sees the old file or the new one. A query that is mid-read when its file is replaced can fail and needs a rerun.
+- **A failed write can leave tables from two builds.** Writes run concurrently, so the tables written before the failure hold the new build and the rest hold the old one until the next build succeeds.
+- **`lake_builds` records the outcome**, with per-table row counts or the reason the build failed. `GET /admin/sync` reports the latest.
+
+To rebuild before the next night, run the same build from an admin route. It skips the Trakt re-read.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER/admin/lake"
 ```
+
+It answers with the build's `startedAt`, `finishedAt`, and `rowCounts`, or a 500 carrying the error.
+
+### Layout
+
+```text
+activity-hub-lake/
+├── github/v1/{pull_requests,reviews,issues,commit_days,repositories}/part-0.parquet
+├── trakt/v1/{titles,plays,ratings}/part-0.parquet
+├── instapaper/v1/{bookmarks,highlights,folders}/part-0.parquet
+├── music/v1/{plays,tracks,apple_daily_tracks,apple_library_tracks,apple_preferences}/part-0.parquet
+└── lake/v1/...            Activity Hub's tables
+```
+
+`v1` is the schema version of a source's tables. `LAKE_TABLES` in `src/lake/build.ts` is the authoritative list.
+
+### Reading
+
+Create an R2 API token under R2 > Manage API tokens with read access to the bucket, then give DuckDB its key pair and the account ID from `wrangler.jsonc`:
+
+```sql
+CREATE SECRET (TYPE r2, KEY_ID '...', SECRET '...', ACCOUNT_ID '...');
+
+SELECT date_trunc('week', merged_at) AS week, count(*) AS merged
+FROM 'r2://activity-hub-lake/github/v1/pull_requests/part-0.parquet'
+WHERE merged_at IS NOT NULL
+GROUP BY week
+ORDER BY week;
+```
+
+### Schema Changes
+
+The full rebuild keeps most schema changes cheap:
+
+- **Adding a column** is a D1 migration and a column in the table's `LakeTable` definition. The next build writes the file with it.
+- **Renaming, retyping, or dropping a column** breaks queries that name it. Such a change moves the source to `v2/` beside `v1/` so readers switch on their own schedule. A `LakeTable` has one path, so writing both versions for a while means two definitions, and deleting `v1/` afterward is a `wrangler r2 object delete` per file.
+- **A change to normalization** replays raw pages into D1, and the next build carries it into the lake with no version bump. Readers see history change under the same path.
+
+### Querying From Claude
+
+The likeliest consumer beyond DuckDB on a laptop is a tool that lets Claude search this history, served as a remote MCP server over OAuth. [Basin SQL](https://developers.cloudflare.com/basin-sql/) answers SQL over HTTP, but only against tables in [Basin Catalog](https://developers.cloudflare.com/basin-catalog/), Cloudflare's [Apache Iceberg](https://iceberg.apache.org/) catalog. Iceberg is a metadata layer that records which Parquet files make up each table at each point in time. Adopting it changes how the lake is written, and [docs/design.md](docs/design.md#lake-catalog) weighs it against querying D1 directly, along with the rest of Cloudflare's data products.
 
 ## Secrets
 

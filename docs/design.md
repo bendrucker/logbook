@@ -479,11 +479,56 @@ Whichever set wins gets documented here, because a homepage number is uninterpre
 
 The zod discipline carries either way: validate at the boundary, infer the type from the schema, never cast.
 
+#### Lake Catalog
+
+The likeliest consumer of the lake after DuckDB is a tool that lets Claude search this history, served as a remote MCP server over OAuth. Two shapes would serve it:
+
+- **Query D1.** An MCP Worker binds the same D1 database and runs read-only SQL over the event tables. Nothing about the lake changes. It sees Logbook's history and not Activity Hub's rides, which live in Activity Hub's own D1.
+- **Query the lake through a catalog.** Each table is published from the nightly Parquet into [Basin Catalog](https://developers.cloudflare.com/basin-catalog/) as an [Iceberg](https://iceberg.apache.org/) table, and the MCP Worker calls [Basin SQL](https://developers.cloudflare.com/basin-sql/) over HTTP. One query joins both projects' tables, since Basin SQL reads one bucket per request and both projects share one. It bills at least 10 MB per query.
+
+```mermaid
+flowchart LR
+    d1[(D1)] --> build[Nightly lake build]
+    build --> parquet[(Parquet<br/>part-0.parquet)]
+    parquet --> duckdb[DuckDB]
+    parquet --> writer[Iceberg writer<br/>PyIceberg overwrite]
+    writer --> catalog[(Basin Catalog)]
+    catalog --> sql[Basin SQL]
+    sql --> mcp[MCP Worker]
+    d1 -.->|D1 shape| mcp
+    mcp --> claude[Claude]
+```
+
+The catalog shape needs a writer outside the Worker, since workerd has no Iceberg writer. PyIceberg's `tbl.overwrite()` fits: it reads a table's `part-0.parquet` into Arrow, writes files that follow the Iceberg spec into the catalog's own location, and commits a snapshot that replaces the last one. The glob paths stay as they are for DuckDB. Open: where the writer runs (a scheduled GitHub Action, Activity Hub's container, or a Python Worker if PyIceberg runs there), and whether Activity Hub's planned Iceberg publishing should own it.
+
+Iceberg's `add_files`, which registers existing Parquet without copying it, was considered and rejected:
+
+- It only appends. A table replaced in full every night would need a delete of every row and the registration in one transaction per table.
+- PyIceberg reads partition values from the file footer and ignores a `build=` path.
+- The build writes `TIMESTAMP_MILLIS`, and the Iceberg spec maps `timestamp` to micros. Whether Basin SQL reads millis files in a micros table is unverified.
+- Basin's snapshot expiration never deletes a file no snapshot referenced, so a build whose registration failed leaks its files.
+- Expiration keeps a snapshot until it is both older than 30 days and outside the newest 5, by default, so registered files under the glob paths would multiply what every glob reader counts.
+
+The rest of Cloudflare's data products, checked against their docs in October 2026:
+
+| Product                                                                                      | What it does                                                                                                            | Fit here                 |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| [Basin Catalog](https://developers.cloudflare.com/basin-catalog/) (formerly R2 Data Catalog) | Iceberg REST catalog over an R2 bucket that DuckDB, Spark, and PyIceberg speak, with compaction and snapshot expiration | The catalog shape above  |
+| [Basin SQL](https://developers.cloudflare.com/basin-sql/) (formerly R2 SQL)                  | Read-only SQL over catalog tables from a REST endpoint, $0.0025 per GB scanned with a 10 MB minimum                     | The catalog shape above  |
+| [Basin Pipelines](https://developers.cloudflare.com/basin-pipelines/)                        | Takes events from a Worker binding or HTTP, applies stateless SQL, and appends them to Iceberg tables or files          | Poor fit                 |
+| [K2](https://developers.cloudflare.com/k2/)                                                  | A durable log read through subscriptions, with up to 30 days of retention                                               | Nothing here needs a log |
+| [Artifacts](https://developers.cloudflare.com/artifacts/)                                    | Git-compatible versioned file storage                                                                                   | Unrelated to the lake    |
+
+Pipelines doesn't fit because a stream's schema and a pipeline's SQL can't change after creation, so each schema change means a new stream, sink, and table. A sink can't target an existing table and only appends, while the build replaces every table in full. The data also arrives as API pages on a schedule and is already in D1 by the time the build runs.
+
+#### Cross-Source Listens
+
+`music_plays` is keyed on `(source, id)`, so a listen the Apple Music export and Last.fm both saw is two rows, and `music/v1/plays` and `music_tracks` count it twice. The export stays a backstop after Last.fm lands, since scrobbling may miss devices such as HomePods, so overlap is the expected case rather than an edge. The rule that picks one row per listen, such as the same artist and title key within a few minutes, and which source wins, has to settle before Last.fm writes to `music_plays`. A conformed `core/v1/listen` table waits on it, since until then it would copy `music/v1/plays`.
+
 ## Future Work
 
 Out of scope until the feed is live:
 
-- Publishing the lake tables to R2 Data Catalog as Iceberg, following whatever Activity Hub settles on.
 - A precomputed stats object regenerated by the nightly build, which would serve most homepage numbers at zero query cost.
 - Comment and review-comment bodies, once there is a question that needs the text rather than the count.
 - Per-commit history for my own repositories, where the request cost is bounded by repositories I own rather than by every repository I have touched.

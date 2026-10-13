@@ -69,4 +69,6 @@ Worker secrets are set with `wrangler secret put`, never committed. `wrangler de
 
 ## Lake
 
+A build overwrites each table's `{path}/part-0.parquet`, and readers read that one key. A new table goes in `LAKE_TABLES` (`src/lake/build.ts`) with a path under its source's `v1/`. Sources that describe the same thing merge in D1 at normalization (`music_plays.source`), so the lake has one table per concept. An Iceberg catalog, if adopted, gets its own files from a PyIceberg overwrite and never registers the glob paths with `add_files`. [docs/design.md](docs/design.md#lake-catalog) has why, and the Cloudflare product evaluation.
+
 `scheduled` picks the nightly build over the sync by matching `controller.cron` against `LAKE_CRON` in `src/lake/build.ts`, which a test holds against the triggers `wrangler.jsonc` configures. An expression that changes in one place and not the other leaves the lake unbuilt and reports nothing. The [README](README.md#lake) covers what the build guarantees and how to run it by hand.
