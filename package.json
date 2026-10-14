@@ -18,7 +18,7 @@
     "hyparquet-writer": "^0.16.10",
     "instapaper-api": "1.0.0",
     "temporal-polyfill": "^1.0.5",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.23.0",
