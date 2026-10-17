@@ -74,12 +74,14 @@ describe("scheduled", () => {
     expect(await recentRuns(env.DB, "trakt-ratings", 1)).toMatchObject([{ error: null }]);
   });
 
-  it("writes no run while the GitHub token is unset", async () => {
+  it("records a skip rather than a run while the GitHub token is unset", async () => {
     await advance(env.DB, "issue", "2026-09-09T10:00:00.000Z", "2026-09-09T10:00:00Z");
 
     await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
 
-    expect(await recentRuns(env.DB, "issue", 1)).toEqual([]);
+    expect(await recentRuns(env.DB, "issue", 2)).toMatchObject([
+      { outcome: "skipped", reason: "skip.missing_secret", pages: 0 },
+    ]);
   });
 });
 

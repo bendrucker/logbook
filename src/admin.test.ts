@@ -76,6 +76,7 @@ describe("GET /admin/sync", () => {
         cost: 2,
         rateRemaining: 4100,
       },
+      { outcome: "failed", reason: "upstream.5xx", resumeAt: null },
       "2026-09-09T18:03:00Z",
     );
 
@@ -134,7 +135,7 @@ describe("GET /admin/sync", () => {
     // The migration leaves `kind` unconstrained so a rename does not fail at
     // ingest. Reading has to hold up its end of that.
     await env.DB.prepare(
-      "INSERT INTO sync_runs (kind, window, started_at, finished_at, error) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO sync_runs (kind, window, started_at, finished_at, error, outcome) VALUES (?, ?, ?, ?, ?, 'failed')",
     )
       .bind("pr-drafted", "2026-08", "2026-09-08T18:00:00Z", "2026-09-08T18:01:00Z", "retired kind")
       .run();

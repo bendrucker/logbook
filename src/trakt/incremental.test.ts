@@ -9,6 +9,7 @@ import {
   traktResponse,
 } from "../../test/trakt-fixtures";
 import { enqueue, frontierStatus } from "../sync/frontier";
+import { recentRuns } from "../sync/runs";
 import { advance, readWatermark } from "../sync/state";
 import { rewalkTraktYear, syncTrakt } from "./incremental";
 
@@ -43,6 +44,9 @@ describe("syncTrakt", () => {
 
     expect(trakt.urls().map((url) => url.pathname)).toEqual(["/users/bendrucker/ratings"]);
     expect(await readWatermark(env.DB, "trakt-history")).toBeNull();
+    expect(await recentRuns(env.DB, "trakt-history", 1)).toMatchObject([
+      { outcome: "skipped", reason: "skip.no_watermark" },
+    ]);
   });
 
   it("ends the invocation on a 429 rather than sending the next kind", async () => {
@@ -52,6 +56,16 @@ describe("syncTrakt", () => {
     await syncTrakt(env, { fetch: trakt.fetch, now: NOW });
 
     expect(trakt.requests).toHaveLength(1);
+    expect(await recentRuns(env.DB, "trakt-history", 1)).toMatchObject([
+      {
+        outcome: "rate_limited",
+        reason: "rate_limit.upstream",
+        resumeAt: "2026-09-10T12:01:00.000Z",
+      },
+    ]);
+    expect(await recentRuns(env.DB, "trakt-ratings", 1)).toMatchObject([
+      { outcome: "skipped", reason: "skip.rate_limited" },
+    ]);
   });
 
   it("drains enqueued years with what its own work left", async () => {

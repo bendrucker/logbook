@@ -7,6 +7,12 @@
   "account_id": "72bdc77341dc52a3cf4a94097f9ad96f",
   "observability": {
     "enabled": true,
+    // Each run opens a `logbook.run` span in `recordRun`, which the platform's
+    // fetch, D1, and R2 spans nest under. A day is a few hundred runs, so every
+    // invocation is sampled.
+    "traces": {
+      "enabled": true,
+    },
   },
   "vars": {
     // Public identifier rather than a secret. The token that reads GitHub is a

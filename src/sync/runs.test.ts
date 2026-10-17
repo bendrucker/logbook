@@ -10,6 +10,11 @@ import {
   type RunResult,
 } from "./runs";
 
+type Ended = Parameters<typeof finishRun>[3];
+
+const done: Ended = { outcome: "ok", reason: null, resumeAt: null };
+const faulted: Ended = { outcome: "failed", reason: "upstream.5xx", resumeAt: null };
+
 const ok: RunResult = {
   pages: 3,
   rowsChanged: 12,
@@ -43,6 +48,9 @@ describe("startRun", () => {
         note: null,
         cost: 0,
         rateRemaining: null,
+        outcome: null,
+        reason: null,
+        resumeAt: null,
       },
     ]);
   });
@@ -51,7 +59,7 @@ describe("startRun", () => {
 describe("finishRun", () => {
   // A failed run reports the counts it reached, so both rows read back the same
   // fields rather than treating an error as the only thing worth asserting.
-  test.each<{ name: string; result: RunResult }>([
+  test.each<{ name: string; result: RunResult; ended: Ended }>([
     {
       name: "a clean run",
       result: {
@@ -63,6 +71,7 @@ describe("finishRun", () => {
         cost: 2,
         rateRemaining: 4100,
       },
+      ended: done,
     },
     {
       name: "a run that gave up partway",
@@ -75,11 +84,16 @@ describe("finishRun", () => {
         cost: 1,
         rateRemaining: null,
       },
+      ended: {
+        outcome: "rate_limited",
+        reason: "rate_limit.secondary",
+        resumeAt: "2026-09-09T18:02:00Z",
+      },
     },
-  ])("closes $name with what it wrote", async ({ result }) => {
+  ])("closes $name with what it wrote", async ({ result, ended }) => {
     const id = await startRun(env.DB, "issue", "2026-09-01..2026-09-08", "2026-09-09T18:00:00Z");
 
-    await finishRun(env.DB, id, result, "2026-09-09T18:01:00Z");
+    await finishRun(env.DB, id, result, ended, "2026-09-09T18:01:00Z");
 
     expect(await recentRuns(env.DB, "issue", 10)).toEqual([
       {
@@ -89,6 +103,7 @@ describe("finishRun", () => {
         startedAt: "2026-09-09T18:00:00Z",
         finishedAt: "2026-09-09T18:01:00Z",
         ...result,
+        ...ended,
       },
     ]);
   });
@@ -122,7 +137,7 @@ describe("recentRuns", () => {
 describe("lastRuns", () => {
   it("answers for every kind, run or not", async () => {
     const older = await startRun(env.DB, "issue", "2026-09-01", "2026-09-08T18:00:00Z");
-    await finishRun(env.DB, older, ok, "2026-09-08T18:01:00Z");
+    await finishRun(env.DB, older, ok, done, "2026-09-08T18:01:00Z");
     const newer = await startRun(env.DB, "issue", "2026-09-08", "2026-09-09T18:00:00Z");
 
     const runs = await lastRuns(env.DB);
@@ -137,11 +152,23 @@ describe("lastRuns", () => {
 describe("recentFailures", () => {
   it("reads failures across kinds, newest first", async () => {
     const clean = await startRun(env.DB, "pr-authored", "2026-09-01", "2026-09-07T18:00:00Z");
-    await finishRun(env.DB, clean, ok, "2026-09-07T18:01:00Z");
+    await finishRun(env.DB, clean, ok, done, "2026-09-07T18:01:00Z");
     const failed = await startRun(env.DB, "issue", "2026-09-01", "2026-09-08T18:00:00Z");
-    await finishRun(env.DB, failed, { ...ok, error: "502 from search" }, "2026-09-08T18:01:00Z");
+    await finishRun(
+      env.DB,
+      failed,
+      { ...ok, error: "502 from search" },
+      faulted,
+      "2026-09-08T18:01:00Z",
+    );
     const alsoFailed = await startRun(env.DB, "contributions", "2026", "2026-09-09T18:00:00Z");
-    await finishRun(env.DB, alsoFailed, { ...ok, error: "token expired" }, "2026-09-09T18:01:00Z");
+    await finishRun(
+      env.DB,
+      alsoFailed,
+      { ...ok, error: "token expired" },
+      faulted,
+      "2026-09-09T18:01:00Z",
+    );
 
     const failures = await recentFailures(env.DB, 10);
 
@@ -155,7 +182,7 @@ describe("recentFailures", () => {
       "2026-09-09T18:00:00Z",
     ]) {
       const id = await startRun(env.DB, "issue", started.slice(0, 10), started);
-      await finishRun(env.DB, id, { ...ok, error: "502 from search" }, started);
+      await finishRun(env.DB, id, { ...ok, error: "502 from search" }, faulted, started);
     }
 
     expect(await recentFailures(env.DB, 2)).toHaveLength(2);
@@ -171,7 +198,7 @@ describe("spendSince", () => {
       ["issue", "2026-09-09T18:40:00.000Z", 0],
     ] as const) {
       const id = await startRun(env.DB, kind, started.slice(0, 10), started);
-      await finishRun(env.DB, id, { ...ok, cost }, started);
+      await finishRun(env.DB, id, { ...ok, cost }, done, started);
     }
 
     expect(await spendSince(env.DB, "2026-09-09T18:00:00.000Z")).toEqual([
