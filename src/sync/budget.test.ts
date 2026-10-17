@@ -54,6 +54,7 @@ async function seedRun(startedAt: string, cost: number): Promise<void> {
     env.DB,
     id,
     { pages: 1, rowsChanged: 0, truncated: false, error: null, note: null, cost, rateRemaining: 0 },
+    { outcome: "ok", reason: null, resumeAt: null },
     startedAt,
   );
 }
