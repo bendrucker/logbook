@@ -146,13 +146,16 @@ export function github(login: string, token?: string): ContentSource {
 
 const historyResponse = z.array(z.object({ watched_at: z.iso.datetime() }));
 
-// History is newest first, so the oldest play after `since` is the last page
-// of a one-item listing.
+// History is newest first, so the oldest play after `since` is the last item
+// of the listing. A day of plays fits one page, which keeps the probe to one
+// request: a second request in the same instant draws a 429 from Trakt.
+const TRAKT_PAGE = 100;
+
 export function trakt(user: string, clientId: string): ContentSource {
-  const get = async (since: Date, page: number) => {
+  const get = async (since: Date, limit: number, page: number) => {
     const start = new Date(since.getTime() + 1000).toISOString();
     const response = await fetch(
-      `https://api.trakt.tv/users/${user}/history?start_at=${start}&limit=1&page=${page}`,
+      `https://api.trakt.tv/users/${user}/history?start_at=${start}&limit=${limit}&page=${page}`,
       {
         headers: {
           "content-type": "application/json",
@@ -167,7 +170,7 @@ export function trakt(user: string, clientId: string): ContentSource {
     }
     return {
       count: Number(response.headers.get("x-pagination-item-count") ?? 0),
-      body: await response.json(),
+      plays: historyResponse.parse(await response.json()),
     };
   };
   return {
@@ -175,11 +178,11 @@ export function trakt(user: string, clientId: string): ContentSource {
     table: "trakt/v1/plays",
     column: "watched_at",
     oldestAfter: async (since) => {
-      const { count } = await get(since, 1);
-      if (count === 0) {
-        return null;
-      }
-      const [play] = historyResponse.parse((await get(since, count)).body);
+      const first = await get(since, TRAKT_PAGE, 1);
+      const play =
+        first.count <= TRAKT_PAGE
+          ? first.plays.at(-1)
+          : (await get(since, 1, first.count)).plays[0];
       return play === undefined ? null : new Date(play.watched_at);
     },
   };

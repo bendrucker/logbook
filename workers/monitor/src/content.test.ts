@@ -115,12 +115,30 @@ describe("github", () => {
 });
 
 describe("trakt", () => {
-  it("reads the last page of a one-item history listing", async () => {
+  it("takes the last play of a single page", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        Response.json(
+          [{ watched_at: "2026-10-17T22:00:00.000Z" }, { watched_at: "2026-10-16T20:00:00.000Z" }],
+          { headers: { "x-pagination-item-count": "2" } },
+        ),
+      );
+
+    const oldest = await trakt("bendrucker", "client").oldestAfter(
+      new Date("2026-10-16T00:00:00Z"),
+    );
+
+    expect(oldest).toEqual(new Date("2026-10-16T20:00:00Z"));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the last one-item page when the plays overflow a page", async () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         Response.json([{ watched_at: "2026-10-17T22:00:00.000Z" }], {
-          headers: { "x-pagination-item-count": "3" },
+          headers: { "x-pagination-item-count": "150" },
         }),
       )
       .mockResolvedValueOnce(Response.json([{ watched_at: "2026-10-16T20:00:00.000Z" }]));
@@ -130,7 +148,7 @@ describe("trakt", () => {
     );
 
     expect(oldest).toEqual(new Date("2026-10-16T20:00:00Z"));
-    expect(requested(fetch, 1).searchParams.get("page")).toBe("3");
+    expect(requested(fetch, 1).searchParams.get("page")).toBe("150");
   });
 
   it("answers null when nothing is newer", async () => {
