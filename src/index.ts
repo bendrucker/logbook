@@ -8,6 +8,7 @@ import {
 import { recordInvocation } from "./invocations";
 import { buildLake, LAKE_CRON } from "./lake";
 import { sampleFreshness } from "./sli";
+import { describe } from "./sync/run";
 import { syncIncremental } from "./sync/incremental";
 import { syncInstapaper } from "./instapaper/incremental";
 import { rewalkTraktYear, syncTrakt } from "./trakt/incremental";
@@ -64,8 +65,13 @@ async function hourly(env: Env, cron: string): Promise<void> {
   const trakt = await settled(syncTrakt(env));
   const instapaper = await settled(syncInstapaper(env));
   // Sampled whatever the sources did, since a failed source is exactly when
-  // its lag grows.
-  await sampleFreshness(env.DB);
+  // its lag grows. A failed sample is logged rather than thrown, so it neither
+  // hides a source's error nor fails a clean invocation.
+  try {
+    await sampleFreshness(env.DB);
+  } catch (error) {
+    console.error({ event: "sli.sample_failed", error: describe(error) });
+  }
   for (const outcome of [github, trakt, instapaper]) {
     if (outcome.status === "rejected") {
       throw outcome.reason;

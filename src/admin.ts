@@ -1,4 +1,5 @@
 import { monthWindow } from "./github/windows";
+import { type Invocation, recentInvocations } from "./invocations";
 import { buildLake, type LakeBuild, readLatestBuild } from "./lake";
 import {
   backfill,
@@ -24,6 +25,7 @@ import {
 import { refreshTracks } from "./apple-music/tracks";
 
 const FAILURE_LIMIT = 10;
+const INVOCATION_LIMIT = 10;
 
 interface KindStatus {
   watermark: Watermark | null;
@@ -36,6 +38,7 @@ export interface SyncStatus {
   kinds: Record<SyncKind, KindStatus>;
   failures: SyncRun[];
   lake: LakeBuild | null;
+  invocations: Invocation[];
 }
 
 export async function handleSyncStatus(request: Request, env: Env): Promise<Response> {
@@ -45,12 +48,13 @@ export async function handleSyncStatus(request: Request, env: Env): Promise<Resp
   }
 
   try {
-    const [watermarks, runs, failures, lake, frontier] = await Promise.all([
+    const [watermarks, runs, failures, lake, frontier, invocations] = await Promise.all([
       readWatermarks(env.DB),
       lastRuns(env.DB),
       recentFailures(env.DB, FAILURE_LIMIT),
       readLatestBuild(env.DB),
       frontierStatus(env.DB),
+      recentInvocations(env.DB, INVOCATION_LIMIT),
     ]);
 
     const status: SyncStatus = {
@@ -62,6 +66,7 @@ export async function handleSyncStatus(request: Request, env: Env): Promise<Resp
       })),
       failures,
       lake,
+      invocations,
     };
     return Response.json(status);
   } catch (error) {

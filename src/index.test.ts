@@ -9,6 +9,7 @@ import {
   searchPayload,
 } from "../test/github-fixtures";
 import { emptyBucket } from "../test/r2";
+import { failingOn } from "../test/tables";
 import worker from "./index";
 import { recentInvocations } from "./invocations";
 import { LAKE_CRON, readLatestBuild } from "./lake";
@@ -81,6 +82,20 @@ describe("scheduled", () => {
     expect(invocation?.finishedAt).not.toBeNull();
     const { results } = await env.DB.prepare("SELECT kind FROM sli_samples ORDER BY kind").all();
     expect(results).toEqual([{ kind: "issue" }, { kind: "lake" }, { kind: "trakt-ratings" }]);
+  });
+
+  it("does not fail a clean invocation when the freshness sample fails", async () => {
+    const { fetch } = stubFetch(() => traktResponse([], null));
+    vi.stubGlobal("fetch", fetch);
+
+    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), {
+      ...env,
+      DB: failingOn(env.DB, "sli_samples"),
+    });
+
+    const [invocation] = await recentInvocations(env.DB, 1);
+    expect(invocation).toMatchObject({ error: null });
+    expect(invocation?.finishedAt).not.toBeNull();
   });
 
   it("syncs Trakt beside GitHub on the same cron", async () => {

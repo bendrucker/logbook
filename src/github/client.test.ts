@@ -206,6 +206,17 @@ describe("graphql", () => {
       response: () => new Response("Resource not accessible", { status: 403 }),
       limited: 0,
     },
+    {
+      name: "a RATE_LIMITED GraphQL error",
+      response: () =>
+        jsonResponse({ errors: [{ message: "API rate limit exceeded", type: "RATE_LIMITED" }] }),
+      limited: 1,
+    },
+    {
+      name: "a GraphQL error of another type",
+      response: () => jsonResponse({ errors: [{ message: "boom", type: "NOT_FOUND" }] }),
+      limited: 0,
+    },
   ])(
     "tells the budget of $name only when it is a rate limit",
     async ({ response, limited: expected }) => {

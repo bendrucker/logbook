@@ -12,7 +12,8 @@ export type Outcome = "ok" | "rate_limited" | "failed" | "skipped";
 // Why a run that did not end `ok` ended the way it did. The prefix names the
 // outcome's family, so a query can group on everything before the dot.
 export type Reason =
-  // The upstream answered 429.
+  // The upstream refused on its rate limit: a 429 from any source, or a
+  // GitHub GraphQL error of type `RATE_LIMITED`.
   | "rate_limit.upstream"
   // GitHub's secondary limit, which answers to burst shape rather than volume.
   | "rate_limit.secondary"
@@ -61,6 +62,12 @@ export function classify(error: unknown): Classified {
   }
   if (error instanceof BudgetRefused || error instanceof RequestCapReached) {
     return { outcome: "rate_limited", reason: "rate_limit.budget" };
+  }
+  if (
+    (error instanceof GitHubHttpError && error.status === 429) ||
+    (error instanceof GraphQLQueryError && error.rateLimited)
+  ) {
+    return { outcome: "rate_limited", reason: "rate_limit.upstream" };
   }
   if (error instanceof Error && CONTRACT_ERRORS.has(error.name)) {
     return { outcome: "failed", reason: "upstream.contract" };

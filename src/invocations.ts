@@ -9,24 +9,19 @@ export interface Invocation {
   error: string | null;
 }
 
-// One `invocations` row around a scheduled invocation. The row is written
-// before `body` runs, so one that exceeds its limits and dies still shows as
-// unfinished. The error is rethrown so the platform still marks the
-// invocation failed. The span is our own rather than the
-// platform's root span, since the workerd the tests run on predates
-// `getActiveSpan`, and every run span nests beneath it.
+// One `invocations` row around a scheduled invocation, written before `body`
+// runs so an invocation that exceeds its limits and dies still shows as
+// unfinished. The row is best effort: a write that fails is logged and never
+// stops `body` or replaces its error. The span is local because the workerd the
+// tests run on predates `getActiveSpan`.
 export function recordInvocation(
   db: D1Database,
   cron: string,
   body: () => Promise<void>,
 ): Promise<void> {
   return tracing.enterSpan("logbook.invocation", async (span) => {
-    const { meta } = await db
-      .prepare("INSERT INTO invocations (cron, started_at) VALUES (?1, ?2)")
-      .bind(cron, new Date().toISOString())
-      .run();
-    const id = meta.last_row_id;
-    span.setAttributes({ "logbook.trigger": cron, "logbook.invocation_id": id });
+    const id = await startInvocation(db, cron);
+    span.setAttributes({ "logbook.trigger": cron, "logbook.invocation_id": id ?? undefined });
 
     let failure: string | null = null;
     try {
@@ -39,12 +34,35 @@ export function recordInvocation(
       });
       throw error;
     } finally {
-      await db
-        .prepare("UPDATE invocations SET finished_at = ?2, error = ?3 WHERE id = ?1")
-        .bind(id, new Date().toISOString(), failure)
-        .run();
+      if (id !== null) {
+        await finishInvocation(db, id, failure);
+      }
     }
   });
+}
+
+async function startInvocation(db: D1Database, cron: string): Promise<number | null> {
+  try {
+    const { meta } = await db
+      .prepare("INSERT INTO invocations (cron, started_at) VALUES (?1, ?2)")
+      .bind(cron, new Date().toISOString())
+      .run();
+    return meta.last_row_id;
+  } catch (error) {
+    console.error({ event: "invocation.start_failed", cron, error: describe(error) });
+    return null;
+  }
+}
+
+async function finishInvocation(db: D1Database, id: number, failure: string | null): Promise<void> {
+  try {
+    await db
+      .prepare("UPDATE invocations SET finished_at = ?2, error = ?3 WHERE id = ?1")
+      .bind(id, new Date().toISOString(), failure)
+      .run();
+  } catch (error) {
+    console.error({ event: "invocation.finish_failed", id, error: describe(error) });
+  }
 }
 
 export async function recentInvocations(db: D1Database, limit: number): Promise<Invocation[]> {

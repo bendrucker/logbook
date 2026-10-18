@@ -8,7 +8,7 @@ Run any of these with `bun run wrangler d1 execute DB --remote --command "..."`.
 
 - **`sli_samples`**: written at the end of every hourly invocation, whatever the sources did. One row per kind holding a watermark, with `lag_seconds` as now less the watermark. Kind `lake` holds the newest successful `lake_builds.finished_at` and its lag. Frontier-only kinds have no watermark and no sample.
 - **`invocations`**: one row per `scheduled()` call, written before any work. `finished_at` null is an invocation that died. `error` holds what the invocation threw.
-- **`sync_runs`**: `outcome` and `reason`, from `src/sync/outcome.ts`. `requests` counts the upstream requests a run sent and `rate_limited_requests` the ones refused on a rate limit: a 429 from any source, or a GitHub secondary limit. Runs from before migration `0014` read 0 for both.
+- **`sync_runs`**: `outcome` and `reason`, from `src/sync/outcome.ts`. `requests` counts the upstream requests a run sent and `rate_limited_requests` the ones refused on a rate limit: a 429 from any source, a GitHub secondary limit, or a GitHub GraphQL `RATE_LIMITED` error. Each of those also ends the run `rate_limited`. Runs from before migration `0014` read 0 for both.
 - **`lake_builds`**: per-table `row_counts` on each successful build.
 
 ## Freshness

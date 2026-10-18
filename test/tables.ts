@@ -34,3 +34,24 @@ export function markPublished(db: D1Database, table: string, id: string): Promis
     .bind(publishedAt, id)
     .run();
 }
+
+// A database whose statements touching `table` throw when prepared, the way a
+// D1 error would surface, while every other statement reaches `db`.
+export function failingOn(db: D1Database, table: string): D1Database {
+  return new Proxy(db, {
+    get(target, property) {
+      if (property === "prepare") {
+        return (sql: string) => {
+          if (sql.includes(table)) {
+            throw new Error(`D1_ERROR: no such table: ${table}`);
+          }
+          return target.prepare(sql);
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function"
+        ? (...args: unknown[]): unknown => Reflect.apply(value, target, args)
+        : value;
+    },
+  });
+}

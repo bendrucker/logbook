@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { failingOn } from "../test/tables";
 import { recentInvocations, recordInvocation } from "./invocations";
 
 describe("recordInvocation", () => {
@@ -34,5 +35,33 @@ describe("recordInvocation", () => {
     });
 
     expect(during).toMatchObject([{ finishedAt: null, error: null }]);
+  });
+
+  it("runs the body when the row cannot be written", async () => {
+    let ran = false;
+
+    await recordInvocation(failingOn(env.DB, "invocations"), "0 * * * *", () => {
+      ran = true;
+      return Promise.resolve();
+    });
+
+    expect(ran).toBe(true);
+  });
+
+  it("keeps the body's error when the row cannot be finished", async () => {
+    const failure = new TypeError("lake write refused");
+    const db = failingOn(env.DB, "UPDATE invocations");
+
+    await expect(recordInvocation(db, "30 9 * * *", () => Promise.reject(failure))).rejects.toBe(
+      failure,
+    );
+  });
+
+  it("does not fail a clean body when the row cannot be finished", async () => {
+    await expect(
+      recordInvocation(failingOn(env.DB, "UPDATE invocations"), "0 * * * *", () =>
+        Promise.resolve(),
+      ),
+    ).resolves.toBeUndefined();
   });
 });
