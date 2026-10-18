@@ -1,6 +1,6 @@
 import path from "node:path";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import { unstable_readConfig } from "wrangler";
 import { z } from "zod";
 
@@ -34,6 +34,8 @@ export default defineConfig(async () => {
       }),
     ],
     test: {
+      // The monitor is its own Worker with its own bindings and config.
+      exclude: [...configDefaults.exclude, "workers/**"],
       setupFiles: ["./test/apply-migrations.ts", "./test/reset-tables.ts"],
     },
   };

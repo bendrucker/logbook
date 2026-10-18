@@ -3,14 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc -p scripts --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p scripts --noEmit && tsc -p workers/monitor --noEmit",
     "lint": "oxlint --type-aware --report-unused-disable-directives",
     "backfill": "bun scripts/backfill.ts",
     "import:apple-music": "bun scripts/import-apple-music.ts",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config workers/monitor/vitest.config.ts",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "types": "wrangler types",
+    "types": "wrangler types && wrangler types --config workers/monitor/wrangler.jsonc workers/monitor/worker-configuration.d.ts",
     "dev": "wrangler dev",
     "wrangler": "wrangler"
   },
