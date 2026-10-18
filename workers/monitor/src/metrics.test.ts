@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { LAKE_PREFIXES } from "./lake";
-import { collectLake, recordMetrics } from "./metrics";
+import { collectLake, exportMetrics, recordMetrics } from "./metrics";
 
 beforeEach(async () => {
   const listed = await env.LAKE.list();
@@ -51,6 +51,23 @@ describe("recordMetrics", () => {
         metric: "lake.tables",
         target: "music/v1/",
         value: 0,
+      },
+    ]);
+  });
+});
+
+describe("exportMetrics", () => {
+  it("writes the metric and target as blobs and the value as a double", () => {
+    const points: AnalyticsEngineDataPoint[] = [];
+    exportMetrics({ writeDataPoint: (point) => void points.push(point ?? {}) }, [
+      { metric: "lake.age_seconds", target: "github/v1/issues", value: 60 },
+    ]);
+
+    expect(points).toEqual([
+      {
+        indexes: ["lake.age_seconds"],
+        blobs: ["lake.age_seconds", "github/v1/issues"],
+        doubles: [60],
       },
     ]);
   });

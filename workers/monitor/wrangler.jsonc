@@ -48,6 +48,9 @@
       "migrations_dir": "migrations",
     },
   ],
+  // A copy of every metric for Cloudflare's Custom Alerts, which query
+  // Analytics Engine with SQL. D1 stays the record the rules above read.
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "logbook_monitor_metrics" }],
   "r2_buckets": [
     // Read only, by convention: the monitor lists objects and never writes.
     { "binding": "LAKE", "bucket_name": "activity-hub-lake" },

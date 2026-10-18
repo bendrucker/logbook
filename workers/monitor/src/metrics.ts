@@ -39,3 +39,11 @@ export async function recordMetrics(
     metrics.map((metric) => insert.bind(at, metric.metric, metric.target, metric.value)),
   );
 }
+
+// One point per metric: blob1 is the metric, blob2 the target, double1 the
+// value. Indexed by metric, so sampling never thins one metric for another.
+export function exportMetrics(dataset: AnalyticsEngineDataset, metrics: Metric[]): void {
+  for (const { metric, target, value } of metrics) {
+    dataset.writeDataPoint({ indexes: [metric], blobs: [metric, target], doubles: [value] });
+  }
+}
