@@ -147,24 +147,40 @@ export function github(login: string, token?: string): ContentSource {
 const historyResponse = z.array(z.object({ watched_at: z.iso.datetime() }));
 
 // History is newest first, so the oldest play after `since` is the last item
-// of the listing. A day of plays fits one page, which keeps the probe to one
-// request: a second request in the same instant draws a 429 from Trakt.
+// of the listing. A day of plays fits one page, so the probe is usually one
+// request.
 const TRAKT_PAGE = 100;
 
-export function trakt(user: string, clientId: string): ContentSource {
+// Trakt limits unauthenticated reads per IP, and Workers share egress IPs, so
+// a first request of the hour can draw a 429 the Worker did nothing to earn.
+// The probe waits out one `Retry-After` within this bound, or reports failure.
+const TRAKT_MAX_WAIT_SECONDS = 300;
+
+export function trakt(
+  user: string,
+  clientId: string,
+  wait: (ms: number) => Promise<void> = async (ms) => scheduler.wait(ms),
+): ContentSource {
+  const request = async (url: string) =>
+    fetch(url, {
+      headers: {
+        "content-type": "application/json",
+        "trakt-api-version": "2",
+        "trakt-api-key": clientId,
+        "user-agent": USER_AGENT,
+      },
+    });
   const get = async (since: Date, limit: number, page: number) => {
     const start = new Date(since.getTime() + 1000).toISOString();
-    const response = await fetch(
-      `https://api.trakt.tv/users/${user}/history?start_at=${start}&limit=${limit}&page=${page}`,
-      {
-        headers: {
-          "content-type": "application/json",
-          "trakt-api-version": "2",
-          "trakt-api-key": clientId,
-          "user-agent": USER_AGENT,
-        },
-      },
-    );
+    const url = `https://api.trakt.tv/users/${user}/history?start_at=${start}&limit=${limit}&page=${page}`;
+    let response = await request(url);
+    if (response.status === 429) {
+      const seconds = Number(response.headers.get("retry-after") ?? 60);
+      if (Number.isFinite(seconds) && seconds <= TRAKT_MAX_WAIT_SECONDS) {
+        await wait(seconds * 1000);
+        response = await request(url);
+      }
+    }
     if (!response.ok) {
       throw new Error(`Trakt history answered ${response.status}`);
     }
