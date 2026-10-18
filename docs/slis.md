@@ -1,6 +1,6 @@
 # SLIs
 
-What the run log, the invocation log, and the hourly freshness samples measure, as D1 queries. The thresholds are drafts to calibrate against a few weeks of clean data. Nothing alerts on them yet.
+What the run log, the invocation log, and the hourly freshness samples measure, as D1 queries. The thresholds are drafts to calibrate against a few weeks of clean data. Nothing alerts on them yet. [slos.md](slos.md) proposes the objectives and alerts.
 
 Run any of these with `bun run wrangler d1 execute DB --remote --command "..."`. Each reads the last seven days. Timestamps are ISO strings, so a range is a string comparison against `strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')`.
 
