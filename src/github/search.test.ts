@@ -143,6 +143,7 @@ describe("searchPages", () => {
         return admitted > 1 ? Promise.reject(refusal) : Promise.resolve();
       },
       spend: () => undefined,
+      limited: () => undefined,
     };
 
     const iterator = pages(stub, budget);

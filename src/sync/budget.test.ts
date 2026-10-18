@@ -53,7 +53,17 @@ async function seedRun(startedAt: string, cost: number): Promise<void> {
   await finishRun(
     env.DB,
     id,
-    { pages: 1, rowsChanged: 0, truncated: false, error: null, note: null, cost, rateRemaining: 0 },
+    {
+      pages: 1,
+      rowsChanged: 0,
+      truncated: false,
+      error: null,
+      note: null,
+      cost,
+      rateRemaining: 0,
+      requests: 1,
+      rateLimitedRequests: 0,
+    },
     { outcome: "ok", reason: null, resumeAt: null },
     startedAt,
   );

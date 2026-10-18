@@ -111,7 +111,7 @@ Search misses some events GitHub counts: it hides issues in repositories that la
 
 Each contributions year is checked against the event tables for that year. A disagreement lands on the run as a note rather than an error, because a search gap and a private contribution the token cannot see look the same from here. The note carries `restrictedContributionsCount`, which counts the private ones. GitHub counts reviews once per pull request, including my own, so the note sets that figure against distinct pull requests: `reviews 75 (38 own) vs 37 PRs`, with the own count read from the year's archived review connection pages. When the archived issue or pull request pages list exactly as many events as GitHub reports, the note names the node IDs behind a gap: `issues 186 vs 101 (missing I_a, I_b and 83 more)`. `GET /admin/sync` reports it alongside the watermarks, each kind's pending and irreducible frontier windows, the last ten runs whose outcome is `failed` (a rate limit is `rate_limited`, not a failure), and the most recent lake build.
 
-Each scheduled invocation also leaves an `invocations` row, and each hourly one ends by sampling every watermark's lag into `sli_samples`. [docs/slis.md](docs/slis.md) defines freshness, run success, rate-limit stops, skips, invocation coverage, and lake completeness as D1 queries over those tables.
+Each scheduled invocation also leaves an `invocations` row, and each hourly one ends by sampling every watermark's lag into `sli_samples`. [docs/slis.md](docs/slis.md) defines freshness, run success, rate-limit stops, request rate limits, skips, invocation coverage, and lake completeness as D1 queries over those tables.
 
 ## Trakt
 

@@ -160,6 +160,7 @@ describe("syncChanges", () => {
 
     expect(run.error).toMatch(/^InstapaperRateLimited/);
     expect(run.resumeAt).toBe("2026-09-10T12:01:00.000Z");
+    expect(run).toMatchObject({ requests: 1, rateLimitedRequests: 1 });
     expect(readMetadata((await env.RAW.head(changesKey(1)))?.customMetadata)).toEqual({
       status: 429,
       failure: "InstapaperRateLimited",
@@ -174,6 +175,7 @@ describe("syncChanges", () => {
     expect(run.error).toMatch(/^RequestCapReached/);
     expect(run.resumeAt).toBe(NOW.toISOString());
     expect(stub.calls).toHaveLength(0);
+    expect(run).toMatchObject({ requests: 0, rateLimitedRequests: 0 });
   });
 });
 

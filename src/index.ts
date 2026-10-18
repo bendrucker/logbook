@@ -49,7 +49,7 @@ async function nightly(env: Env): Promise<void> {
   try {
     await rewalkTraktYear(env);
   } catch (error) {
-    console.error(`trakt-history re-walk failed: ${String(error)}`);
+    console.error({ event: "rewalk.failed", kind: "trakt-history", error: String(error) });
   }
   // An unhandled error marks the scheduled invocation failed, so a build that
   // never wrote its tables gets noticed.
@@ -71,7 +71,7 @@ async function hourly(env: Env, cron: string): Promise<void> {
       throw outcome.reason;
     }
   }
-  console.log(`sync trigger ${cron} finished`);
+  console.log({ event: "sync.finished", cron });
 }
 
 async function settled(run: Promise<void>): Promise<PromiseSettledResult<void>> {

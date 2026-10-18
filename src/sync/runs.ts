@@ -17,6 +17,8 @@ export interface SyncRun {
   note: string | null;
   cost: number;
   rateRemaining: number | null;
+  requests: number;
+  rateLimitedRequests: number;
   // Null while the run is in flight, and for a run that died before it
   // finished.
   outcome: Outcome | null;
@@ -37,6 +39,10 @@ export interface RunResult {
   // The last `remaining` GitHub reported to the run, null for a run that sent
   // nothing.
   rateRemaining: number | null;
+  // Upstream requests the run sent, and how many of those came back refused on
+  // a rate limit.
+  requests: number;
+  rateLimitedRequests: number;
 }
 
 interface RunRow {
@@ -52,6 +58,8 @@ interface RunRow {
   note: string | null;
   cost: number;
   rate_remaining: number | null;
+  requests: number;
+  rate_limited_requests: number;
   outcome: Outcome | null;
   reason: Reason | null;
   resume_at: string | null;
@@ -59,7 +67,7 @@ interface RunRow {
 
 const selection =
   "SELECT id, kind, window, started_at, finished_at, pages, rows_changed, truncated, error, note, cost, rate_remaining," +
-  " outcome, reason, resume_at FROM sync_runs";
+  " requests, rate_limited_requests, outcome, reason, resume_at FROM sync_runs";
 
 export async function startRun(
   db: D1Database,
@@ -86,7 +94,8 @@ export async function finishRun(
   await db
     .prepare(
       "UPDATE sync_runs SET finished_at = ?2, pages = ?3, rows_changed = ?4, truncated = ?5, error = ?6, note = ?7," +
-        " cost = ?8, rate_remaining = ?9, outcome = ?10, reason = ?11, resume_at = ?12" +
+        " cost = ?8, rate_remaining = ?9, outcome = ?10, reason = ?11, resume_at = ?12," +
+        " requests = ?13, rate_limited_requests = ?14" +
         " WHERE id = ?1",
     )
     .bind(
@@ -102,6 +111,8 @@ export async function finishRun(
       ended.outcome,
       ended.reason,
       ended.resumeAt,
+      result.requests,
+      result.rateLimitedRequests,
     )
     .run();
 }
@@ -192,6 +203,8 @@ function toRun(row: RunRow): SyncRun {
     note: row.note,
     cost: row.cost,
     rateRemaining: row.rate_remaining,
+    requests: row.requests,
+    rateLimitedRequests: row.rate_limited_requests,
     outcome: row.outcome,
     reason: row.reason,
     resumeAt: row.resume_at,

@@ -120,6 +120,7 @@ export async function traktGet<T>(
 
   const body = await response.text();
   if (response.status === 429) {
+    options.requests?.limited();
     throw new TraktRateLimited(retryAfter(response.headers), body);
   }
   if (!response.ok) {

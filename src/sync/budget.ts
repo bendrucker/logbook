@@ -1,4 +1,5 @@
 import type { RateLimit } from "../github/schema";
+import type { RequestTally } from "../request-cap";
 import { type RunSpend, spendSince } from "./runs";
 
 // GitHub's GraphQL budget refills on an hourly window that ends at `resetAt`.
@@ -72,11 +73,13 @@ const SYSTEM_CLOCK: Clock = {
 
 // One per invocation. The ledger is what earlier invocations spent, read from
 // `sync_runs`, and the budget adds its own spend to it as responses land.
-export class Budget {
+export class Budget implements RequestTally {
   readonly #limits: BudgetLimits;
   readonly #ledger: readonly RunSpend[];
   readonly #clock: Clock;
   #spent = 0;
+  #sent = 0;
+  #rateLimited = 0;
   #spentThisWindow = 0;
   #reading: RateLimit | null = null;
   #lastRequest: number | null = null;
@@ -92,6 +95,16 @@ export class Budget {
     return this.#spent;
   }
 
+  // Requests this invocation has sent.
+  get sent(): number {
+    return this.#sent;
+  }
+
+  // Of those, how many came back refused on a rate limit.
+  get rateLimited(): number {
+    return this.#rateLimited;
+  }
+
   // The last `remaining` the provider reported, null before the first response.
   get remaining(): number | null {
     return this.#reading?.remaining ?? null;
@@ -103,6 +116,8 @@ export class Budget {
   withLimits(limits: Partial<BudgetLimits>): Budget {
     const budget = new Budget({ ...this.#limits, ...limits }, this.#ledger, this.#clock);
     budget.#spent = this.#spent;
+    budget.#sent = this.#sent;
+    budget.#rateLimited = this.#rateLimited;
     budget.#spentThisWindow = this.#spentThisWindow;
     budget.#reading = this.#reading;
     budget.#lastRequest = this.#lastRequest;
@@ -119,6 +134,11 @@ export class Budget {
       }
     }
     this.#lastRequest = this.#clock.now();
+    this.#sent += 1;
+  }
+
+  limited(): void {
+    this.#rateLimited += 1;
   }
 
   spend(reading: RateLimit): void {

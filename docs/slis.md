@@ -8,7 +8,7 @@ Run any of these with `bun run wrangler d1 execute DB --remote --command "..."`.
 
 - **`sli_samples`**: written at the end of every hourly invocation, whatever the sources did. One row per kind holding a watermark, with `lag_seconds` as now less the watermark. Kind `lake` holds the newest successful `lake_builds.finished_at` and its lag. Frontier-only kinds have no watermark and no sample.
 - **`invocations`**: one row per `scheduled()` call, written before any work. `finished_at` null is an invocation that died. `error` holds what the invocation threw.
-- **`sync_runs`**: `outcome` and `reason`, from `src/sync/outcome.ts`.
+- **`sync_runs`**: `outcome` and `reason`, from `src/sync/outcome.ts`. `requests` counts the upstream requests a run sent and `rate_limited_requests` the ones refused on a rate limit: a 429 from any source, or a GitHub secondary limit. Runs from before migration `0014` read 0 for both.
 - **`lake_builds`**: per-table `row_counts` on each successful build.
 
 ## Freshness
@@ -60,6 +60,21 @@ FROM sync_runs
 WHERE outcome = 'rate_limited'
   AND started_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')
 GROUP BY reason;
+```
+
+## Request Rate Limits
+
+Rate-limited requests over requests sent, per kind. Rate-limit stops count runs, and one run can send a hundred requests or one, so this is the rate the upstream actually refuses at. A stop on the run's own budget or cap sends nothing and counts in neither column.
+
+```sql
+SELECT kind,
+  SUM(rate_limited_requests) AS rate_limited,
+  SUM(requests) AS requests,
+  ROUND(SUM(rate_limited_requests) * 1.0 / NULLIF(SUM(requests), 0), 4) AS rate
+FROM sync_runs
+WHERE finished_at IS NOT NULL
+  AND started_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')
+GROUP BY kind;
 ```
 
 ## Coverage Lost to Limits

@@ -227,7 +227,12 @@ describe("syncWindow", () => {
 
     expect(result).toMatchObject({ cost: 2, rateRemaining: 4321 });
     const [run] = await recentRuns(env.DB, "pr-authored", 1);
-    expect(run).toMatchObject({ cost: 2, rateRemaining: 4321 });
+    expect(run).toMatchObject({
+      cost: 2,
+      rateRemaining: 4321,
+      requests: 2,
+      rateLimitedRequests: 0,
+    });
   });
 
   it("stops on a secondary limit, keeps the window unsynced, and reports the wait", async () => {
@@ -242,7 +247,12 @@ describe("syncWindow", () => {
 
     const result = await syncWindow(env, "pr-authored", WINDOW, options(fetch));
 
-    expect(result).toMatchObject({ pages: 1, resumeAt: "2026-09-09T12:01:30.000Z" });
+    expect(result).toMatchObject({
+      pages: 1,
+      resumeAt: "2026-09-09T12:01:30.000Z",
+      requests: 2,
+      rateLimitedRequests: 1,
+    });
     expect(result.error).toContain("SecondaryRateLimited");
     expect(await readWatermark(env.DB, "pr-authored")).toBeNull();
     expect(await env.RAW.head(searchKey("pr-authored", WINDOW.key, FETCHED_AT, 2))).not.toBeNull();

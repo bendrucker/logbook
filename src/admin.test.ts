@@ -75,6 +75,8 @@ describe("GET /admin/sync", () => {
         note: null,
         cost: 2,
         rateRemaining: 4100,
+        requests: 2,
+        rateLimitedRequests: 0,
       },
       { outcome: "failed", reason: "upstream.5xx", resumeAt: null },
       "2026-09-09T18:03:00Z",

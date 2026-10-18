@@ -1,3 +1,4 @@
+import { tracing } from "cloudflare:workers";
 import { eachConcurrent, OPEN_CONNECTIONS } from "../concurrency";
 import { failBuild, finishBuild, startBuild } from "./builds";
 import { commitDays } from "./commit-days";
@@ -59,35 +60,52 @@ export interface LakeBuildResult {
 
 // A full rebuild rather than an incremental merge, which the corpus size makes
 // affordable and which keeps a schema change a rerun rather than a migration.
-export async function buildLake(
+// The span carries what the `lake_builds` row does, so a trace and the build
+// log answer alike.
+export function buildLake(
   env: Env,
   startedAt: string = new Date().toISOString(),
 ): Promise<LakeBuildResult> {
-  const id = await startBuild(env.DB, startedAt);
+  return tracing.enterSpan("logbook.lake", async (span) => {
+    const id = await startBuild(env.DB, startedAt);
+    span.setAttributes({ "logbook.build_id": id });
 
-  try {
-    // Every table encodes before any is written, so a table that throws leaves
-    // the bucket on the last complete build rather than mixing a rebuilt table
-    // with a stale one that a reader joining them could not tell apart. They
-    // encode one at a time, so only one table's rows are held beside the
-    // compressed files already built.
-    const encoded: EncodedLakeTable[] = [];
-    for (const table of LAKE_TABLES) {
-      // oxlint-disable-next-line no-await-in-loop -- one table's rows in memory at a time
-      encoded.push(await encodeOne(env.DB, table));
+    try {
+      // Every table encodes before any is written, so a table that throws leaves
+      // the bucket on the last complete build rather than mixing a rebuilt table
+      // with a stale one that a reader joining them could not tell apart. They
+      // encode one at a time, so only one table's rows are held beside the
+      // compressed files already built.
+      const encoded: EncodedLakeTable[] = [];
+      for (const table of LAKE_TABLES) {
+        // oxlint-disable-next-line no-await-in-loop -- one table's rows in memory at a time
+        encoded.push(await encodeOne(env.DB, table));
+      }
+
+      await eachConcurrent(encoded, OPEN_CONNECTIONS, (each) => writeTable(env.LAKE, each));
+
+      const rowCounts = Object.fromEntries(encoded.map((each) => [each.table.name, each.rows]));
+      const finishedAt = new Date().toISOString();
+      await finishBuild(env.DB, id, rowCounts, finishedAt);
+      span.setAttributes({
+        "logbook.outcome": "ok",
+        "logbook.tables": encoded.length,
+        "logbook.rows": encoded.reduce((total, each) => total + each.rows, 0),
+      });
+
+      return { startedAt, finishedAt, rowCounts };
+    } catch (error) {
+      // `recordException` would say the same as `error.type`, but the workerd
+      // the tests run on predates it.
+      span.setAttributes({
+        "logbook.outcome": "failed",
+        "error.type": error instanceof Error ? error.name : "unknown",
+        "logbook.error": message(error),
+      });
+      await failBuild(env.DB, id, message(error), new Date().toISOString());
+      throw error;
     }
-
-    await eachConcurrent(encoded, OPEN_CONNECTIONS, (each) => writeTable(env.LAKE, each));
-
-    const rowCounts = Object.fromEntries(encoded.map((each) => [each.table.name, each.rows]));
-    const finishedAt = new Date().toISOString();
-    await finishBuild(env.DB, id, rowCounts, finishedAt);
-
-    return { startedAt, finishedAt, rowCounts };
-  } catch (error) {
-    await failBuild(env.DB, id, message(error), new Date().toISOString());
-    throw error;
-  }
+  });
 }
 
 interface EncodedLakeTable extends EncodedTable {

@@ -23,6 +23,8 @@ const ok: RunResult = {
   note: null,
   cost: 3,
   rateRemaining: 4200,
+  requests: 3,
+  rateLimitedRequests: 0,
 };
 
 describe("startRun", () => {
@@ -48,6 +50,8 @@ describe("startRun", () => {
         note: null,
         cost: 0,
         rateRemaining: null,
+        requests: 0,
+        rateLimitedRequests: 0,
         outcome: null,
         reason: null,
         resumeAt: null,
@@ -70,6 +74,8 @@ describe("finishRun", () => {
         note: null,
         cost: 2,
         rateRemaining: 4100,
+        requests: 2,
+        rateLimitedRequests: 0,
       },
       ended: done,
     },
@@ -83,6 +89,8 @@ describe("finishRun", () => {
         note: null,
         cost: 1,
         rateRemaining: null,
+        requests: 2,
+        rateLimitedRequests: 1,
       },
       ended: {
         outcome: "rate_limited",
