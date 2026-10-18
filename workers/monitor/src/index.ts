@@ -1,19 +1,22 @@
 import { tracing } from "cloudflare:workers";
-import { probeLake, recordProbes } from "./probes";
+import { deliver, evaluateAlerts } from "./alerts";
+import { collectLake, recordMetrics } from "./metrics";
+import { rules } from "./rules";
 
 export default {
   async scheduled(_controller, env): Promise<void> {
-    await tracing.enterSpan("monitor.probe", async (span) => {
+    // Parsed first, so a malformed rule fails the run before anything is
+    // measured rather than silently alerting on nothing.
+    const parsed = rules.parse(env.ALERT_RULES);
+    await tracing.enterSpan("monitor.run", async (span) => {
       const now = new Date();
-      const probes = await probeLake(env.LAKE, now);
-      await recordProbes(env.DB, now, probes);
-      const bad = probes.filter((probe) => !probe.good);
-      span.setAttributes({ "monitor.probes": probes.length, "monitor.bad": bad.length });
-      console.log({
-        event: "monitor.probed",
-        probes: probes.length,
-        bad: bad.map((probe) => probe.target),
-      });
+      const metrics = await collectLake(env.LAKE, now);
+      await recordMetrics(env.DB, now, metrics);
+      const changes = await evaluateAlerts(env.DB, parsed, metrics, now);
+      for (const change of changes) {
+        deliver(change);
+      }
+      span.setAttributes({ "monitor.metrics": metrics.length, "monitor.changes": changes.length });
     });
     // The heartbeat says the monitor ran, whatever it found, so a monitor that
     // stops is noticed from outside Cloudflare.

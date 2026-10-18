@@ -69,7 +69,7 @@ Worker secrets are set with `wrangler secret put`, never committed. `wrangler de
 
 ## Monitor
 
-`workers/monitor` is a second Worker, `logbook-monitor`, with its own `wrangler.jsonc`, D1 (`logbook-monitor`), migrations, tsconfig, and vitest config. It watches logbook's outputs, never its run log: hourly at :47 it lists the lake's published prefixes and records each table's age in `probes`. The root `typecheck`, `test`, and `types` scripts cover it, and the `deploy` job migrates and deploys it after the main Worker. [docs/slos.md](docs/slos.md) has the design. Pass `--config workers/monitor/wrangler.jsonc` to any `bun run wrangler` command aimed at it.
+`workers/monitor` is a second Worker, `logbook-monitor`, with its own `wrangler.jsonc`, D1 (`logbook-monitor`), migrations, tsconfig, and vitest config. It watches logbook's outputs, never its run log: hourly at :47 it lists the lake's published prefixes, records raw values (each table's age, each prefix's table count) in `metrics`, and evaluates the `ALERT_RULES` var against them into `alerts`. Thresholds live only in those rules, never in collection, and each rule names a route; `log` is the only one so far. The root `typecheck`, `test`, and `types` scripts cover it, and the `deploy` job migrates and deploys it after the main Worker. [docs/slos.md](docs/slos.md) has the design. Pass `--config workers/monitor/wrangler.jsonc` to any `bun run wrangler` command aimed at it.
 
 ## Lake
 

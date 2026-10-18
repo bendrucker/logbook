@@ -16,6 +16,30 @@
     // the lake mid-build. The nightly build lands around 09:30.
     "crons": ["47 * * * *"],
   },
+  "vars": {
+    // What the monitor alerts on, kept apart from what it measures. A rule
+    // opens once its last `for` samples of `metric` all cross `above` or
+    // `below`, and sends the incident to `route`. Every rule starts on `log`.
+    "ALERT_RULES": [
+      // The nightly build rewrites every table, so a day and two hours is a
+      // build that didn't land.
+      {
+        "name": "lake-stale",
+        "metric": "lake.age_seconds",
+        "above": 93600,
+        "for": 2,
+        "route": "log",
+      },
+      // A prefix with no tables is a source the build stopped writing.
+      {
+        "name": "lake-source-empty",
+        "metric": "lake.tables",
+        "below": 1,
+        "for": 2,
+        "route": "log",
+      },
+    ],
+  },
   "d1_databases": [
     {
       "binding": "DB",

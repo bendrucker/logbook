@@ -3,10 +3,6 @@
 // the build is probed without a change here.
 export const LAKE_PREFIXES = ["github/v1/", "trakt/v1/", "instapaper/v1/", "music/v1/"];
 
-// The nightly build rewrites every table, so one older than a day and a
-// couple of hours is a build that didn't land.
-export const LAKE_MAX_AGE_SECONDS = 26 * 3600;
-
 export interface LakeObject {
   key: string;
   uploaded: Date;

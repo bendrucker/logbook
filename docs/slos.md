@@ -1,6 +1,6 @@
 # SLOs
 
-Objectives and alerts for the data pipeline. Nothing alerts yet. The monitor Worker in `workers/monitor` records the lake freshness probe hourly, and the targets get calibrated once the probes have a few weeks of data.
+Objectives and alerts for the data pipeline. The monitor Worker in `workers/monitor` records lake metrics hourly and evaluates alert rules against them from its first deploy. Every rule routes to `log`, so an alert is a structured log line and doesn't notify anyone. A rule moves to a notifying route once its log history shows it fires only on real incidents.
 
 ## Principles
 
@@ -14,7 +14,7 @@ The internal SLIs in [slis.md](slis.md) (`sync_runs`, `invocations`, `sli_sample
 
 ## What the Monitor Observes
 
-The monitor binds the `LAKE` bucket, which it only lists and reads, and will call each upstream's public API with its own credentials. That is all it touches. It has no binding to logbook's D1. It finds tables by listing logbook's published prefixes (`github/v1/`, `trakt/v1/`, `instapaper/v1/`, `music/v1/`), so a table added to the build is probed without a change to the monitor. Results land in its own D1 database, `logbook-monitor`, as one `probes` row per output per run.
+The monitor binds the `LAKE` bucket, which it only lists and reads, and will call each upstream's public API with its own credentials. That is all it touches. It has no binding to logbook's D1. It finds tables by listing logbook's published prefixes (`github/v1/`, `trakt/v1/`, `instapaper/v1/`, `music/v1/`), so a table added to the build is probed without a change to the monitor. Results land in its own D1 database, `logbook-monitor`, as one `metrics` row per raw value per run: `lake.age_seconds` per table and `lake.tables` per prefix. Collection records values and never judges them. Thresholds live only in the alert rules below.
 
 | Probe             | Reads                                                                        | Good when                                                    | Cadence                      |
 | ----------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------- |
@@ -47,6 +47,18 @@ Each objective is measured over a rolling 28 days.
 
 ## Alerts
 
+Rules are config, in the `ALERT_RULES` var of `workers/monitor/wrangler.jsonc`, validated by `src/rules.ts` at the start of every run. A rule names a metric, one bound (`above` or `below`), a sample count `for`, and a route:
+
+```jsonc
+{ "name": "lake-stale", "metric": "lake.age_seconds", "above": 93600, "for": 2, "route": "log" }
+```
+
+A rule opens an alert for a target when its last `for` samples all breach, and resolves it on the first sample that doesn't. One open alert per rule and target absorbs repeats. Each open and resolve goes to the rule's route. `log` writes a `monitor.alert.opened` or `monitor.alert.resolved` event to Workers Logs and nothing else, which makes shadow mode a route rather than a phase: a new rule starts on `log`, and promotion is a one-word config change.
+
+A backtest of these rules against the 28 days of `sli_samples` to 2026-10-18 found that the lake, GitHub, and Instapaper rules would never have opened an alert. Trakt freshness breached 14 times, all from 429s at :00, which the cron move to :17 is meant to fix.
+
+The intended alerts, once routes beyond `log` exist:
+
 1. **Data stale**: content or lake freshness is bad for two consecutive probes. It goes to Ben.
 2. **Data missing**: a completeness probe finds a mismatch. It goes to Claude, since a gap is a bug or a missed backfill, and the fix is code or a backfill call.
 3. **Monitor down**: the monitor stops pinging an external heartbeat service (Healthchecks.io or similar). It goes to Ben. Nothing on Cloudflare can watch the monitor if Cloudflare itself is down.
@@ -61,4 +73,4 @@ Expected volume is near zero. Over the 28 days to 2026-10-18, run success was at
 
 1. **Content freshness and completeness.** These need the monitor's own upstream credentials, which keep it from sharing a rate budget or a revocation with the pipeline. It needs a scopeless GitHub token, the public Trakt client ID, and an Instapaper token, each set with `wrangler secret put --config workers/monitor/wrangler.jsonc`. Its one request per source per hour won't dent any limit.
 2. **Heartbeat.** Set `HEARTBEAT_URL` to a Healthchecks.io (or similar) ping URL, and the monitor pings it after every run.
-3. **Alerts.** Once the probes have a few weeks of clean data, add the evaluation and the issue writer. That needs a fine-grained token limited to `issues: write` on this repository, minted in `bendrucker/infrastructure`.
+3. **Notifying routes.** Candidates are a GitHub issue writer (a fine-grained token limited to `issues: write` on this repository, minted in `bendrucker/infrastructure`) or Cloudflare Custom Alerts over an Analytics Engine copy of the metrics, which would move thresholds and delivery into Cloudflare. Custom Alerts are in beta, and whether Terraform can manage them is unverified.
