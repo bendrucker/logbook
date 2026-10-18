@@ -1,6 +1,7 @@
 import { tracing } from "cloudflare:workers";
 import { deliver, evaluateAlerts } from "./alerts";
-import { collectLake, recordMetrics } from "./metrics";
+import { collectContent, contentSources } from "./content";
+import { collectLake, exportMetrics, recordMetrics } from "./metrics";
 import { rules } from "./rules";
 
 export default {
@@ -10,8 +11,12 @@ export default {
     const parsed = rules.parse(env.ALERT_RULES);
     await tracing.enterSpan("monitor.run", async (span) => {
       const now = new Date();
-      const metrics = await collectLake(env.LAKE, now);
+      const metrics = [
+        ...(await collectLake(env.LAKE, now)),
+        ...(await collectContent(env.LAKE, contentSources(env), now)),
+      ];
       await recordMetrics(env.DB, now, metrics);
+      exportMetrics(env.METRICS, metrics);
       const changes = await evaluateAlerts(env.DB, parsed, metrics, now);
       for (const change of changes) {
         deliver(change);

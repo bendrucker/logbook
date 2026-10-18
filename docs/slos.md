@@ -23,11 +23,15 @@ The monitor binds the `LAKE` bucket, which it only lists and reads, and will cal
 | Completeness      | Upstream counts for a closed window, compared with lake rows for that window | The counts match                                             | Daily                        |
 | End-to-end        | bendrucker.me's public pages, once the feed publishes there                  | The newest event a reader sees matches the lake              | Hourly, once the feed exists |
 
-Content freshness compares against upstream rather than against the clock. "Newest row is older than 3h" false-alarms through every quiet week. "Upstream has a PR from 4h ago that the lake lacks" is the symptom itself. Each probe makes one request per source:
+Content freshness compares against upstream rather than against the clock. "Newest row is older than 3h" false-alarms through every quiet week. "Upstream has a PR from 4h ago that the lake lacks" is the symptom itself. Lake freshness can't see it: the nightly build rewrites every table whether or not its source synced, so a revoked credential leaves fresh files with stale contents.
 
-- GitHub: `GET /users/{login}/events/public`.
-- Trakt: `GET /users/{user}/history?limit=1`.
-- Instapaper: the newest bookmark.
+The probe (`src/content.ts`) reads the newest event time of one table per source straight from its Parquet file, asks upstream for the oldest item newer than that, and records `content.lag_seconds`: how long that item has been missing, or zero when upstream has nothing newer.
+
+- GitHub: `pull_requests.created_at` for the login's own PRs, against `GET /search/issues?q=type:pr author:{login} created:>{newest}&sort=created&order=asc`.
+- Trakt: `plays.watched_at`, against `GET /users/{user}/history?start_at={newest}`, whose last one-item page is the oldest play.
+- Instapaper: `bookmarks.saved_at`, against the change listing since the newest, keeping bookmarks saved after it.
+
+The normal lag tops out near a day, an item saved just after the nightly build, so the `content-lag` rule uses the same 26h as lake freshness.
 
 Apple Music has no upstream to probe, because it is a manual import. It gets lake freshness only, against a threshold measured in months.
 
@@ -71,6 +75,6 @@ Expected volume is near zero. Over the 28 days to 2026-10-18, run success was at
 
 ## Next
 
-1. **Content freshness and completeness.** These need the monitor's own upstream credentials, which keep it from sharing a rate budget or a revocation with the pipeline. It needs a scopeless GitHub token, the public Trakt client ID, and an Instapaper token, each set with `wrangler secret put --config workers/monitor/wrangler.jsonc`. Its one request per source per hour won't dent any limit.
+1. **Completeness.** Content freshness runs on the monitor's own credentials, which keep it from sharing a rate budget or a revocation with the pipeline: `GITHUB_TOKEN` (a scopeless classic token; search answers without one, but Workers egress shares the unauthenticated limit) and `INSTAPAPER_ACCESS_TOKEN`, each set with `wrangler secret put --config workers/monitor/wrangler.jsonc`. Without the Instapaper token that source is skipped and logged. The daily completeness probe is still to build.
 2. **Heartbeat.** Set `HEARTBEAT_URL` to a Healthchecks.io (or similar) ping URL, and the monitor pings it after every run.
-3. **Notifying routes.** Candidates are a GitHub issue writer (a fine-grained token limited to `issues: write` on this repository, minted in `bendrucker/infrastructure`) or Cloudflare Custom Alerts over an Analytics Engine copy of the metrics, which would move thresholds and delivery into Cloudflare. Custom Alerts are in beta, and whether Terraform can manage them is unverified.
+3. **Notifying routes.** The monitor also writes every metric to the Analytics Engine dataset `logbook_monitor_metrics`, so Cloudflare Custom Alerts (`alert_type: custom_analytics` on the notification policies API) can evaluate the same rules as SQL, with threshold or two-window SLO detection and email or webhook delivery. They are in beta, and the Terraform provider's `cloudflare_notification_policy` schema lacks several of their filter keys, so the first one or two are created imperatively through the API and managing them as code is a later project.

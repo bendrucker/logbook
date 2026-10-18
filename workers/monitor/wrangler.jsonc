@@ -17,6 +17,11 @@
     "crons": ["47 * * * *"],
   },
   "vars": {
+    // Whose history the content probe reads, the same public identifiers the
+    // pipeline's own config names.
+    "GITHUB_LOGIN": "bendrucker",
+    "TRAKT_USER": "bendrucker",
+    "TRAKT_CLIENT_ID": "nmJ1tcJ_TIpoxVhlhTcahD3851pQs2tUR1CCRxwJUaA",
     // What the monitor alerts on, kept apart from what it measures. A rule
     // opens once its last `for` samples of `metric` all cross `above` or
     // `below`, and sends the incident to `route`. Every rule starts on `log`.
@@ -26,6 +31,15 @@
       {
         "name": "lake-stale",
         "metric": "lake.age_seconds",
+        "above": 93600,
+        "for": 2,
+        "route": "log",
+      },
+      // Something upstream has been missing from the lake for longer than a
+      // nightly build plus an hourly sync can explain.
+      {
+        "name": "content-lag",
+        "metric": "content.lag_seconds",
         "above": 93600,
         "for": 2,
         "route": "log",
@@ -48,6 +62,9 @@
       "migrations_dir": "migrations",
     },
   ],
+  // A copy of every metric for Cloudflare's Custom Alerts, which query
+  // Analytics Engine with SQL. D1 stays the record the rules above read.
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "logbook_monitor_metrics" }],
   "r2_buckets": [
     // Read only, by convention: the monitor lists objects and never writes.
     { "binding": "LAKE", "bucket_name": "activity-hub-lake" },
