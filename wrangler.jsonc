@@ -49,9 +49,13 @@
     // windowed by date rather than by event, so a missed run costs nothing but
     // a wider next window.
     //
+    // It runs at :17 rather than :00. Trakt answered the first request of
+    // nearly every :00 invocation with a 429, which a per-IP limit shared with
+    // every other Worker scheduled on the hour would explain.
+    //
     // The nightly lake build sits off the hour so it never shares an instant
     // with a sync invocation. `LAKE_CRON` is the expression it dispatches on.
-    "crons": ["0 * * * *", "30 9 * * *"],
+    "crons": ["17 * * * *", "30 9 * * *"],
   },
   "d1_databases": [
     {

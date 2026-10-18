@@ -168,10 +168,10 @@ describe("GET /admin/sync", () => {
   });
 
   it("reports recent scheduled invocations", async () => {
-    await recordInvocation(env.DB, "0 * * * *", () => Promise.resolve());
+    await recordInvocation(env.DB, "17 * * * *", () => Promise.resolve());
 
     await expect((await get(authorization)).json()).resolves.toMatchObject({
-      invocations: [{ cron: "0 * * * *", error: null }],
+      invocations: [{ cron: "17 * * * *", error: null }],
     });
   });
 });

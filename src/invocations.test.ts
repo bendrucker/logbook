@@ -5,10 +5,10 @@ import { recentInvocations, recordInvocation } from "./invocations";
 
 describe("recordInvocation", () => {
   it("finishes the row with no error when the body succeeds", async () => {
-    await recordInvocation(env.DB, "0 * * * *", () => Promise.resolve());
+    await recordInvocation(env.DB, "17 * * * *", () => Promise.resolve());
 
     const [invocation] = await recentInvocations(env.DB, 10);
-    expect(invocation).toMatchObject({ cron: "0 * * * *", error: null });
+    expect(invocation).toMatchObject({ cron: "17 * * * *", error: null });
     expect(invocation?.finishedAt).not.toBeNull();
   });
 
@@ -30,7 +30,7 @@ describe("recordInvocation", () => {
   it("shows the invocation as unfinished while the body runs", async () => {
     let during: Awaited<ReturnType<typeof recentInvocations>> = [];
 
-    await recordInvocation(env.DB, "0 * * * *", async () => {
+    await recordInvocation(env.DB, "17 * * * *", async () => {
       during = await recentInvocations(env.DB, 10);
     });
 
@@ -40,7 +40,7 @@ describe("recordInvocation", () => {
   it("runs the body when the row cannot be written", async () => {
     let ran = false;
 
-    await recordInvocation(failingOn(env.DB, "invocations"), "0 * * * *", () => {
+    await recordInvocation(failingOn(env.DB, "invocations"), "17 * * * *", () => {
       ran = true;
       return Promise.resolve();
     });
@@ -59,7 +59,7 @@ describe("recordInvocation", () => {
 
   it("does not fail a clean body when the row cannot be finished", async () => {
     await expect(
-      recordInvocation(failingOn(env.DB, "UPDATE invocations"), "0 * * * *", () =>
+      recordInvocation(failingOn(env.DB, "UPDATE invocations"), "17 * * * *", () =>
         Promise.resolve(),
       ),
     ).resolves.toBeUndefined();
