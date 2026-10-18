@@ -1,0 +1,31 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "logbook-monitor",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  // Pinned so CI only needs CLOUDFLARE_API_TOKEN. Not a secret.
+  "account_id": "72bdc77341dc52a3cf4a94097f9ad96f",
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true,
+    },
+  },
+  "triggers": {
+    // Hourly, between the sync at :17 and the next one, so a probe never reads
+    // the lake mid-build. The nightly build lands around 09:30.
+    "crons": ["47 * * * *"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "logbook-monitor",
+      "database_id": "2343f150-97c8-42c9-afd9-1928f690cdd3",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    // Read only, by convention: the monitor lists objects and never writes.
+    { "binding": "LAKE", "bucket_name": "activity-hub-lake" },
+  ],
+}

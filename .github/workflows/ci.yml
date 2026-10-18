@@ -26,7 +26,7 @@ jobs:
       - run: bun run types
       - name: worker-configuration.d.ts is current
         run: |
-          git diff --exit-code -- worker-configuration.d.ts \
+          git diff --exit-code -- worker-configuration.d.ts workers/monitor/worker-configuration.d.ts \
             || { echo "::error::run 'bun run types' and commit the result"; exit 1; }
       - uses: j178/prek-action@v3.0.0
         env:
@@ -66,3 +66,9 @@ jobs:
       - if: steps.secret.outputs.present == 'true'
         name: Deploy worker
         run: bun run wrangler deploy
+      - if: steps.secret.outputs.present == 'true'
+        name: Apply monitor D1 migrations
+        run: bun run wrangler d1 migrations apply DB --remote --config workers/monitor/wrangler.jsonc
+      - if: steps.secret.outputs.present == 'true'
+        name: Deploy monitor
+        run: bun run wrangler deploy --config workers/monitor/wrangler.jsonc

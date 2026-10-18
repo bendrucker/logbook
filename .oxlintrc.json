@@ -2,7 +2,12 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   // Copied from bendrucker/claude's `lint/`, so a change to either layer belongs there first.
   "extends": ["./lint/base.json", "./lint/typescript.json"],
-  "ignorePatterns": ["worker-configuration.d.ts", ".wrangler/", "tmp/"],
+  "ignorePatterns": [
+    "worker-configuration.d.ts",
+    "workers/*/worker-configuration.d.ts",
+    ".wrangler/",
+    "tmp/"
+  ],
   "categories": {
     "correctness": "error",
     "suspicious": "error",

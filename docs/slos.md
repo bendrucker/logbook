@@ -1,11 +1,12 @@
 # SLOs
 
-Objectives and alerts for the data pipeline. This is a proposal: nothing evaluates or alerts on it yet, and the targets get calibrated once the probes have a few weeks of data.
+Objectives and alerts for the data pipeline. Nothing alerts yet. The monitor Worker in `workers/monitor` records the lake freshness probe hourly, and the targets get calibrated once the probes have a few weeks of data.
 
 ## Principles
 
 - Alert on symptoms a reader of the data would notice: data that stops arriving, or arrives with holes. A 429, a 5xx, or a skipped kind is a cause. Causes belong in an investigation, not in an alert.
-- The symptom check lives outside the pipeline. A monitor Worker, a separate application with its own repository and deploy, observes the published outputs and upstream truth. It never reads the pipeline's run log. If a refactor of logbook or activity-hub changes how runs are recorded, every alert keeps working, and the monitor can't share a bug with the code it watches.
+- Watch the outputs, not the intermediate inputs or outputs that cause them. Where an output can be observed in place, it is. A separate monitor Worker is the fallback for what can't be. Here that Worker is `logbook-monitor`, a second Worker in this repository that reads logbook's published lake tables and upstream truth and never reads the pipeline's run log. A refactor of how runs are recorded leaves every alert working, and the monitor can't share a bug with the code it watches.
+- Each application monitors itself. activity-hub watches its own outputs from its own repository, since what a deep enrichment pipeline must guarantee has little in common with what a many-vendor puller must.
 - Every alert is actionable or it gets deleted. A transient upstream failure that the next hour repairs never surfaces.
 - Failures with no known cause go to Claude, which reads the pipeline's internals and proposes a fix.
 
@@ -13,11 +14,11 @@ The internal SLIs in [slis.md](slis.md) (`sync_runs`, `invocations`, `sli_sample
 
 ## What the Monitor Observes
 
-The monitor binds the `LAKE` bucket read-only and calls each upstream's public API with its own credentials. That is all it touches. It has no binding to logbook's D1 and no knowledge of which Worker writes which table, so it covers activity-hub's tables under `lake/v1/` the same way it covers logbook's.
+The monitor binds the `LAKE` bucket, which it only lists and reads, and will call each upstream's public API with its own credentials. That is all it touches. It has no binding to logbook's D1. It finds tables by listing logbook's published prefixes (`github/v1/`, `trakt/v1/`, `instapaper/v1/`, `music/v1/`), so a table added to the build is probed without a change to the monitor. Results land in its own D1 database, `logbook-monitor`, as one `probes` row per output per run.
 
 | Probe             | Reads                                                                        | Good when                                                    | Cadence                      |
 | ----------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------- |
-| Lake freshness    | Each table's `part-0.parquet` `uploaded` time                                | Rewritten within 26h                                         | Hourly                       |
+| Lake freshness    | Each table's newest object `uploaded` time (built)                           | Rewritten within 26h                                         | Hourly                       |
 | Content freshness | The newest event upstream, and whether the lake holds it                     | Every upstream event older than the threshold is in the lake | Hourly                       |
 | Completeness      | Upstream counts for a closed window, compared with lake rows for that window | The counts match                                             | Daily                        |
 | End-to-end        | bendrucker.me's public pages, once the feed publishes there                  | The newest event a reader sees matches the lake              | Hourly, once the feed exists |
@@ -52,18 +53,12 @@ Each objective is measured over a rolling 28 days.
 
 When a stale alert has no obvious cause, Claude takes it on as well. It reads `sync_runs`, the run's trace, and the archived R2 pages, then opens a draft PR or comments on the issue with what it found.
 
-Alerts open a GitHub issue, labeled `pipeline-stale`, `pipeline-gap`, or `monitor-down`, on the repository that owns the table. An open issue for the same probe absorbs repeats, so one incident is one notification. A probe that recovers comments on the issue and closes it.
+Alerts open a GitHub issue, labeled `pipeline-stale`, `pipeline-gap`, or `monitor-down`, on this repository. An open issue for the same probe absorbs repeats, so one incident is one notification. A probe that recovers comments on the issue and closes it.
 
 Expected volume is near zero. Over the 28 days to 2026-10-18, run success was at least 99.85% for every GitHub kind. The two failures were 5xx responses that the next hour repaired, so none of them would have fired.
 
-## Decisions
+## Next
 
-These need Ben's call before anything is built. The recommendation comes first in each.
-
-1. **Where the monitor lives.**
-   - Recommended: a new repository, `bendrucker/monitor`, deployed on its own pipeline. It is the cleanest separation of concerns.
-   - Alternative: a second Worker under `workers/` in this repository. It means less to set up, but logbook's deploy then ships it, and the two share CI.
-2. **Upstream credentials.**
-   - Recommended: the monitor gets its own scopeless GitHub token, Trakt client ID, and Instapaper token, so it never shares a rate budget or a revocation with the pipeline. Its one request per source per hour won't dent any limit.
-3. **The issue-writing token.**
-   - Recommended: a fine-grained token limited to `issues: write` on the repositories that own tables, minted in `bendrucker/infrastructure`.
+1. **Content freshness and completeness.** These need the monitor's own upstream credentials, which keep it from sharing a rate budget or a revocation with the pipeline. It needs a scopeless GitHub token, the public Trakt client ID, and an Instapaper token, each set with `wrangler secret put --config workers/monitor/wrangler.jsonc`. Its one request per source per hour won't dent any limit.
+2. **Heartbeat.** Set `HEARTBEAT_URL` to a Healthchecks.io (or similar) ping URL, and the monitor pings it after every run.
+3. **Alerts.** Once the probes have a few weeks of clean data, add the evaluation and the issue writer. That needs a fine-grained token limited to `issues: write` on this repository, minted in `bendrucker/infrastructure`.
