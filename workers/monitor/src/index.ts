@@ -1,6 +1,6 @@
 import { tracing } from "cloudflare:workers";
 import { deliver, evaluateAlerts } from "./alerts";
-import { collectLake, recordMetrics } from "./metrics";
+import { collectLake, exportMetrics, recordMetrics } from "./metrics";
 import { rules } from "./rules";
 
 export default {
@@ -12,6 +12,7 @@ export default {
       const now = new Date();
       const metrics = await collectLake(env.LAKE, now);
       await recordMetrics(env.DB, now, metrics);
+      exportMetrics(env.METRICS, metrics);
       const changes = await evaluateAlerts(env.DB, parsed, metrics, now);
       for (const change of changes) {
         deliver(change);
