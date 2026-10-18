@@ -11,7 +11,7 @@ Cloudflare Workers (TypeScript), Bun, Wrangler. Storage: D1 (`DB`), R2 (`RAW` fo
 ## Commands
 
 - `bun run typecheck`: `tsc --noEmit` over `src/` and `test/`, then over `scripts/` under its own tsconfig
-- `bun run test`: runs `vitest run` (uses `@cloudflare/vitest-pool-workers`, config in `vitest.config.ts`)
+- `bun run test`: runs `vitest run` (uses `@cloudflare/vitest-plugin`, config in `vitest.config.ts`)
 - `bun run lint`: runs `oxlint --type-aware --report-unused-disable-directives` over the layers in `lint/`, copied from [bendrucker/claude](https://github.com/bendrucker/claude)
 - `bun run backfill <base-url> [kind]`: drives `POST /admin/backfill` to completion, reading `ADMIN_TOKEN` from the environment
 - `bun run import:apple-music <dir> <base-url>`: imports an Apple privacy export's `Apple Music Activity` folder through `POST /admin/import/apple-music`, reading `ADMIN_TOKEN` from the environment. `--out <dir>` writes the pages instead
