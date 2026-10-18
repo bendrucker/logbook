@@ -103,12 +103,12 @@ GROUP BY kind, reason;
 
 ## Invocation Coverage
 
-Good: hours holding a finished hourly invocation, failed or not. Valid: hours elapsed. A missing hour is a cron that never fired or an invocation that died before finishing. Run success already counts the failures.
+Good: hours holding a finished hourly invocation, failed or not. The filter excludes the nightly lake cron rather than naming the hourly one, so the window survives a change to the hourly expression. Valid: hours elapsed. A missing hour is a cron that never fired or an invocation that died before finishing. Run success already counts the failures.
 
 ```sql
 SELECT ROUND(COUNT(DISTINCT substr(started_at, 1, 13)) / (7 * 24.0), 4) AS coverage
 FROM invocations
-WHERE cron = '0 * * * *' AND finished_at IS NOT NULL
+WHERE cron <> '30 9 * * *' AND finished_at IS NOT NULL
   AND started_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days');
 ```
 

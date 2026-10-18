@@ -57,7 +57,7 @@ describe("scheduled", () => {
     });
     vi.stubGlobal("fetch", fetch);
 
-    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
+    await worker.scheduled(createScheduledController({ cron: "17 * * * *" }), env);
 
     expect(toGitHub(requests)).toHaveLength(2);
     expect(await recentRuns(env.DB, "issue", 1)).toMatchObject([{ pages: 1, error: null }]);
@@ -74,11 +74,11 @@ describe("scheduled", () => {
     );
     vi.stubGlobal("fetch", fetch);
 
-    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
+    await worker.scheduled(createScheduledController({ cron: "17 * * * *" }), env);
 
     expect(await recentRuns(env.DB, "issue", 1)).toMatchObject([{ outcome: "failed" }]);
     const [invocation] = await recentInvocations(env.DB, 1);
-    expect(invocation).toMatchObject({ cron: "0 * * * *", error: null });
+    expect(invocation).toMatchObject({ cron: "17 * * * *", error: null });
     expect(invocation?.finishedAt).not.toBeNull();
     const { results } = await env.DB.prepare("SELECT kind FROM sli_samples ORDER BY kind").all();
     expect(results).toEqual([{ kind: "issue" }, { kind: "lake" }, { kind: "trakt-ratings" }]);
@@ -88,7 +88,7 @@ describe("scheduled", () => {
     const { fetch } = stubFetch(() => traktResponse([], null));
     vi.stubGlobal("fetch", fetch);
 
-    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), {
+    await worker.scheduled(createScheduledController({ cron: "17 * * * *" }), {
       ...env,
       DB: failingOn(env.DB, "sli_samples"),
     });
@@ -102,7 +102,7 @@ describe("scheduled", () => {
     const { fetch, requests } = stubFetch(() => traktResponse([], null));
     vi.stubGlobal("fetch", fetch);
 
-    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
+    await worker.scheduled(createScheduledController({ cron: "17 * * * *" }), env);
 
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/users/bendrucker/ratings",
@@ -113,7 +113,7 @@ describe("scheduled", () => {
   it("records a skip rather than a run while the GitHub token is unset", async () => {
     await advance(env.DB, "issue", "2026-09-09T10:00:00.000Z", "2026-09-09T10:00:00Z");
 
-    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
+    await worker.scheduled(createScheduledController({ cron: "17 * * * *" }), env);
 
     expect(await recentRuns(env.DB, "issue", 2)).toMatchObject([
       { outcome: "skipped", reason: "skip.missing_secret", pages: 0 },
