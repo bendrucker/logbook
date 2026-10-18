@@ -1,5 +1,6 @@
 import { RequestCap } from "../request-cap";
 import { MissingSecretError } from "../sync/run";
+import { recordSkip } from "../sync/runs";
 import { advance, readWatermark } from "../sync/state";
 import { drainInstapaper, type InstapaperInvocationOptions, requeueHighlights } from "./backfill";
 import { instapaperToken, type InstapaperSyncOptions, syncChanges, syncFolders } from "./sync";
@@ -15,6 +16,12 @@ export async function syncInstapaper(
   options: InstapaperInvocationOptions = {},
 ): Promise<void> {
   if (!configured(env)) {
+    await recordSkip(
+      env.DB,
+      "instapaper-bookmarks",
+      "skip.missing_secret",
+      options.now?.toISOString(),
+    );
     return;
   }
   // Each run stamps its own time, so the order pages were fetched in is the
@@ -56,6 +63,7 @@ async function syncBookmarks(
     // A listing from nothing would read the whole account, which is what a
     // backfill does under a frontier that survives a limit.
     console.log("instapaper-bookmarks has no watermark, so a backfill owns its first read");
+    await recordSkip(env.DB, "instapaper-bookmarks", "skip.no_watermark", started.toISOString());
     return false;
   }
 

@@ -131,7 +131,9 @@ describe("syncIncremental", () => {
 
     expect(requests).toHaveLength(1);
     expect(await count("commit_days")).toEqual({ total: 1 });
-    expect(await recentRuns(env.DB, "pr-authored", 1)).toEqual([]);
+    expect(await recentRuns(env.DB, "pr-authored", 2)).toMatchObject([
+      { outcome: "skipped", reason: "skip.no_watermark" },
+    ]);
   });
 
   it("stops the invocation when the budget refuses a kind", async () => {
@@ -156,8 +158,11 @@ describe("syncIncremental", () => {
     const [refused] = await recentRuns(env.DB, "issue", 1);
     expect(refused).toMatchObject({ pages: 0, cost: 0 });
     expect(refused?.error).toContain("BudgetRefused");
+    expect(refused).toMatchObject({ outcome: "rate_limited", reason: "rate_limit.budget" });
     expect(await readWatermark(env.DB, "issue")).toMatchObject({ window: WATERMARK });
-    expect(await recentRuns(env.DB, "contributions", 1)).toEqual([]);
+    expect(await recentRuns(env.DB, "contributions", 2)).toMatchObject([
+      { outcome: "skipped", reason: "skip.rate_limited" },
+    ]);
   });
 
   it("drains backfill windows with what the incremental work left", async () => {

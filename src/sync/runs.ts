@@ -1,4 +1,6 @@
+import { tracing } from "cloudflare:workers";
 import { byKind, SYNC_KINDS, type SyncKind } from "./kinds";
+import type { Classified, Outcome, Reason } from "./outcome";
 
 export interface SyncRun {
   id: number;
@@ -15,6 +17,11 @@ export interface SyncRun {
   note: string | null;
   cost: number;
   rateRemaining: number | null;
+  // Null while the run is in flight, and for a run that died before it
+  // finished.
+  outcome: Outcome | null;
+  reason: Reason | null;
+  resumeAt: string | null;
 }
 
 export interface RunResult {
@@ -45,10 +52,14 @@ interface RunRow {
   note: string | null;
   cost: number;
   rate_remaining: number | null;
+  outcome: Outcome | null;
+  reason: Reason | null;
+  resume_at: string | null;
 }
 
 const selection =
-  "SELECT id, kind, window, started_at, finished_at, pages, rows_changed, truncated, error, note, cost, rate_remaining FROM sync_runs";
+  "SELECT id, kind, window, started_at, finished_at, pages, rows_changed, truncated, error, note, cost, rate_remaining," +
+  " outcome, reason, resume_at FROM sync_runs";
 
 export async function startRun(
   db: D1Database,
@@ -69,12 +80,13 @@ export async function finishRun(
   db: D1Database,
   id: number,
   result: RunResult,
+  ended: Classified & { resumeAt: string | null },
   at: string = new Date().toISOString(),
 ): Promise<void> {
   await db
     .prepare(
       "UPDATE sync_runs SET finished_at = ?2, pages = ?3, rows_changed = ?4, truncated = ?5, error = ?6, note = ?7," +
-        " cost = ?8, rate_remaining = ?9" +
+        " cost = ?8, rate_remaining = ?9, outcome = ?10, reason = ?11, resume_at = ?12" +
         " WHERE id = ?1",
     )
     .bind(
@@ -87,8 +99,36 @@ export async function finishRun(
       result.note,
       result.cost,
       result.rateRemaining,
+      ended.outcome,
+      ended.reason,
+      ended.resumeAt,
     )
     .run();
+}
+
+// A kind the invocation passed over still leaves a row, so a kind that stops
+// running shows as skipped rather than as silence. The window is empty because
+// no window was chosen.
+export async function recordSkip(
+  db: D1Database,
+  kind: SyncKind,
+  reason: Reason,
+  at: string = new Date().toISOString(),
+): Promise<void> {
+  await tracing.enterSpan("logbook.skip", async (span) => {
+    span.setAttributes({
+      "logbook.kind": kind,
+      "logbook.outcome": "skipped",
+      "logbook.reason": reason,
+    });
+    await db
+      .prepare(
+        "INSERT INTO sync_runs (kind, window, started_at, finished_at, outcome, reason)" +
+          " VALUES (?1, '', ?2, ?2, 'skipped', ?3)",
+      )
+      .bind(kind, at, reason)
+      .run();
+  });
 }
 
 export interface RunSpend {
@@ -132,7 +172,7 @@ export async function recentRuns(
 
 export async function recentFailures(db: D1Database, limit: number): Promise<SyncRun[]> {
   const { results } = await db
-    .prepare(`${selection} WHERE error IS NOT NULL ORDER BY started_at DESC, id DESC LIMIT ?`)
+    .prepare(`${selection} WHERE outcome = 'failed' ORDER BY started_at DESC, id DESC LIMIT ?`)
     .bind(limit)
     .all<RunRow>();
   return results.map(toRun);
@@ -152,5 +192,8 @@ function toRun(row: RunRow): SyncRun {
     note: row.note,
     cost: row.cost,
     rateRemaining: row.rate_remaining,
+    outcome: row.outcome,
+    reason: row.reason,
+    resumeAt: row.resume_at,
   };
 }

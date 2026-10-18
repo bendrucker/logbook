@@ -1,6 +1,7 @@
 import { frontierStatus } from "../sync/frontier";
 import type { TraktKind } from "../sync/kinds";
 import type { SyncResult } from "../sync/run";
+import { recordSkip } from "../sync/runs";
 import { readWatermark } from "../sync/state";
 import { drainTraktHistory } from "./backfill";
 import { RequestCap } from "../request-cap";
@@ -30,6 +31,7 @@ export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}):
   // first stop ends the invocation.
   const history = await contained("trakt-history", syncHistory(env, sync));
   if (history?.resumeAt != null) {
+    await recordSkip(env.DB, "trakt-ratings", "skip.rate_limited", now.toISOString());
     return;
   }
   const ratings = await contained("trakt-ratings", syncRatings(env, sync));
@@ -70,6 +72,7 @@ async function syncHistory(
   if (watermark === null) {
     // Anchoring at now would declare every earlier play synced.
     console.log("trakt-history has no watermark, so a backfill owns its first window");
+    await recordSkip(env.DB, "trakt-history", "skip.no_watermark", options.now.toISOString());
     return null;
   }
   // A backfill that stopped partway leaves the watermark at the end of the last
@@ -77,6 +80,7 @@ async function syncHistory(
   // hour. The drain reads those years one at a time instead.
   if (((await frontierStatus(env.DB)).get("trakt-history")?.pending ?? 0) > 0) {
     console.log("trakt-history years are still enqueued, so the drain reads them");
+    await recordSkip(env.DB, "trakt-history", "skip.backfill_pending", options.now.toISOString());
     return null;
   }
   const since = new Date(Date.parse(watermark.window) - OVERLAP_MS).toISOString();

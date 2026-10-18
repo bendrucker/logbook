@@ -7,6 +7,7 @@ import {
 import { drainBackfill } from "./backfill";
 import { BACKFILL_SPACING_MS, type Budget, openBudget, syncLimits } from "./budget";
 import { SEARCH_KINDS, type SyncKind } from "./kinds";
+import type { Reason } from "./outcome";
 import {
   githubToken,
   type InvocationOptions,
@@ -15,6 +16,7 @@ import {
   type SyncResult,
   syncWindow,
 } from "./run";
+import { recordSkip } from "./runs";
 import { readWatermark } from "./state";
 
 // GitHub's search index lags writes by an unspecified interval, so the window
@@ -34,6 +36,7 @@ export async function syncIncremental(env: Env, options: InvocationOptions = {})
     // A cron that throws retries on the next hour and reports nothing useful in
     // between, and no amount of retrying sets a secret.
     console.error(error.message);
+    await skipAll(env, [...SEARCH_KINDS, "contributions"], "skip.missing_secret", now);
     return;
   }
 
@@ -43,10 +46,13 @@ export async function syncIncremental(env: Env, options: InvocationOptions = {})
   // The kinds run one after another so the budget limit the first one reaches
   // stops the invocation, rather than three concurrent runs each spending their
   // way to the same discovery.
-  for (const kind of SEARCH_KINDS) {
+  for (const [index, kind] of SEARCH_KINDS.entries()) {
     // oxlint-disable-next-line no-await-in-loop -- the first kind the budget refuses ends the invocation
     const result = await contained(kind, syncKind(env, kind, sync));
     if (result !== null && result.resumeAt !== null) {
+      const rest = [...SEARCH_KINDS.slice(index + 1), "contributions"] as const;
+      // oxlint-disable-next-line no-await-in-loop -- runs once, on the way out of the loop
+      await skipAll(env, rest, "skip.rate_limited", now);
       return;
     }
   }
@@ -76,6 +82,15 @@ export async function syncIncremental(env: Env, options: InvocationOptions = {})
   }
 }
 
+async function skipAll(
+  env: Env,
+  kinds: readonly SyncKind[],
+  reason: Reason,
+  now: Date,
+): Promise<void> {
+  await Promise.all(kinds.map((kind) => recordSkip(env.DB, kind, reason, now.toISOString())));
+}
+
 // One kind's storage failure is not the other kinds' problem, and a throw here
 // would end the invocation before they ran.
 async function contained(
@@ -101,6 +116,7 @@ async function syncKind(
     // Anchoring at now would declare every event before this invocation synced
     // and leave the history unreachable except by replay.
     console.log(`${kind} has no watermark, so a backfill owns its first window`);
+    await recordSkip(env.DB, kind, "skip.no_watermark", now.toISOString());
     return null;
   }
 

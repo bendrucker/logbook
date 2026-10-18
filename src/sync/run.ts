@@ -1,3 +1,4 @@
+import { tracing } from "cloudflare:workers";
 import { GitHubResponseError, type GraphQLOptions, SecondaryRateLimited } from "../github/client";
 import {
   type ContributionsWindow,
@@ -27,6 +28,7 @@ import { type Budget, BudgetRefused, type Clock } from "./budget";
 import { archivedYear, crossCheck } from "./cross-check";
 import { recordIrreducible } from "./frontier";
 import type { SyncKind } from "./kinds";
+import { type Classified, classify, OK } from "./outcome";
 import { finishRun, type RunResult, startRun } from "./runs";
 import { RequestCapReached } from "../request-cap";
 import { advance } from "./state";
@@ -161,8 +163,10 @@ export interface Run {
 }
 
 // One `sync_runs` row around `body`: a failure becomes the run's error, and
-// the run records what it spent whether or not it finished.
-export async function recordRun(
+// the run records what it spent whether or not it finished. The span carries
+// the same fields as the row, so a trace and the run log answer alike, and the
+// platform's fetch, D1, and R2 spans nest under it.
+export function recordRun(
   env: Env,
   kind: SyncKind,
   window: string,
@@ -170,27 +174,49 @@ export async function recordRun(
   body: (run: Run) => Promise<void>,
   onFailure: (error: unknown, run: Run) => Promise<unknown>,
 ): Promise<SyncResult> {
-  const now = options.now ?? new Date();
-  const run: Run = { now, fetchedAt: now.toISOString(), result: CLEAN };
-  const id = await startRun(env.DB, kind, window, run.fetchedAt);
-  const { budget } = options;
-  const spent = budget?.spent ?? 0;
-  let resumeAt: string | null = null;
+  return tracing.enterSpan("logbook.run", async (span) => {
+    const now = options.now ?? new Date();
+    const run: Run = { now, fetchedAt: now.toISOString(), result: CLEAN };
+    const id = await startRun(env.DB, kind, window, run.fetchedAt);
+    const { budget } = options;
+    const spent = budget?.spent ?? 0;
+    let resumeAt: string | null = null;
+    let ended: Classified = OK;
+    span.setAttributes({ "logbook.kind": kind, "logbook.window": window, "logbook.run_id": id });
 
-  try {
-    await body(run);
-  } catch (error) {
-    run.result = { ...run.result, error: describe(error) };
-    resumeAt = stoppedUntil(error, now);
-    await onFailure(error, run);
-  } finally {
-    if (budget !== undefined) {
-      run.result = charged(run.result, budget, spent);
+    try {
+      await body(run);
+    } catch (error) {
+      run.result = { ...run.result, error: describe(error) };
+      resumeAt = stoppedUntil(error, now);
+      ended = classify(error);
+      // `error.type` is OpenTelemetry's attribute for an operation that ended
+      // in error. `recordException` would say the same, but the workerd the
+      // tests run on predates it.
+      span.setAttributes({
+        "error.type": error instanceof Error ? error.name : "unknown",
+        "logbook.error": run.result.error ?? undefined,
+      });
+      await onFailure(error, run);
+    } finally {
+      if (budget !== undefined) {
+        run.result = charged(run.result, budget, spent);
+      }
+      await finishRun(env.DB, id, run.result, { ...ended, resumeAt });
+      span.setAttributes({
+        "logbook.outcome": ended.outcome,
+        "logbook.reason": ended.reason ?? undefined,
+        "logbook.resume_at": resumeAt ?? undefined,
+        "logbook.pages": run.result.pages,
+        "logbook.rows_changed": run.result.rowsChanged,
+        "logbook.truncated": run.result.truncated,
+        "logbook.cost": run.result.cost,
+        "logbook.rate_remaining": run.result.rateRemaining ?? undefined,
+      });
     }
-    await finishRun(env.DB, id, run.result);
-  }
 
-  return { ...run.result, fetchedAt: run.fetchedAt, resumeAt };
+    return { ...run.result, fetchedAt: run.fetchedAt, resumeAt };
+  });
 }
 
 // A truncated window is fetched again a narrower window at a time, down the
