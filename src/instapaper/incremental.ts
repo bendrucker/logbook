@@ -34,7 +34,7 @@ export async function syncInstapaper(
   try {
     stopped = await syncBookmarks(env, { ...client, requests }, now);
   } catch (error) {
-    console.error(`instapaper-bookmarks sync failed: ${String(error)}`);
+    console.error({ event: "sync.failed", kind: "instapaper-bookmarks", error: String(error) });
   }
   if (stopped) {
     return;
@@ -47,7 +47,7 @@ export async function syncInstapaper(
     }
     await drainInstapaper(env, "instapaper-highlights", { ...client, requests });
   } catch (error) {
-    console.error(`instapaper drain failed: ${String(error)}`);
+    console.error({ event: "backfill.drain_failed", source: "instapaper", error: String(error) });
   }
 }
 
@@ -62,7 +62,11 @@ async function syncBookmarks(
   if (watermark === null) {
     // A listing from nothing would read the whole account, which is what a
     // backfill does under a frontier that survives a limit.
-    console.log("instapaper-bookmarks has no watermark, so a backfill owns its first read");
+    console.log({
+      event: "sync.skipped",
+      kind: "instapaper-bookmarks",
+      reason: "skip.no_watermark",
+    });
     await recordSkip(env.DB, "instapaper-bookmarks", "skip.no_watermark", started.toISOString());
     return false;
   }
@@ -92,7 +96,12 @@ function configured(env: Env): boolean {
     if (!(error instanceof MissingSecretError)) {
       throw error;
     }
-    console.error(error.message);
+    console.error({
+      event: "sync.skipped",
+      kind: "instapaper-bookmarks",
+      reason: "skip.missing_secret",
+      error: error.message,
+    });
     return false;
   }
 }

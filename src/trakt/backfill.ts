@@ -79,7 +79,11 @@ export async function drainTraktHistory(
 ): Promise<void> {
   const drained = await drain(env.DB, "trakt-history", historySource(env, options));
   if (drained.error !== null) {
-    console.error(`trakt-history backfill drain stopped: ${drained.error}`);
+    console.error({
+      event: "backfill.drain_stopped",
+      kind: "trakt-history",
+      error: drained.error,
+    });
   }
 }
 

@@ -9,7 +9,9 @@ import {
   searchPayload,
 } from "../test/github-fixtures";
 import { emptyBucket } from "../test/r2";
+import { failingOn } from "../test/tables";
 import worker from "./index";
+import { recentInvocations } from "./invocations";
 import { LAKE_CRON, readLatestBuild } from "./lake";
 import { recentRuns } from "./sync/runs";
 import { advance, readWatermark } from "./sync/state";
@@ -62,6 +64,40 @@ describe("scheduled", () => {
     expect(await recentRuns(env.DB, "contributions", 1)).toMatchObject([{ error: null }]);
   });
 
+  it("records the invocation and samples freshness after a failed run", async () => {
+    env.GITHUB_TOKEN = "token";
+    await advance(env.DB, "issue", "2026-09-09T10:00:00.000Z", "2026-09-09T10:00:00Z");
+    const { fetch } = stubFetch((request) =>
+      new URL(request.url).hostname === "api.github.com"
+        ? new Response("unavailable", { status: 503 })
+        : traktResponse([], null),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), env);
+
+    expect(await recentRuns(env.DB, "issue", 1)).toMatchObject([{ outcome: "failed" }]);
+    const [invocation] = await recentInvocations(env.DB, 1);
+    expect(invocation).toMatchObject({ cron: "0 * * * *", error: null });
+    expect(invocation?.finishedAt).not.toBeNull();
+    const { results } = await env.DB.prepare("SELECT kind FROM sli_samples ORDER BY kind").all();
+    expect(results).toEqual([{ kind: "issue" }, { kind: "lake" }, { kind: "trakt-ratings" }]);
+  });
+
+  it("does not fail a clean invocation when the freshness sample fails", async () => {
+    const { fetch } = stubFetch(() => traktResponse([], null));
+    vi.stubGlobal("fetch", fetch);
+
+    await worker.scheduled(createScheduledController({ cron: "0 * * * *" }), {
+      ...env,
+      DB: failingOn(env.DB, "sli_samples"),
+    });
+
+    const [invocation] = await recentInvocations(env.DB, 1);
+    expect(invocation).toMatchObject({ error: null });
+    expect(invocation?.finishedAt).not.toBeNull();
+  });
+
   it("syncs Trakt beside GitHub on the same cron", async () => {
     const { fetch, requests } = stubFetch(() => traktResponse([], null));
     vi.stubGlobal("fetch", fetch);
@@ -108,6 +144,7 @@ describe("the nightly lake cron", () => {
     await worker.scheduled(createScheduledController({ cron: LAKE_CRON }), env);
 
     expect(toGitHub(requests)).toEqual([]);
+    expect(await recentInvocations(env.DB, 1)).toMatchObject([{ cron: LAKE_CRON, error: null }]);
     // `buildLake` finishes the row only once every table is in R2, so a build
     // that carries counts and no error is one that wrote.
     expect(await readLatestBuild(env.DB)).toMatchObject({

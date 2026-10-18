@@ -69,6 +69,8 @@ describe("syncHistoryWindow", () => {
     expect(await count("trakt_plays")).toEqual({ total: 2 });
     expect(await count("trakt_titles")).toEqual({ total: 3 });
     expect((await readWatermark(env.DB, "trakt-history"))?.window).toBe(NOW.toISOString());
+    const [recorded] = await recentRuns(env.DB, "trakt-history", 1);
+    expect(recorded).toMatchObject({ requests: 2, rateLimitedRequests: 0 });
   });
 
   it("finishes a window Trakt reports as zero pages on its first request", async () => {
@@ -129,7 +131,22 @@ describe("syncHistoryWindow", () => {
     expect(readMetadata(failed?.customMetadata).status).toBe(429);
     expect(await readWatermark(env.DB, "trakt-history")).toBeNull();
     const [recorded] = await recentRuns(env.DB, "trakt-history", 1);
-    expect(recorded).toMatchObject({ pages: 1, cost: 0 });
+    expect(recorded).toMatchObject({ pages: 1, cost: 0, requests: 2, rateLimitedRequests: 1 });
+  });
+
+  it("counts only its own requests against a cap other runs already spent from", async () => {
+    const requests = new RequestCap(10);
+    requests.admit();
+    requests.limited();
+    const trakt = stubTrakt([() => traktResponse([])]);
+
+    const run = await syncHistoryWindow(env, yearWindow(2026, NOW, true), {
+      fetch: trakt.fetch,
+      now: NOW,
+      requests,
+    });
+
+    expect(run).toMatchObject({ requests: 1, rateLimitedRequests: 0 });
   });
 
   it("stops at the request cap without sending the request past it", async () => {

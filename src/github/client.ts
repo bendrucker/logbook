@@ -49,6 +49,11 @@ export class GraphQLQueryError extends GitHubResponseError {
     this.errors = errors;
     this.rateLimit = rateLimit;
   }
+
+  // GitHub reports an exhausted primary limit as a GraphQL error in a 200 body.
+  get rateLimited(): boolean {
+    return this.errors.some((error) => error.type === "RATE_LIMITED");
+  }
 }
 
 // GitHub's secondary limits answer 403 or 429, usually naming how long to back
@@ -118,6 +123,8 @@ export interface RequestBudget {
   // Resolves once the request may go out, or throws to refuse it.
   admit(): Promise<void>;
   spend(reading: RateLimit): void;
+  // Told of a response that refused the request on a rate limit.
+  limited(): void;
 }
 
 export interface GraphQLOptions {
@@ -172,7 +179,12 @@ export async function graphql(
 
   const body = await response.text();
   if (!response.ok) {
-    throw secondaryLimit(response, body) ?? new GitHubHttpError(response.status, body);
+    const limit = secondaryLimit(response, body);
+    // A 429 is a rate limit whether or not it reads as a secondary one.
+    if (limit !== null || response.status === 429) {
+      options.budget?.limited();
+    }
+    throw limit ?? new GitHubHttpError(response.status, body);
   }
 
   const parsed = validate(envelope, parseJson(body), body);
@@ -181,11 +193,15 @@ export async function graphql(
     if (reported.success) {
       options.budget?.spend(reported.data.rateLimit);
     }
-    throw new GraphQLQueryError(
+    const error = new GraphQLQueryError(
       parsed.errors,
       body,
       reported.success ? reported.data.rateLimit : null,
     );
+    if (error.rateLimited) {
+      options.budget?.limited();
+    }
+    throw error;
   }
 
   const { rateLimit } = validate(rateLimitResponse, parsed.data, body);

@@ -96,7 +96,7 @@ export async function drainBackfill(env: Env, options: SyncOptions): Promise<voi
     // oxlint-disable-next-line no-await-in-loop -- the first kind a limit refuses ends the drain
     const drained = await drain(env.DB, kind, crawlSource(env, kind, options));
     if (drained.error !== null) {
-      console.error(`${kind} backfill drain stopped: ${drained.error}`);
+      console.error({ event: "backfill.drain_stopped", kind, error: drained.error });
     }
     if (drained.resumeAt !== null) {
       return;

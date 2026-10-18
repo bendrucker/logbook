@@ -44,7 +44,7 @@ export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}):
   try {
     await drainTraktHistory(env, { ...options, requests });
   } catch (error) {
-    console.error(`trakt-history backfill drain failed: ${String(error)}`);
+    console.error({ event: "backfill.drain_failed", kind: "trakt-history", error: String(error) });
   }
 }
 
@@ -71,7 +71,7 @@ async function syncHistory(
   const watermark = await readWatermark(env.DB, "trakt-history");
   if (watermark === null) {
     // Anchoring at now would declare every earlier play synced.
-    console.log("trakt-history has no watermark, so a backfill owns its first window");
+    console.log({ event: "sync.skipped", kind: "trakt-history", reason: "skip.no_watermark" });
     await recordSkip(env.DB, "trakt-history", "skip.no_watermark", options.now.toISOString());
     return null;
   }
@@ -79,7 +79,7 @@ async function syncHistory(
   // year it finished, and a window from there to now can outgrow the cap every
   // hour. The drain reads those years one at a time instead.
   if (((await frontierStatus(env.DB)).get("trakt-history")?.pending ?? 0) > 0) {
-    console.log("trakt-history years are still enqueued, so the drain reads them");
+    console.log({ event: "sync.skipped", kind: "trakt-history", reason: "skip.backfill_pending" });
     await recordSkip(env.DB, "trakt-history", "skip.backfill_pending", options.now.toISOString());
     return null;
   }
@@ -95,7 +95,7 @@ async function contained(
   try {
     return await run;
   } catch (error) {
-    console.error(`${kind} sync failed: ${String(error)}`);
+    console.error({ event: "sync.failed", kind, error: String(error) });
     return null;
   }
 }

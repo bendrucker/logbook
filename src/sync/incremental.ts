@@ -35,7 +35,12 @@ export async function syncIncremental(env: Env, options: InvocationOptions = {})
     }
     // A cron that throws retries on the next hour and reports nothing useful in
     // between, and no amount of retrying sets a secret.
-    console.error(error.message);
+    console.error({
+      event: "sync.skipped",
+      source: "github",
+      reason: "skip.missing_secret",
+      error: error.message,
+    });
     await skipAll(env, [...SEARCH_KINDS, "contributions"], "skip.missing_secret", now);
     return;
   }
@@ -78,7 +83,7 @@ export async function syncIncremental(env: Env, options: InvocationOptions = {})
       }),
     });
   } catch (error) {
-    console.error(`backfill drain failed: ${String(error)}`);
+    console.error({ event: "backfill.drain_failed", source: "github", error: String(error) });
   }
 }
 
@@ -100,7 +105,7 @@ async function contained(
   try {
     return await run;
   } catch (error) {
-    console.error(`${kind} sync failed: ${String(error)}`);
+    console.error({ event: "sync.failed", kind, error: String(error) });
     return null;
   }
 }
@@ -115,7 +120,7 @@ async function syncKind(
   if (watermark === null) {
     // Anchoring at now would declare every event before this invocation synced
     // and leave the history unreachable except by replay.
-    console.log(`${kind} has no watermark, so a backfill owns its first window`);
+    console.log({ event: "sync.skipped", kind, reason: "skip.no_watermark" });
     await recordSkip(env.DB, kind, "skip.no_watermark", now.toISOString());
     return null;
   }

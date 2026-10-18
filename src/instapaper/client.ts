@@ -108,7 +108,11 @@ export class InstapaperClient {
     try {
       await request(this.#sdk);
     } catch (error) {
-      throw failure(error, this.#take());
+      const mapped = failure(error, this.#take());
+      if (mapped instanceof InstapaperRateLimited) {
+        this.#requests?.limited();
+      }
+      throw mapped;
     }
     const exchange = this.#take();
     if (exchange === null) {

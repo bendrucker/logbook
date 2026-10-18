@@ -30,7 +30,7 @@ import { recordIrreducible } from "./frontier";
 import type { SyncKind } from "./kinds";
 import { type Classified, classify, OK } from "./outcome";
 import { finishRun, type RunResult, startRun } from "./runs";
-import { RequestCapReached } from "../request-cap";
+import { RequestCapReached, type RequestTally } from "../request-cap";
 import { advance } from "./state";
 
 export class MissingSecretError extends Error {
@@ -68,10 +68,12 @@ export interface InvocationOptions extends GraphQLOptions {
   clock?: Clock;
 }
 
-// A source without a point budget records no cost.
+// A source without a point budget records no cost. One without either records
+// no requests.
 export interface RunOptions {
   now?: Date;
   budget?: Budget;
+  requests?: RequestTally;
 }
 
 export interface SyncOptions extends GraphQLOptions, RunOptions {
@@ -97,6 +99,8 @@ export const CLEAN: RunResult = {
   note: null,
   cost: 0,
   rateRemaining: null,
+  requests: 0,
+  rateLimitedRequests: 0,
 };
 
 export async function syncWindow(
@@ -180,6 +184,9 @@ export function recordRun(
     const id = await startRun(env.DB, kind, window, run.fetchedAt);
     const { budget } = options;
     const spent = budget?.spent ?? 0;
+    const tally = budget ?? options.requests;
+    const sent = tally?.sent ?? 0;
+    const rateLimited = tally?.rateLimited ?? 0;
     let resumeAt: string | null = null;
     let ended: Classified = OK;
     span.setAttributes({ "logbook.kind": kind, "logbook.window": window, "logbook.run_id": id });
@@ -202,6 +209,13 @@ export function recordRun(
       if (budget !== undefined) {
         run.result = charged(run.result, budget, spent);
       }
+      if (tally !== undefined) {
+        run.result = {
+          ...run.result,
+          requests: tally.sent - sent,
+          rateLimitedRequests: tally.rateLimited - rateLimited,
+        };
+      }
       await finishRun(env.DB, id, run.result, { ...ended, resumeAt });
       span.setAttributes({
         "logbook.outcome": ended.outcome,
@@ -212,6 +226,8 @@ export function recordRun(
         "logbook.truncated": run.result.truncated,
         "logbook.cost": run.result.cost,
         "logbook.rate_remaining": run.result.rateRemaining ?? undefined,
+        "logbook.requests": run.result.requests,
+        "logbook.rate_limited_requests": run.result.rateLimitedRequests,
       });
     }
 

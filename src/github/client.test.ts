@@ -21,6 +21,7 @@ function options(fetch: typeof globalThis.fetch): GraphQLOptions {
 function recordingBudget(refusal?: Error) {
   const admitted: number[] = [];
   const readings: RateLimit[] = [];
+  let limited = 0;
   const budget: RequestBudget = {
     admit: () => {
       if (refusal !== undefined) {
@@ -32,8 +33,11 @@ function recordingBudget(refusal?: Error) {
     spend: (reading) => {
       readings.push(reading);
     },
+    limited: () => {
+      limited += 1;
+    },
   };
-  return { budget, admitted, readings };
+  return { budget, admitted, readings, limited: () => limited };
 }
 
 describe("graphql", () => {
@@ -188,6 +192,44 @@ describe("graphql", () => {
     expect(thrown).toBeInstanceOf(GitHubHttpError);
     expect(thrown).not.toBeInstanceOf(SecondaryRateLimited);
   });
+
+  it.each([
+    {
+      name: "a secondary limit",
+      response: () =>
+        new Response("secondary rate limit", { status: 403, headers: { "Retry-After": "60" } }),
+      limited: 1,
+    },
+    { name: "a bare 429", response: () => new Response("slow down", { status: 429 }), limited: 1 },
+    {
+      name: "a 403 that names no limit",
+      response: () => new Response("Resource not accessible", { status: 403 }),
+      limited: 0,
+    },
+    {
+      name: "a RATE_LIMITED GraphQL error",
+      response: () =>
+        jsonResponse({ errors: [{ message: "API rate limit exceeded", type: "RATE_LIMITED" }] }),
+      limited: 1,
+    },
+    {
+      name: "a GraphQL error of another type",
+      response: () => jsonResponse({ errors: [{ message: "boom", type: "NOT_FOUND" }] }),
+      limited: 0,
+    },
+  ])(
+    "tells the budget of $name only when it is a rate limit",
+    async ({ response, limited: expected }) => {
+      const stub = stubFetch(response);
+      const { budget, limited } = recordingBudget();
+
+      await graphql("t0ken", "query Q { x }", {}, { ...options(stub.fetch), budget }).catch(
+        () => null,
+      );
+
+      expect(limited()).toBe(expected);
+    },
+  );
 
   it("rejects a response that selected no rate limit", async () => {
     const stub = stubFetch(() => jsonResponse({ data: { search: {} } }));

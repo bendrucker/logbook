@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, test } from "vitest";
 import { pullRequest, seedRepository } from "../test/fixtures";
 import { emptyBucket } from "../test/r2";
+import { recordInvocation } from "./invocations";
 import { upsertPullRequests } from "./store";
 import { enqueue } from "./sync/frontier";
 import { advance } from "./sync/state";
@@ -75,6 +76,8 @@ describe("GET /admin/sync", () => {
         note: null,
         cost: 2,
         rateRemaining: 4100,
+        requests: 2,
+        rateLimitedRequests: 0,
       },
       { outcome: "failed", reason: "upstream.5xx", resumeAt: null },
       "2026-09-09T18:03:00Z",
@@ -161,6 +164,14 @@ describe("GET /admin/sync", () => {
 
     await expect(response.json()).resolves.toMatchObject({
       lake: { rowCounts: { repositories: 1 }, error: null },
+    });
+  });
+
+  it("reports recent scheduled invocations", async () => {
+    await recordInvocation(env.DB, "0 * * * *", () => Promise.resolve());
+
+    await expect((await get(authorization)).json()).resolves.toMatchObject({
+      invocations: [{ cron: "0 * * * *", error: null }],
     });
   });
 });

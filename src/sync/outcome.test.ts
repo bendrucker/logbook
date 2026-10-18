@@ -33,6 +33,16 @@ describe("classify", () => {
       reason: "rate_limit.budget",
     },
     { name: "a request cap", error: new RequestCapReached(100), reason: "rate_limit.budget" },
+    {
+      name: "a bare GitHub 429",
+      error: new GitHubHttpError(429, ""),
+      reason: "rate_limit.upstream",
+    },
+    {
+      name: "a GitHub RATE_LIMITED error",
+      error: new GraphQLQueryError([{ message: "limit", type: "RATE_LIMITED" }], "", null),
+      reason: "rate_limit.upstream",
+    },
   ])("treats $name as a rate limit", ({ error, reason }) => {
     expect(classify(error)).toEqual({ outcome: "rate_limited", reason });
   });
