@@ -1,4 +1,4 @@
-/// <reference types="@cloudflare/vitest-pool-workers/types" />
+/// <reference types="@cloudflare/vitest-plugin/types" />
 
 interface TestBindings {
   TEST_MIGRATIONS: import("cloudflare:test").D1Migration[];
