@@ -28,7 +28,7 @@ jobs:
         run: |
           git diff --exit-code -- worker-configuration.d.ts workers/monitor/worker-configuration.d.ts \
             || { echo "::error::run 'bun run types' and commit the result"; exit 1; }
-      - uses: j178/prek-action@v3.0.0
+      - uses: j178/prek-action@v3.0.1
         env:
           SKIP: no-commit-to-branch
 
