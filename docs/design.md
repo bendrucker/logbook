@@ -293,18 +293,51 @@ Trakt is the second source: every play in my watch history and every rating, wit
 
 #### Access
 
-Both endpoints read as the account. `GET /users/{TRAKT_USER}/history` and `GET /users/{TRAKT_USER}/ratings` carry `trakt-api-version: 2`, `trakt-api-key` with the client ID, and `Authorization: Bearer` with an OAuth access token. Read with the client ID alone, the first request of many hours drew a 429 with a `Retry-After` of up to four minutes, from a hub sending a few requests an hour. Authenticated reads count against the account's own limit instead. Trakt has no personal access token, so the grant comes from a one-time device login, `bun run trakt:login`, which drives `POST /admin/trakt/login` and `/admin/trakt/login/poll` so the Worker exchanges the approved code itself and the grant never leaves it. Trakt deprecated client secrets for PKCE, so the device and refresh calls send the client ID alone. `TRAKT_CLIENT_ID`, `TRAKT_USER`, and `TRAKT_REDIRECT_URI` are vars.
+History and ratings read as the account: `trakt-api-key` with `TRAKT_CLIENT_ID`, plus `Authorization: Bearer`. Read with the client ID alone, a hub sending a few requests an hour drew 429s with `Retry-After` up to four minutes. Trakt has no personal token, so a one-time device login links the account, and the Worker exchanges the code itself so the grant never leaves it. Trakt deprecated client secrets for PKCE, so no call sends one.
 
-The grant lives in D1's `trakt_tokens`, one row. Access tokens last a day, and an invocation refreshes once six hours or less remain, so a failing refresh has hours of hourly retries before the token in hand lapses. Trakt rotates the refresh token on every refresh, which shapes the rest:
+```mermaid
+sequenceDiagram
+    participant cli as bun run trakt:login
+    participant worker as Worker
+    participant trakt as Trakt
+    participant d1 as D1 trakt_tokens
+    cli->>worker: POST /admin/trakt/login
+    worker->>trakt: POST /oauth/device/code
+    worker-->>cli: user_code, device_code
+    Note over cli: owner approves at trakt.tv/activate
+    loop every interval
+        cli->>worker: POST /admin/trakt/login/poll {device_code}
+        worker->>trakt: POST /oauth/device/token
+    end
+    trakt-->>worker: access + refresh token
+    worker->>d1: upsert the one row
+    worker-->>cli: linked, expiresAt
+```
 
-- The row is in D1 rather than KV. An eventually consistent read of a rotated token would present a spent refresh token, and only a new device login recovers from that.
-- A refresh writes only over the row it read. Of two concurrent refreshes, Trakt refuses the second's spent token with `invalid_grant`, and that invocation reads the row again, once at once and once after two seconds, to take the winner's token.
-- A refusal or failure before Trakt issues a grant leaves the token in hand current, so the invocation reads with it while it has time left. Once it lapses, the error says what to fix: a re-login for `invalid_grant`, the application's client ID and redirect URI for any other refusal.
-- Once Trakt issues a grant, the old refresh token is spent. The write retries, and a grant that still fails to store reads for that invocation only. The next refresh is refused, and its error names the re-login.
+Access tokens last a day, and the refresh token rotates on every refresh. Each run resolves its token like this:
 
-A refresh repeats `TRAKT_REDIRECT_URI`, which must be registered on the Trakt application. A device-flow grant never redirects there. Trakt warns against the out-of-band URI, so it is an https one.
+```mermaid
+flowchart TD
+    read[Read trakt_tokens] -->|no row| skip[skip.missing_secret<br/>backfill answers 503]
+    read -->|more than 6h left| use[Use stored token]
+    read -->|6h or less| refresh[POST /oauth/token]
+    refresh -->|grant| cas[UPDATE WHERE refresh_token = the one read]
+    cas -->|1 row| new[Use new token]
+    cas -->|0 rows| reread[Use the row a concurrent run stored]
+    cas -->|D1 error x3| new
+    refresh -->|invalid_grant| race[Re-read now, then after 2s]
+    race -->|rotated| reread
+    race -->|unchanged| left
+    refresh -->|other failure| left{Token in hand<br/>still valid?}
+    left -->|yes| old[Use token in hand]
+    left -->|no| fail[Run fails: config, or rate_limited on 429]
+```
 
-The token resolves inside each kind's run, so a failed refresh is that run's outcome: `config` for a refusal, `rate_limited` with `resumeAt` for a 429 from the token endpoint. Its error carries `endpoint: "oauth"`, which keeps the token endpoint's body out of R2, where only data pages archive. With no grant stored, the hourly and nightly passes record `skip.missing_secret` and a backfill answers 503.
+- D1, not KV: an eventually consistent read of a rotated token presents a spent one, and only a new login recovers.
+- Six hours of headroom gives a failing refresh several hourly retries before the token lapses.
+- A grant that fails to store serves its invocation only. The next refresh is refused, and the error names `bun run trakt:login`.
+- Refresh repeats `TRAKT_REDIRECT_URI`, which must be registered on the application. Trakt warns against the out-of-band URI, so it is https.
+- Token endpoint errors carry `endpoint: "oauth"`, which keeps their bodies out of R2.
 
 #### Tables
 
