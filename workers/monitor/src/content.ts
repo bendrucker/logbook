@@ -27,7 +27,7 @@ export interface ContentEnv {
   GITHUB_TOKEN?: string;
   TRAKT_USER: string;
   TRAKT_CLIENT_ID: string;
-  TRAKT_CLIENT_SECRET?: string;
+  TRAKT_REDIRECT_URI: string;
   INSTAPAPER_ACCESS_TOKEN?: string;
 }
 
@@ -35,7 +35,7 @@ export interface ContentEnv {
 // than reading as a lag of zero.
 export async function contentSources(env: ContentEnv): Promise<ContentSource[]> {
   const sources = [github(env.GITHUB_LOGIN, env.GITHUB_TOKEN)];
-  if (await traktLinked(env)) {
+  if (await traktLinked(env.DB)) {
     sources.push(
       trakt(env.TRAKT_USER, env.TRAKT_CLIENT_ID, async () => traktAccessToken(env, USER_AGENT)),
     );

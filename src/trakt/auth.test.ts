@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stubFetch } from "../../test/fetch-stub";
 import { readRow } from "../../test/tables";
 import { linkTrakt } from "../../test/trakt-fixtures";
@@ -25,14 +25,6 @@ function stored() {
     "SELECT access_token, refresh_token, expires_at FROM trakt_tokens WHERE id = 1",
   );
 }
-
-beforeEach(() => {
-  env.TRAKT_CLIENT_SECRET = "secret";
-});
-
-afterEach(() => {
-  delete env.TRAKT_CLIENT_SECRET;
-});
 
 describe("traktAuth", () => {
   it("refuses before any request while no login has linked the account", async () => {
@@ -60,10 +52,10 @@ describe("traktAuth", () => {
     await expect(auth.accessToken()).resolves.toBe("access-2");
     const [request] = requests;
     expect(request?.url).toBe("https://api.trakt.tv/oauth/token");
-    await expect(request?.json()).resolves.toMatchObject({
+    await expect(request?.json()).resolves.toEqual({
       refresh_token: "refresh",
       client_id: env.TRAKT_CLIENT_ID,
-      client_secret: "secret",
+      redirect_uri: env.TRAKT_REDIRECT_URI,
       grant_type: "refresh_token",
     });
     await expect(stored()).resolves.toEqual({
@@ -138,15 +130,6 @@ describe("traktAuth", () => {
 
     await expect(auth.accessToken()).rejects.toThrow("503");
   });
-
-  it("names the missing client secret when a refresh is due", async () => {
-    delete env.TRAKT_CLIENT_SECRET;
-    await linkTrakt(env.DB, "2026-10-18T14:00:00.000Z");
-
-    const auth = await traktAuth(env, { now: NOW });
-
-    await expect(auth.accessToken()).rejects.toThrow("TRAKT_CLIENT_SECRET");
-  });
 });
 
 describe("pollDeviceLogin", () => {
@@ -177,7 +160,6 @@ describe("pollDeviceLogin", () => {
     await expect(requests[0]?.json()).resolves.toEqual({
       code: "device",
       client_id: env.TRAKT_CLIENT_ID,
-      client_secret: "secret",
     });
     await expect(stored()).resolves.toMatchObject({ refresh_token: "refresh-2" });
   });

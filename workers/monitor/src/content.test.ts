@@ -220,6 +220,7 @@ describe("contentSources", () => {
     GITHUB_LOGIN: "bendrucker",
     TRAKT_USER: "bendrucker",
     TRAKT_CLIENT_ID: "client",
+    TRAKT_REDIRECT_URI: "https://bendrucker.me/",
   };
 
   beforeEach(async () => {
@@ -227,19 +228,9 @@ describe("contentSources", () => {
   });
 
   it("leaves Trakt out until a device login has stored a grant", async () => {
-    const names = (await contentSources({ ...base, TRAKT_CLIENT_SECRET: "secret" })).map(
-      ({ name }) => name,
-    );
+    const names = (await contentSources(base)).map(({ name }) => name);
 
     expect(names).toEqual(["github"]);
-  });
-
-  it("leaves Trakt out without the secret a refresh needs", async () => {
-    await env.DB.prepare(
-      "INSERT INTO trakt_tokens VALUES (1, 'access', 'refresh', '2099-01-01T00:00:00.000Z', '2026-10-18T00:00:00.000Z')",
-    ).run();
-
-    expect((await contentSources(base)).map(({ name }) => name)).toEqual(["github"]);
   });
 
   it("probes Trakt once both are in place", async () => {
@@ -247,9 +238,7 @@ describe("contentSources", () => {
       "INSERT INTO trakt_tokens VALUES (1, 'access', 'refresh', '2099-01-01T00:00:00.000Z', '2026-10-18T00:00:00.000Z')",
     ).run();
 
-    const names = (await contentSources({ ...base, TRAKT_CLIENT_SECRET: "secret" })).map(
-      ({ name }) => name,
-    );
+    const names = (await contentSources(base)).map(({ name }) => name);
 
     expect(names).toEqual(["github", "trakt"]);
   });

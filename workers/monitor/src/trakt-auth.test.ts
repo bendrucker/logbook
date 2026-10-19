@@ -6,7 +6,7 @@ const NOW = new Date("2026-10-18T12:00:00.000Z");
 const credentials: TraktCredentials = {
   DB: env.DB,
   TRAKT_CLIENT_ID: "client",
-  TRAKT_CLIENT_SECRET: "secret",
+  TRAKT_REDIRECT_URI: "https://bendrucker.me/",
 };
 
 async function link(expiresAt: string) {
@@ -47,10 +47,11 @@ describe("traktAccessToken", () => {
 
     await expect(traktAccessToken(credentials, "ua", NOW)).resolves.toBe("access-2");
     const [input, init] = fetch.mock.calls[0] ?? [];
-    await expect(new Request(input ?? "", init).json()).resolves.toMatchObject({
+    await expect(new Request(input ?? "", init).json()).resolves.toEqual({
       refresh_token: "refresh",
       client_id: "client",
-      client_secret: "secret",
+      redirect_uri: "https://bendrucker.me/",
+      grant_type: "refresh_token",
     });
     const row = await env.DB.prepare(
       "SELECT refresh_token, expires_at FROM trakt_tokens WHERE id = 1",

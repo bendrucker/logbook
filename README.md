@@ -123,7 +123,7 @@ Link the account once, and again whenever Trakt refuses the refresh token:
 ADMIN_TOKEN=... bun run trakt:login "$WORKER"
 ```
 
-It prints a code to approve at trakt.tv/activate and polls the Worker, which holds the client secret and exchanges the approved code itself, so the grant never leaves the Worker.
+It prints a code to approve at trakt.tv/activate and polls the Worker, which exchanges the approved code itself, so the grant never leaves the Worker. Trakt deprecated client secrets in favor of PKCE, and the device and refresh calls send the client ID alone. A refresh still repeats `TRAKT_REDIRECT_URI`, which must be registered on the Trakt application as an https URI, though a device-flow grant never redirects there.
 
 History reads from a day behind its watermark to now, and waits for the drain while backfill years are still enqueued. Ratings re-read in full every run. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_TRAKT` caps the requests one invocation sends, and a 429 stops it with `resumeAt` from `Retry-After`.
 
@@ -247,7 +247,6 @@ The likeliest consumer beyond DuckDB on a laptop is a tool that lets Claude sear
 | ------------------------- | ------------------------------------- | ------------------------------- |
 | `GITHUB_TOKEN`            | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request    |
 | `INSTAPAPER_ACCESS_TOKEN` | Worker secret (`wrangler secret put`) | Every Instapaper request        |
-| `TRAKT_CLIENT_SECRET`     | Worker secret (`wrangler secret put`) | Trakt device login and refresh  |
 | `ADMIN_TOKEN`             | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes |
 
 The GitHub token is a classic personal access token with no scopes, so the hub sees and publishes public activity only. [docs/design.md](docs/design.md#visibility) records the decision.
@@ -270,7 +269,7 @@ cp .dev.vars.example .dev.vars
 bun run dev
 ```
 
-`wrangler dev` reads `GITHUB_TOKEN`, `INSTAPAPER_ACCESS_TOKEN`, `TRAKT_CLIENT_SECRET`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
+`wrangler dev` reads `GITHUB_TOKEN`, `INSTAPAPER_ACCESS_TOKEN`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
 
 | Command                      | What it does                                   |
 | ---------------------------- | ---------------------------------------------- |

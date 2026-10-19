@@ -21,9 +21,12 @@
     "GITHUB_LOGIN": "bendrucker",
     // Whose Trakt profile the hub reads, and the application that reads it.
     // Every request sends the client ID as a header beside the OAuth token a
-    // device login stored. The application's secret is a Worker secret.
+    // device login stored. Trakt deprecated client secrets, so there is none.
+    // A refresh repeats the redirect URI registered on the application, though
+    // a device-flow grant never redirects anywhere.
     "TRAKT_USER": "bendrucker",
     "TRAKT_CLIENT_ID": "nmJ1tcJ_TIpoxVhlhTcahD3851pQs2tUR1CCRxwJUaA",
+    "TRAKT_REDIRECT_URI": "https://bendrucker.me/",
     // The GraphQL rate budget, 5,000 points an hour, is shared with every other
     // tool on the token. The hourly sync costs about 4 points and still runs on
     // a busy hour. A backfill yields half the budget to the other tools.

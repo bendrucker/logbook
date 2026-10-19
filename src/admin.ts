@@ -169,8 +169,8 @@ export async function handleAppleMusicFinish(request: Request, env: Env): Promis
   }
 }
 
-// The first half of a Trakt device login. The Worker holds the client secret,
-// so the exchange happens here and the grant never leaves it.
+// The first half of a Trakt device login. The exchange happens here, so the
+// grant goes straight into D1 and never leaves the Worker.
 export async function handleTraktLogin(request: Request, env: Env): Promise<Response> {
   const refused = await authorize(request, env);
   if (refused !== null) {
@@ -200,9 +200,6 @@ export async function handleTraktLoginPoll(request: Request, env: Env): Promise<
   try {
     return Response.json(await pollDeviceLogin(env, code));
   } catch (error) {
-    if (error instanceof MissingSecretError) {
-      return Response.json({ error: error.message }, { status: 503 });
-    }
     return serverError(error);
   }
 }

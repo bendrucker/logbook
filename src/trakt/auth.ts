@@ -5,14 +5,12 @@ import { TraktHttpError, TraktResponseError, USER_AGENT } from "./client";
 const ENDPOINT = "https://api.trakt.tv";
 
 // Trakt has no personal access token, so the hub reads as the account through
-// an OAuth grant from a device login. Access tokens last a day, and the hourly
-// cron refreshes this far ahead of expiry so a failed refresh has several more
-// hours of tries before the token in hand stops working.
+// an OAuth grant from a device login. Trakt deprecated client secrets for
+// PKCE, and its device and refresh calls take the client ID alone. Access
+// tokens last a day, and the hourly cron refreshes this far ahead of expiry so
+// a failed refresh has several more hours of tries before the token in hand
+// stops working.
 const REFRESH_AHEAD_MS = 6 * 60 * 60 * 1000;
-
-// Trakt requires a redirect URI on refresh even for a grant that never
-// redirected. The out-of-band URI is the one its device-flow examples use.
-const REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob";
 
 const tokenGrant = z.object({
   access_token: z.string().min(1),
@@ -94,10 +92,7 @@ async function resolve(env: Env, options: TraktAuthOptions): Promise<string> {
   } catch (error) {
     // A token with time left still reads, and the next invocation refreshes
     // again. A refused refresh token is final, so it surfaces even then.
-    if (
-      remaining > 0 &&
-      !(error instanceof TraktAuthError || error instanceof MissingSecretError)
-    ) {
+    if (remaining > 0 && !(error instanceof TraktAuthError)) {
       console.error({ event: "trakt.refresh_failed", error: String(error) });
       return stored.access_token;
     }
@@ -114,8 +109,9 @@ async function refresh(
   const response = await post(options, "/oauth/token", {
     refresh_token: stored.refresh_token,
     client_id: env.TRAKT_CLIENT_ID,
-    client_secret: clientSecret(env),
-    redirect_uri: REDIRECT_URI,
+    // A device-flow grant never redirects, but Trakt still wants the refresh to
+    // repeat a redirect URI registered on the application.
+    redirect_uri: env.TRAKT_REDIRECT_URI,
     grant_type: "refresh_token",
   });
   const body = await response.text();
@@ -196,7 +192,6 @@ export async function pollDeviceLogin(
   const response = await post(options, "/oauth/device/token", {
     code,
     client_id: env.TRAKT_CLIENT_ID,
-    client_secret: clientSecret(env),
   });
   const body = await response.text();
   const status = DEVICE_STATUSES[response.status];
@@ -211,14 +206,6 @@ export async function pollDeviceLogin(
   const now = options.now ?? new Date();
   await writeToken(env.DB, grant, now, null);
   return { status: "linked", expiresAt: expiresAt(grant, now) };
-}
-
-function clientSecret(env: Env): string {
-  const secret = env.TRAKT_CLIENT_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new MissingSecretError("TRAKT_CLIENT_SECRET");
-  }
-  return secret;
 }
 
 async function post(

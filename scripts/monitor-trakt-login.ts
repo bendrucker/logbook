@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 // Links the monitor to a Trakt account through Trakt's device flow. The
-// monitor has no admin surface, so the exchange happens here, with the
-// monitor's Trakt application secret from the environment, and the grant goes
-// straight into the monitor's D1 through `wrangler d1 execute`. The monitor
-// refreshes it from then on.
+// monitor has no admin surface, so the exchange happens here and the grant
+// goes straight into the monitor's D1 through `wrangler d1 execute`. The
+// monitor's Trakt application is a PKCE app with no client secret, so the
+// client ID is all the exchange sends. The monitor refreshes it from then on.
 
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -13,11 +13,6 @@ import { fail } from "./admin-client";
 
 const CONFIG = "workers/monitor/wrangler.jsonc";
 const USER_AGENT = "logbook-monitor (+https://github.com/bendrucker/logbook)";
-
-const secret = Bun.env.TRAKT_CLIENT_SECRET;
-if (secret === undefined || secret === "") {
-  fail("usage: TRAKT_CLIENT_SECRET=... bun run monitor:trakt-login (the monitor app's secret)");
-}
 
 // The client ID the monitor sends, read from its config so the grant always
 // belongs to the application the monitor refreshes it with.
@@ -68,7 +63,7 @@ try {
     const response = await fetch("https://api.trakt.tv/oauth/device/token", {
       method: "POST",
       headers: { "content-type": "application/json", "user-agent": USER_AGENT },
-      body: JSON.stringify({ code: code.device_code, client_id: clientId, client_secret: secret }),
+      body: JSON.stringify({ code: code.device_code, client_id: clientId }),
     });
     if (response.status === 429) {
       interval += 1000;

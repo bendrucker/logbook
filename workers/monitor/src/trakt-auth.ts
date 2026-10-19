@@ -7,8 +7,6 @@ import { z } from "zod";
 // ahead, so a failed refresh has hours of retries before the token lapses.
 const REFRESH_AHEAD_MS = 6 * 60 * 60 * 1000;
 
-const REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob";
-
 const grant = z.object({
   access_token: z.string().min(1),
   refresh_token: z.string().min(1),
@@ -22,19 +20,19 @@ interface StoredToken {
   expires_at: string;
 }
 
+// The monitor's Trakt application is a PKCE app, which Trakt issues no client
+// secret, so a refresh sends the client ID alone. Trakt still wants the
+// redirect URI registered on the application, even for a device-flow grant.
 export interface TraktCredentials {
   DB: D1Database;
   TRAKT_CLIENT_ID: string;
-  TRAKT_CLIENT_SECRET?: string;
+  TRAKT_REDIRECT_URI: string;
 }
 
-// Whether a device login has stored a grant and the secret to refresh it is
-// set. Without both, the probe leaves Trakt out rather than reading as lag 0.
-export async function traktLinked(env: TraktCredentials): Promise<boolean> {
-  if (env.TRAKT_CLIENT_SECRET === undefined || env.TRAKT_CLIENT_SECRET === "") {
-    return false;
-  }
-  return (await readToken(env.DB)) !== null;
+// Whether a device login has stored a grant. Without one, the probe leaves
+// Trakt out rather than reading as lag 0.
+export async function traktLinked(db: D1Database): Promise<boolean> {
+  return (await readToken(db)) !== null;
 }
 
 export async function traktAccessToken(
@@ -57,8 +55,7 @@ export async function traktAccessToken(
     body: JSON.stringify({
       refresh_token: stored.refresh_token,
       client_id: env.TRAKT_CLIENT_ID,
-      client_secret: env.TRAKT_CLIENT_SECRET,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: env.TRAKT_REDIRECT_URI,
       grant_type: "refresh_token",
     }),
   });

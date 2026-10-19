@@ -293,13 +293,8 @@ describe("POST /admin/trakt/login", () => {
     return exports.default.fetch(`https://logbook.test${path}`, { method: "POST", headers });
   }
 
-  beforeEach(() => {
-    env.TRAKT_CLIENT_SECRET = "secret";
-  });
-
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete env.TRAKT_CLIENT_SECRET;
   });
 
   it("answers 401 without the admin token", async () => {
@@ -338,13 +333,5 @@ describe("POST /admin/trakt/login", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: "linked" });
-  });
-
-  it("answers 503 while the client secret is unset", async () => {
-    delete env.TRAKT_CLIENT_SECRET;
-
-    const response = await trakt("/admin/trakt/login/poll?device_code=device");
-
-    expect(response.status).toBe(503);
   });
 });

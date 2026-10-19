@@ -4,10 +4,8 @@ interface Env {
   HEARTBEAT_URL?: string;
   // The monitor's own credentials, apart from the pipeline's so a revoked one
   // can't blind both. Without a GitHub token search still answers, at a lower
-  // rate limit. Without an Instapaper token, or without the Trakt
-  // application's secret and a stored device-login grant, that source goes
-  // unprobed.
+  // rate limit. Without an Instapaper token, or a stored Trakt device-login
+  // grant, that source goes unprobed.
   GITHUB_TOKEN?: string;
-  TRAKT_CLIENT_SECRET?: string;
   INSTAPAPER_ACCESS_TOKEN?: string;
 }
