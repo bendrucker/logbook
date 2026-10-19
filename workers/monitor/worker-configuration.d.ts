@@ -7,7 +7,7 @@ interface __BaseEnv_Env {
 	METRICS: AnalyticsEngineDataset;
 	GITHUB_LOGIN: "bendrucker";
 	TRAKT_USER: "bendrucker";
-	TRAKT_CLIENT_ID: "9NUZO1h-o57d5OeEtC5fJbhAYyc9cMMOAy28iLfDmrs";
+	TRAKT_CLIENT_ID: "nmJ1tcJ_TIpoxVhlhTcahD3851pQs2tUR1CCRxwJUaA";
 	TRAKT_REDIRECT_URI: "https://bendrucker.me/";
 	ALERT_RULES: [{"name":"lake-stale","metric":"lake.age_seconds","above":93600,"for":2,"route":"log"},{"name":"content-lag","metric":"content.lag_seconds","above":93600,"for":2,"route":"log"},{"name":"lake-source-empty","metric":"lake.tables","below":1,"for":2,"route":"log"}];
 }
