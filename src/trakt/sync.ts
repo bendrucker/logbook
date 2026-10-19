@@ -137,9 +137,10 @@ async function syncPages<Item extends HistoryItem | RatingItem>(
         await advance(env.DB, kind, through);
       }
     },
-    // A failure carrying bytes lands as the page the fetch never got to.
+    // A failure carrying bytes lands as the page the fetch never got to. A
+    // failed token refresh fetched no page, so its bytes stay out of R2.
     async (error, run) => {
-      if (error instanceof TraktResponseError) {
+      if (error instanceof TraktResponseError && error.endpoint === "api") {
         await archiveTraktPage(env.RAW, {
           kind,
           window,

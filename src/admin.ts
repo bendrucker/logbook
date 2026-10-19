@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { monthWindow } from "./github/windows";
 import { type Invocation, recentInvocations } from "./invocations";
 import { buildLake, type LakeBuild, readLatestBuild } from "./lake";
@@ -14,6 +15,7 @@ import { MissingSecretError } from "./sync/run";
 import { lastRuns, recentFailures, type SyncRun } from "./sync/runs";
 import { readWatermarks, type Watermark } from "./sync/state";
 import { backfillInstapaper } from "./instapaper/backfill";
+import { pollDeviceLogin, startDeviceLogin } from "./trakt/auth";
 import { backfillTrakt } from "./trakt/backfill";
 import {
   exportIdParam,
@@ -165,6 +167,55 @@ export async function handleAppleMusicFinish(request: Request, env: Env): Promis
       return Response.json({ error: error.message }, { status: 400 });
     }
     return serverError(error);
+  }
+}
+
+const pollRequest = z.object({ device_code: z.string().min(1) });
+
+// The first half of a Trakt device login. The exchange happens here, so the
+// grant goes straight into D1 and never leaves the Worker.
+export async function handleTraktLogin(request: Request, env: Env): Promise<Response> {
+  const refused = await authorize(request, env);
+  if (refused !== null) {
+    return refused;
+  }
+
+  try {
+    return Response.json(await startDeviceLogin(env));
+  } catch (error) {
+    return serverError(error);
+  }
+}
+
+// One poll of a device login, which stores the grant once the owner approves
+// it. Every state Trakt reports answers 200 with a `status`, so the caller
+// reads one shape until it is `linked` or final.
+export async function handleTraktLoginPoll(request: Request, env: Env): Promise<Response> {
+  const refused = await authorize(request, env);
+  if (refused !== null) {
+    return refused;
+  }
+
+  // In the body rather than the URL, which request logs keep. With no client
+  // secret, a device code and the public client ID are enough to claim the
+  // grant until it is used.
+  const parsed = pollRequest.safeParse(await jsonBody(request));
+  if (!parsed.success) {
+    return Response.json({ error: "a JSON body with device_code is required" }, { status: 400 });
+  }
+  const code = parsed.data.device_code;
+  try {
+    return Response.json(await pollDeviceLogin(env, code));
+  } catch (error) {
+    return serverError(error);
+  }
+}
+
+async function jsonBody(request: Request): Promise<unknown> {
+  try {
+    return await request.json();
+  } catch {
+    return null;
   }
 }
 

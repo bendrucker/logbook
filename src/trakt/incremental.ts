@@ -5,6 +5,7 @@ import { recordSkip } from "../sync/runs";
 import { readWatermark } from "../sync/state";
 import { drainTraktHistory } from "./backfill";
 import { RequestCap } from "../request-cap";
+import { traktAuth } from "./auth";
 import type { TraktOptions } from "./client";
 import {
   syncHistoryWindow,
@@ -24,8 +25,15 @@ export interface TraktInvocationOptions extends Omit<TraktOptions, "requests"> {
 
 export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}): Promise<void> {
   const now = options.now ?? new Date();
+  const auth = options.auth ?? (await traktAuth(env, { ...options, now }));
+  if (auth === null) {
+    console.log({ event: "sync.skipped", kind: "trakt", reason: "skip.missing_secret" });
+    await recordSkip(env.DB, "trakt-history", "skip.missing_secret", now.toISOString());
+    await recordSkip(env.DB, "trakt-ratings", "skip.missing_secret", now.toISOString());
+    return;
+  }
   const requests = new RequestCap(env.RATE_CAP_TRAKT);
-  const sync = { ...options, now, requests };
+  const sync = { ...options, auth, now, requests };
 
   // A cap or a 429 belongs to the application rather than to one kind, so the
   // first stop ends the invocation.
@@ -42,7 +50,7 @@ export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}):
   // The drain takes the caller's options rather than the fixed `now` above, so
   // each of its runs stamps its own time.
   try {
-    await drainTraktHistory(env, { ...options, requests });
+    await drainTraktHistory(env, { ...options, auth, requests });
   } catch (error) {
     console.error({ event: "backfill.drain_failed", kind: "trakt-history", error: String(error) });
   }
@@ -52,13 +60,20 @@ export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}):
 // filter on `watched_at`. The nightly pass re-reads the current year to catch
 // the ones backdated within it. It leaves the watermark alone, so it never
 // declares an unbackfilled history synced.
+// Null when no device login has stored a grant, which records a skip.
 export async function rewalkTraktYear(
   env: Env,
   options: TraktInvocationOptions = {},
-): Promise<SyncResult> {
+): Promise<SyncResult | null> {
   const now = options.now ?? new Date();
+  const auth = options.auth ?? (await traktAuth(env, { ...options, now }));
+  if (auth === null) {
+    await recordSkip(env.DB, "trakt-history", "skip.missing_secret", now.toISOString());
+    return null;
+  }
   return syncHistoryWindow(env, yearWindow(now.getUTCFullYear(), now, false), {
     ...options,
+    auth,
     now,
     requests: new RequestCap(env.RATE_CAP_TRAKT),
   });

@@ -2,8 +2,9 @@ import type { Month } from "../github/windows";
 import { type BackfillResult, unitFetch } from "../sync/backfill";
 import { type CrawlSource, drain, enqueue, frontierStatus } from "../sync/frontier";
 import type { TraktKind } from "../sync/kinds";
-import { describe, stoppedUntil } from "../sync/run";
+import { describe, MissingSecretError, stoppedUntil } from "../sync/run";
 import { RequestCap } from "../request-cap";
+import { NOT_LINKED, traktAuth } from "./auth";
 import { PAGE_LIMIT, type TraktOptions, traktGet } from "./client";
 import type { TraktInvocationOptions } from "./incremental";
 import { archiveTraktPage } from "./raw";
@@ -18,9 +19,14 @@ export async function backfillTrakt(
   env: Env,
   kind: TraktKind,
   from: Month | null,
-  options: TraktInvocationOptions = {},
+  invocation: TraktInvocationOptions = {},
 ): Promise<BackfillResult> {
   const requests = new RequestCap(env.RATE_CAP_TRAKT);
+  const auth = invocation.auth ?? (await traktAuth(env, invocation));
+  if (auth === null) {
+    throw new MissingSecretError(NOT_LINKED);
+  }
+  const options = { ...invocation, auth };
 
   if (kind === "trakt-ratings") {
     const run = await syncRatings(env, { ...options, requests });

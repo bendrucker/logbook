@@ -293,7 +293,51 @@ Trakt is the second source: every play in my watch history and every rating, wit
 
 #### Access
 
-Both endpoints read a public profile with the application's client ID alone. `GET /users/{TRAKT_USER}/history` and `GET /users/{TRAKT_USER}/ratings` carry `trakt-api-version: 2` and `trakt-api-key` and no OAuth token, so there is no refresh flow to keep alive. `TRAKT_CLIENT_ID` and `TRAKT_USER` are both vars. Trakt sends the client ID as a header and pairs it with no secret for public reads. Making the profile private would stop the sync. Switching to OAuth would fix it.
+History and ratings read as the account: `trakt-api-key` with `TRAKT_CLIENT_ID`, plus `Authorization: Bearer`. Read with the client ID alone, a hub sending a few requests an hour drew 429s with `Retry-After` up to four minutes. Trakt has no personal token, so a one-time device login links the account, and the Worker exchanges the code itself so the grant never leaves it. Trakt deprecated client secrets for PKCE, so no call sends one.
+
+```mermaid
+sequenceDiagram
+    participant cli as bun run trakt:login
+    participant worker as Worker
+    participant trakt as Trakt
+    participant d1 as D1 trakt_tokens
+    cli->>worker: POST /admin/trakt/login
+    worker->>trakt: POST /oauth/device/code
+    worker-->>cli: user_code, device_code
+    Note over cli: owner approves at trakt.tv/activate
+    loop every interval
+        cli->>worker: POST /admin/trakt/login/poll {device_code}
+        worker->>trakt: POST /oauth/device/token
+    end
+    trakt-->>worker: access + refresh token
+    worker->>d1: upsert the one row
+    worker-->>cli: linked, expiresAt
+```
+
+Access tokens last a day, and the refresh token rotates on every refresh. Each run resolves its token like this:
+
+```mermaid
+flowchart TD
+    read[Read trakt_tokens] -->|no row| skip[skip.missing_secret<br/>backfill answers 503]
+    read -->|more than 6h left| use[Use stored token]
+    read -->|6h or less| refresh[POST /oauth/token]
+    refresh -->|grant| cas[UPDATE WHERE refresh_token = the one read]
+    cas -->|1 row| new[Use new token]
+    cas -->|0 rows| reread[Use the row a concurrent run stored]
+    cas -->|D1 error x3| new
+    refresh -->|invalid_grant| race[Re-read now, then after 2s]
+    race -->|rotated| reread
+    race -->|unchanged| left
+    refresh -->|other failure| left{Token in hand<br/>still valid?}
+    left -->|yes| old[Use token in hand]
+    left -->|no| fail[Run fails: config, or rate_limited on 429]
+```
+
+- D1, not KV: an eventually consistent read of a rotated token presents a spent one, and only a new login recovers.
+- Six hours of headroom gives a failing refresh several hourly retries before the token lapses.
+- A grant that fails to store serves its invocation only. The next refresh is refused, and the error names `bun run trakt:login`.
+- Refresh repeats `TRAKT_REDIRECT_URI`, which must be registered on the application. Trakt warns against the out-of-band URI, so it is https.
+- Token endpoint errors carry `endpoint: "oauth"`, which keeps their bodies out of R2.
 
 #### Tables
 
@@ -317,7 +361,7 @@ The nightly lake cron re-reads the whole current year of history before it build
 
 #### Rate Limit
 
-Trakt documents 500 unauthenticated GET requests every five minutes per application, and its responses carry no header reporting what is left. There is no point budget to account against, so Logbook caps the requests one invocation sends at `RATE_CAP_TRAKT`, and a 429 ends the invocation with `resumeAt` read from `Retry-After`. Trakt runs record `cost` 0 in `sync_runs` so they stay out of GitHub's point ledger. `pages` counts their requests.
+Trakt documents 1,000 GET requests every five minutes, counted per user for authenticated calls. A 429 names the limit it applied in `X-Ratelimit`, which the run's error repeats, so a 429 without it came from a layer in front of Trakt. There is no point budget to account against, so Logbook caps the requests one invocation sends at `RATE_CAP_TRAKT`, and a 429 ends the invocation with `resumeAt` read from `Retry-After`. Trakt runs record `cost` 0 in `sync_runs` so they stay out of GitHub's point ledger. `pages` counts their requests.
 
 #### Backfill
 

@@ -1,7 +1,9 @@
 import { env, exports } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
+import { stubFetch } from "../test/fetch-stub";
 import { pullRequest, seedRepository } from "../test/fixtures";
 import { emptyBucket } from "../test/r2";
+import { linkTrakt } from "../test/trakt-fixtures";
 import { recordInvocation } from "./invocations";
 import { upsertPullRequests } from "./store";
 import { enqueue } from "./sync/frontier";
@@ -257,6 +259,7 @@ describe("POST /admin/backfill", () => {
   });
 
   it("enqueues no Trakt year past the current one", async () => {
+    await linkTrakt(env.DB);
     const response = await post("kind=trakt-history&from=2099-01", authorization);
 
     expect(response.status).toBe(200);
@@ -282,5 +285,61 @@ describe("POST /admin/backfill", () => {
       resumeAt: null,
       error: null,
     });
+  });
+});
+
+describe("POST /admin/trakt/login", () => {
+  function trakt(
+    path: string,
+    headers: HeadersInit = authorization,
+    body?: string,
+  ): Promise<Response> {
+    return exports.default.fetch(`https://logbook.test${path}`, { method: "POST", headers, body });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("answers 401 without the admin token", async () => {
+    const response = await trakt("/admin/trakt/login", {});
+
+    expect(response.status).toBe(401);
+  });
+
+  it("relays the device code Trakt issues", async () => {
+    const code = {
+      device_code: "device",
+      user_code: "5055CC52",
+      verification_url: "https://trakt.tv/activate",
+      expires_in: 600,
+      interval: 5,
+    };
+    vi.stubGlobal("fetch", stubFetch(() => Response.json(code)).fetch);
+
+    const response = await trakt("/admin/trakt/login");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(code);
+  });
+
+  it("requires the device code on a poll", async () => {
+    const response = await trakt("/admin/trakt/login/poll");
+
+    expect(response.status).toBe(400);
+  });
+
+  it("links the account once the owner approves", async () => {
+    const grant = { access_token: "a", refresh_token: "r", expires_in: 86400, created_at: 1 };
+    vi.stubGlobal("fetch", stubFetch(() => Response.json(grant)).fetch);
+
+    const response = await trakt(
+      "/admin/trakt/login/poll",
+      authorization,
+      JSON.stringify({ device_code: "device" }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: "linked" });
   });
 });

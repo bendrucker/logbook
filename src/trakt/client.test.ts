@@ -1,8 +1,9 @@
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { stubFetch } from "../../test/fetch-stub";
 import { RequestCap, RequestCapReached } from "../request-cap";
-import { moviePlay, rateLimited, traktResponse } from "../../test/trakt-fixtures";
+import { linkTrakt, moviePlay, rateLimited, traktResponse } from "../../test/trakt-fixtures";
 import {
   readPagination,
   TraktHttpError,
@@ -10,11 +11,41 @@ import {
   TraktValidationError,
   traktGet,
 } from "./client";
+import { traktAuth } from "./auth";
 import { historyPage } from "./schema";
 
 const anything = z.array(z.unknown());
 
 describe("traktGet", () => {
+  it("reads as the account with the token the auth resolves", async () => {
+    const { fetch, requests } = stubFetch(() => traktResponse([]));
+    await linkTrakt(env.DB);
+    const auth = (await traktAuth(env))!;
+
+    await traktGet("client-id", "/users/bendrucker/history", {}, anything, { fetch, auth });
+
+    expect(requests[0]?.headers.get("authorization")).toBe("Bearer access");
+    expect(requests[0]?.headers.get("trakt-api-key")).toBe("client-id");
+  });
+
+  it("names the limit Trakt applied, or its absence, in a 429's message", async () => {
+    const limited = new Response("{}", {
+      status: 429,
+      headers: {
+        "Retry-After": "10",
+        "X-Ratelimit": '{"name":"UNAUTHED_API_GET_LIMIT","period":300,"limit":1000,"remaining":0}',
+      },
+    });
+    const { fetch } = stubFetch(() => limited);
+
+    await expect(traktGet("id", "/x", {}, anything, { fetch })).rejects.toThrow(
+      "Trakt rate limit (429, UNAUTHED_API_GET_LIMIT), retry after 10s",
+    );
+    await expect(
+      traktGet("id", "/x", {}, anything, { fetch: stubFetch(() => rateLimited(30)).fetch }),
+    ).rejects.toThrow("(429, no X-Ratelimit)");
+  });
+
   it("identifies the app by client ID alone and sends no OAuth token", async () => {
     const { fetch, requests } = stubFetch(() => traktResponse([]));
 

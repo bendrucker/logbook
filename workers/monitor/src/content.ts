@@ -2,6 +2,7 @@ import { parquetReadObjects } from "hyparquet";
 import { Instapaper } from "instapaper-api";
 import { z } from "zod";
 import type { Metric } from "./metrics";
+import { traktAccessToken, traktLinked } from "./trakt-auth";
 
 const USER_AGENT = "logbook-monitor (+https://github.com/bendrucker/logbook)";
 
@@ -21,20 +22,42 @@ export interface ContentSource {
 }
 
 export interface ContentEnv {
+  DB: D1Database;
   GITHUB_LOGIN: string;
   GITHUB_TOKEN?: string;
   TRAKT_USER: string;
   TRAKT_CLIENT_ID: string;
+  TRAKT_REDIRECT_URI: string;
   INSTAPAPER_ACCESS_TOKEN?: string;
+}
+
+// A D1 failure reading the grant leaves Trakt out like a missing grant, so it
+// can't stop the run before the other sources and the lake are recorded.
+async function traktGrant(db: D1Database): Promise<true | string> {
+  try {
+    return (await traktLinked(db)) ? true : "no grant";
+  } catch (error) {
+    return `grant unreadable: ${String(error)}`;
+  }
 }
 
 // Sources without the credential they need are left out, and say so, rather
 // than reading as a lag of zero.
-export function contentSources(env: ContentEnv): ContentSource[] {
-  const sources = [
-    github(env.GITHUB_LOGIN, env.GITHUB_TOKEN),
-    trakt(env.TRAKT_USER, env.TRAKT_CLIENT_ID),
-  ];
+export async function contentSources(env: ContentEnv): Promise<ContentSource[]> {
+  const sources = [github(env.GITHUB_LOGIN, env.GITHUB_TOKEN)];
+  const linked = await traktGrant(env.DB);
+  if (linked === true) {
+    // One resolution per run, shared by every request the probe sends.
+    let token: Promise<string> | null = null;
+    sources.push(
+      trakt(env.TRAKT_USER, env.TRAKT_CLIENT_ID, async () => {
+        token ??= traktAccessToken(env, USER_AGENT);
+        return token;
+      }),
+    );
+  } else {
+    console.log({ event: "monitor.content.skipped", source: "trakt", reason: linked });
+  }
   if (env.INSTAPAPER_ACCESS_TOKEN === undefined || env.INSTAPAPER_ACCESS_TOKEN === "") {
     console.log({ event: "monitor.content.skipped", source: "instapaper", reason: "no token" });
   } else {
@@ -151,19 +174,22 @@ const historyResponse = z.array(z.object({ watched_at: z.iso.datetime() }));
 // request.
 const TRAKT_PAGE = 100;
 
-// Trakt limits unauthenticated reads per IP, and Workers share egress IPs, so
-// a first request of the hour can draw a 429 the Worker did nothing to earn.
+// A first request of the hour has drawn 429s the Worker did nothing to earn.
 // The probe waits out one `Retry-After` within this bound, or reports failure.
 const TRAKT_MAX_WAIT_SECONDS = 300;
 
+// Reads as the account with the monitor's own grant, resolved on first use so
+// a failed refresh surfaces as this source's failure alone.
 export function trakt(
   user: string,
   clientId: string,
+  accessToken: () => Promise<string>,
   wait: (ms: number) => Promise<void> = async (ms) => scheduler.wait(ms),
 ): ContentSource {
   const request = async (url: string) =>
     fetch(url, {
       headers: {
+        authorization: `Bearer ${await accessToken()}`,
         "content-type": "application/json",
         "trakt-api-version": "2",
         "trakt-api-key": clientId,

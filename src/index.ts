@@ -4,6 +4,8 @@ import {
   handleBackfill,
   handleLakeBuild,
   handleSyncStatus,
+  handleTraktLogin,
+  handleTraktLoginPoll,
 } from "./admin";
 import { recordInvocation } from "./invocations";
 import { buildLake, LAKE_CRON } from "./lake";
@@ -33,6 +35,12 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/admin/import/apple-music/finish") {
       return handleAppleMusicFinish(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/admin/trakt/login") {
+      return handleTraktLogin(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/admin/trakt/login/poll") {
+      return handleTraktLoginPoll(request, env);
     }
     return new Response("Not Found", { status: 404 });
   },
