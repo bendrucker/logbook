@@ -151,6 +151,36 @@ describe("trakt", () => {
     expect(requested(fetch, 1).searchParams.get("page")).toBe("150");
   });
 
+  it("waits out one Retry-After and asks again", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "30" } }))
+      .mockResolvedValueOnce(
+        Response.json([{ watched_at: "2026-10-16T20:00:00.000Z" }], {
+          headers: { "x-pagination-item-count": "1" },
+        }),
+      );
+    const wait = vi.fn<(ms: number) => Promise<void>>(() => Promise.resolve());
+
+    const oldest = await trakt("bendrucker", "client", wait).oldestAfter(
+      new Date("2026-10-16T00:00:00Z"),
+    );
+
+    expect(wait).toHaveBeenCalledWith(30_000);
+    expect(oldest).toEqual(new Date("2026-10-16T20:00:00Z"));
+  });
+
+  it("fails rather than wait past the bound", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 429, headers: { "retry-after": "900" } }),
+    );
+    const wait = vi.fn<(ms: number) => Promise<void>>(() => Promise.resolve());
+
+    await expect(trakt("bendrucker", "client", wait).oldestAfter(new Date())).rejects.toThrow(
+      "429",
+    );
+    expect(wait).not.toHaveBeenCalled();
+  });
+
   it("answers null when nothing is newer", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json([], { headers: { "x-pagination-item-count": "0" } }),
