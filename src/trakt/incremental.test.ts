@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { emptyBucket } from "../../test/r2";
 import {
+  linkTrakt,
   movieRating,
   moviePlay,
   rateLimited,
@@ -18,6 +19,7 @@ const WATERMARK = "2026-09-10T11:00:00.000Z";
 
 beforeEach(async () => {
   await emptyBucket(env.RAW);
+  await linkTrakt(env.DB);
 });
 
 describe("syncTrakt", () => {

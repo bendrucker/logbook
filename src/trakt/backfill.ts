@@ -4,6 +4,7 @@ import { type CrawlSource, drain, enqueue, frontierStatus } from "../sync/fronti
 import type { TraktKind } from "../sync/kinds";
 import { describe, stoppedUntil } from "../sync/run";
 import { RequestCap } from "../request-cap";
+import { traktAuth } from "./auth";
 import { PAGE_LIMIT, type TraktOptions, traktGet } from "./client";
 import type { TraktInvocationOptions } from "./incremental";
 import { archiveTraktPage } from "./raw";
@@ -18,9 +19,10 @@ export async function backfillTrakt(
   env: Env,
   kind: TraktKind,
   from: Month | null,
-  options: TraktInvocationOptions = {},
+  invocation: TraktInvocationOptions = {},
 ): Promise<BackfillResult> {
   const requests = new RequestCap(env.RATE_CAP_TRAKT);
+  const options = { ...invocation, auth: invocation.auth ?? (await traktAuth(env, invocation)) };
 
   if (kind === "trakt-ratings") {
     const run = await syncRatings(env, { ...options, requests });

@@ -1,10 +1,11 @@
 import { frontierStatus } from "../sync/frontier";
 import type { TraktKind } from "../sync/kinds";
-import type { SyncResult } from "../sync/run";
+import { MissingSecretError, type SyncResult } from "../sync/run";
 import { recordSkip } from "../sync/runs";
 import { readWatermark } from "../sync/state";
 import { drainTraktHistory } from "./backfill";
 import { RequestCap } from "../request-cap";
+import { type TraktAuth, traktAuth } from "./auth";
 import type { TraktOptions } from "./client";
 import {
   syncHistoryWindow,
@@ -24,8 +25,14 @@ export interface TraktInvocationOptions extends Omit<TraktOptions, "requests"> {
 
 export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}): Promise<void> {
   const now = options.now ?? new Date();
+  const auth = await linked(env, options, now);
+  if (auth === null) {
+    await recordSkip(env.DB, "trakt-history", "skip.missing_secret", now.toISOString());
+    await recordSkip(env.DB, "trakt-ratings", "skip.missing_secret", now.toISOString());
+    return;
+  }
   const requests = new RequestCap(env.RATE_CAP_TRAKT);
-  const sync = { ...options, now, requests };
+  const sync = { ...options, auth, now, requests };
 
   // A cap or a 429 belongs to the application rather than to one kind, so the
   // first stop ends the invocation.
@@ -42,7 +49,7 @@ export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}):
   // The drain takes the caller's options rather than the fixed `now` above, so
   // each of its runs stamps its own time.
   try {
-    await drainTraktHistory(env, { ...options, requests });
+    await drainTraktHistory(env, { ...options, auth, requests });
   } catch (error) {
     console.error({ event: "backfill.drain_failed", kind: "trakt-history", error: String(error) });
   }
@@ -59,6 +66,7 @@ export async function rewalkTraktYear(
   const now = options.now ?? new Date();
   return syncHistoryWindow(env, yearWindow(now.getUTCFullYear(), now, false), {
     ...options,
+    auth: options.auth ?? (await traktAuth(env, { ...options, now })),
     now,
     requests: new RequestCap(env.RATE_CAP_TRAKT),
   });
@@ -85,6 +93,26 @@ async function syncHistory(
   }
   const since = new Date(Date.parse(watermark.window) - OVERLAP_MS).toISOString();
   return syncHistoryWindow(env, watchedWindow(since, options.now.toISOString()), options);
+}
+
+// Null when no device login has stored a grant, which no retry fixes.
+async function linked(
+  env: Env,
+  options: TraktInvocationOptions,
+  now: Date,
+): Promise<TraktAuth | null> {
+  if (options.auth !== undefined) {
+    return options.auth;
+  }
+  try {
+    return await traktAuth(env, { ...options, now });
+  } catch (error) {
+    if (!(error instanceof MissingSecretError)) {
+      throw error;
+    }
+    console.error({ event: "sync.skipped", kind: "trakt", reason: "skip.missing_secret" });
+    return null;
+  }
 }
 
 // Logs a kind's failure so the other kind still runs.

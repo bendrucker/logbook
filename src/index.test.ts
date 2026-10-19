@@ -15,7 +15,7 @@ import { recentInvocations } from "./invocations";
 import { LAKE_CRON, readLatestBuild } from "./lake";
 import { recentRuns } from "./sync/runs";
 import { advance, readWatermark } from "./sync/state";
-import { moviePlay, traktResponse } from "../test/trakt-fixtures";
+import { linkTrakt, moviePlay, traktResponse } from "../test/trakt-fixtures";
 
 describe("fetch", () => {
   it("reports health", async () => {
@@ -65,6 +65,7 @@ describe("scheduled", () => {
   });
 
   it("records the invocation and samples freshness after a failed run", async () => {
+    await linkTrakt(env.DB);
     env.GITHUB_TOKEN = "token";
     await advance(env.DB, "issue", "2026-09-09T10:00:00.000Z", "2026-09-09T10:00:00Z");
     const { fetch } = stubFetch((request) =>
@@ -99,6 +100,7 @@ describe("scheduled", () => {
   });
 
   it("syncs Trakt beside GitHub on the same cron", async () => {
+    await linkTrakt(env.DB);
     const { fetch, requests } = stubFetch(() => traktResponse([], null));
     vi.stubGlobal("fetch", fetch);
 
@@ -108,6 +110,20 @@ describe("scheduled", () => {
       "/users/bendrucker/ratings",
     ]);
     expect(await recentRuns(env.DB, "trakt-ratings", 1)).toMatchObject([{ error: null }]);
+  });
+
+  it("records a Trakt skip rather than a run until a device login links the account", async () => {
+    const { fetch, requests } = stubFetch(() => traktResponse([], null));
+    vi.stubGlobal("fetch", fetch);
+
+    await worker.scheduled(createScheduledController({ cron: "17 * * * *" }), env);
+
+    expect(requests.filter((request) => new URL(request.url).hostname === "api.trakt.tv")).toEqual(
+      [],
+    );
+    expect(await recentRuns(env.DB, "trakt-ratings", 1)).toMatchObject([
+      { outcome: "skipped", reason: "skip.missing_secret" },
+    ]);
   });
 
   it("records a skip rather than a run while the GitHub token is unset", async () => {
@@ -154,6 +170,7 @@ describe("the nightly lake cron", () => {
   });
 
   it("re-reads the current year of Trakt history before building", async () => {
+    await linkTrakt(env.DB);
     const { fetch, requests } = stubFetch(() =>
       traktResponse([moviePlay(1, "2026-02-01T20:00:00.000Z")]),
     );

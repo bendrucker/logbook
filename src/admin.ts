@@ -14,6 +14,7 @@ import { MissingSecretError } from "./sync/run";
 import { lastRuns, recentFailures, type SyncRun } from "./sync/runs";
 import { readWatermarks, type Watermark } from "./sync/state";
 import { backfillInstapaper } from "./instapaper/backfill";
+import { pollDeviceLogin, startDeviceLogin } from "./trakt/auth";
 import { backfillTrakt } from "./trakt/backfill";
 import {
   exportIdParam,
@@ -163,6 +164,44 @@ export async function handleAppleMusicFinish(request: Request, env: Env): Promis
   } catch (error) {
     if (error instanceof ImportRequestError) {
       return Response.json({ error: error.message }, { status: 400 });
+    }
+    return serverError(error);
+  }
+}
+
+// The first half of a Trakt device login. The Worker holds the client secret,
+// so the exchange happens here and the grant never leaves it.
+export async function handleTraktLogin(request: Request, env: Env): Promise<Response> {
+  const refused = await authorize(request, env);
+  if (refused !== null) {
+    return refused;
+  }
+
+  try {
+    return Response.json(await startDeviceLogin(env));
+  } catch (error) {
+    return serverError(error);
+  }
+}
+
+// One poll of a device login, which stores the grant once the owner approves
+// it. Every state Trakt reports answers 200 with a `status`, so the caller
+// reads one shape until it is `linked` or final.
+export async function handleTraktLoginPoll(request: Request, env: Env): Promise<Response> {
+  const refused = await authorize(request, env);
+  if (refused !== null) {
+    return refused;
+  }
+
+  const code = new URL(request.url).searchParams.get("device_code");
+  if (code === null || code === "") {
+    return Response.json({ error: "device_code is required" }, { status: 400 });
+  }
+  try {
+    return Response.json(await pollDeviceLogin(env, code));
+  } catch (error) {
+    if (error instanceof MissingSecretError) {
+      return Response.json({ error: error.message }, { status: 503 });
     }
     return serverError(error);
   }

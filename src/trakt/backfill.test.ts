@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { emptyBucket } from "../../test/r2";
 import {
+  linkTrakt,
   movieRating,
   moviePlay,
   rateLimited,
@@ -15,6 +16,7 @@ const NOW = new Date("2026-09-10T12:00:00.000Z");
 
 beforeEach(async () => {
   await emptyBucket(env.RAW);
+  await linkTrakt(env.DB);
 });
 
 function play(year: number) {

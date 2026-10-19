@@ -7,6 +7,7 @@
     "lint": "oxlint --type-aware --report-unused-disable-directives",
     "backfill": "bun scripts/backfill.ts",
     "import:apple-music": "bun scripts/import-apple-music.ts",
+    "trakt:login": "bun scripts/trakt-login.ts",
     "test": "vitest run && vitest run --config workers/monitor/vitest.config.ts",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

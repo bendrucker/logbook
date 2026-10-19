@@ -139,3 +139,17 @@ export function stubTrakt(replies: readonly (() => Response)[]): FetchStub & { u
   const urls = () => requests.map((request) => new URL(request.url));
   return { fetch, requests, urls };
 }
+
+// A stored grant far from expiry, so a sync under test reads as the account
+// without spending a staged reply on a refresh.
+export async function linkTrakt(
+  db: D1Database,
+  expiresAt = "2099-01-01T00:00:00.000Z",
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO trakt_tokens (id, access_token, refresh_token, expires_at, updated_at) VALUES (1, 'access', 'refresh', ?1, ?1)",
+    )
+    .bind(expiresAt)
+    .run();
+}

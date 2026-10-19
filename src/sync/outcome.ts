@@ -51,7 +51,8 @@ const CONTRACT_ERRORS = new Set([
 ]);
 
 // By name, since `run.ts` classifies with this module and defines one of them.
-const CONFIG_ERRORS = new Set(["MissingSecretError", "UnknownUserError"]);
+// A refused Trakt refresh token needs a new device login, which no retry does.
+const CONFIG_ERRORS = new Set(["MissingSecretError", "UnknownUserError", "TraktAuthError"]);
 
 export function classify(error: unknown): Classified {
   if (error instanceof TraktRateLimited || error instanceof InstapaperRateLimited) {

@@ -115,7 +115,17 @@ Each scheduled invocation also leaves an `invocations` row, and each hourly one 
 
 ## Trakt
 
-The same hourly cron reads my public Trakt profile with the application's client ID, no OAuth. History reads from a day behind its watermark to now, and waits for the drain while backfill years are still enqueued. Ratings re-read in full every run. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_TRAKT` caps the requests one invocation sends, and a 429 stops it with `resumeAt` from `Retry-After`.
+The same hourly cron reads my Trakt profile as me, with an OAuth grant from a one-time device login. Trakt has no personal access token, and unauthenticated reads drew a 429 on the first request of many hours, with waits of up to four minutes, from a hub that sends a few requests an hour. Authenticated reads count against the account's own limit instead. The grant lives in D1's `trakt_tokens`, since Trakt rotates the refresh token on every refresh and a stale KV read of a rotated token would be a dead credential. Access tokens last a day, and an invocation refreshes one within six hours of expiry. A refresh that fails while the token still has time left reads with it anyway. A refused refresh token fails the runs with reason `config` until the next login. Until a login has stored a grant, both kinds record `skip.missing_secret`.
+
+Link the account once, and again whenever Trakt refuses the refresh token:
+
+```sh
+ADMIN_TOKEN=... bun run trakt:login "$WORKER"
+```
+
+It prints a code to approve at trakt.tv/activate and polls the Worker, which holds the client secret and exchanges the approved code itself, so the grant never leaves the Worker.
+
+History reads from a day behind its watermark to now, and waits for the drain while backfill years are still enqueued. Ratings re-read in full every run. Pages archive under `raw/trakt/{kind}/{window}/{fetched_at}/{page}.json`. `RATE_CAP_TRAKT` caps the requests one invocation sends, and a 429 stops it with `resumeAt` from `Retry-After`.
 
 Backfill history by year, from the year of `from` or, without it, the year of the oldest play:
 
@@ -237,17 +247,18 @@ The likeliest consumer beyond DuckDB on a laptop is a tool that lets Claude sear
 | ------------------------- | ------------------------------------- | ------------------------------- |
 | `GITHUB_TOKEN`            | Worker secret (`wrangler secret put`) | Every GitHub GraphQL request    |
 | `INSTAPAPER_ACCESS_TOKEN` | Worker secret (`wrangler secret put`) | Every Instapaper request        |
+| `TRAKT_CLIENT_SECRET`     | Worker secret (`wrangler secret put`) | Trakt device login and refresh  |
 | `ADMIN_TOKEN`             | Worker secret (`wrangler secret put`) | Bearer auth on the admin routes |
 
 The GitHub token is a classic personal access token with no scopes, so the hub sees and publishes public activity only. [docs/design.md](docs/design.md#visibility) records the decision.
 
 The Instapaper access token is a personal access token, generated for my own account on the [Applications page](https://www.instapaper.com/developers/applications). It doesn't expire. Without it the cron skips Instapaper and an Instapaper backfill answers 503.
 
-`ADMIN_TOKEN` is optional. `/admin/sync`, `/admin/backfill`, `/admin/lake`, and the Apple Music import routes answer 404 while it is unset. A deployment that never sets one exposes no admin surface.
+`ADMIN_TOKEN` is optional. `/admin/sync`, `/admin/backfill`, `/admin/lake`, `/admin/trakt/login`, and the Apple Music import routes answer 404 while it is unset. A deployment that never sets one exposes no admin surface.
 
 ## Infrastructure
 
-`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` and `TRAKT_USER` for whose history the hub reads, `TRAKT_CLIENT_ID` for the Trakt application, sent as `trakt-api-key` and paired with no secret for public reads, the [rate budget](#rate-budget), `RATE_CAP_TRAKT`, and `RATE_CAP_INSTAPAPER`. The service binding to the site joins them when publishing lands. A merge to `main` deploys. After `check` passes, the deploy job applies D1 migrations, then runs `wrangler deploy`.
+`wrangler.jsonc` owns the Worker, the `DB` D1 binding, the `RAW` and `LAKE` R2 bindings for `logbook-raw` and `activity-hub-lake`, both cron triggers, and public vars: `GITHUB_LOGIN` and `TRAKT_USER` for whose history the hub reads, `TRAKT_CLIENT_ID` for the Trakt application, sent as `trakt-api-key` beside the OAuth token, the [rate budget](#rate-budget), `RATE_CAP_TRAKT`, and `RATE_CAP_INSTAPAPER`. The service binding to the site joins them when publishing lands. A merge to `main` deploys. After `check` passes, the deploy job applies D1 migrations, then runs `wrangler deploy`.
 
 There is no Terraform here. Activity Hub needs it for a DNS record, a Workers route, and the Cloudflare Access applications in front of its admin routes. This hub is reached by cron and by a service binding. It has no hostname to manage. `/admin/sync` sits behind `ADMIN_TOKEN` alone, with no Access application in front of it.
 
@@ -259,7 +270,7 @@ cp .dev.vars.example .dev.vars
 bun run dev
 ```
 
-`wrangler dev` reads `GITHUB_TOKEN`, `INSTAPAPER_ACCESS_TOKEN`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
+`wrangler dev` reads `GITHUB_TOKEN`, `INSTAPAPER_ACCESS_TOKEN`, `TRAKT_CLIENT_SECRET`, and `ADMIN_TOKEN` from `.dev.vars`, which is gitignored. A run with all of them left empty serves `/healthz` and answers the admin routes 404.
 
 | Command                      | What it does                                   |
 | ---------------------------- | ---------------------------------------------- |
