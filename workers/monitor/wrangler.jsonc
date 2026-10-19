@@ -17,8 +17,8 @@
     "crons": ["47 * * * *"],
   },
   "vars": {
-    // Whose history the content probe reads, the same public identifiers the
-    // pipeline's own config names.
+    // Whose history the content probe reads, the same accounts the pipeline's
+    // own config names.
     "GITHUB_LOGIN": "bendrucker",
     "TRAKT_USER": "bendrucker",
     // The monitor's own Trakt application, apart from the pipeline's, so a

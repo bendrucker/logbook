@@ -293,7 +293,18 @@ Trakt is the second source: every play in my watch history and every rating, wit
 
 #### Access
 
-Both endpoints read a public profile with the application's client ID alone. `GET /users/{TRAKT_USER}/history` and `GET /users/{TRAKT_USER}/ratings` carry `trakt-api-version: 2` and `trakt-api-key` and no OAuth token, so there is no refresh flow to keep alive. `TRAKT_CLIENT_ID` and `TRAKT_USER` are both vars. Trakt sends the client ID as a header and pairs it with no secret for public reads. Making the profile private would stop the sync. Switching to OAuth would fix it.
+Both endpoints read as the account. `GET /users/{TRAKT_USER}/history` and `GET /users/{TRAKT_USER}/ratings` carry `trakt-api-version: 2`, `trakt-api-key` with the client ID, and `Authorization: Bearer` with an OAuth access token. Read with the client ID alone, the first request of many hours drew a 429 with a `Retry-After` of up to four minutes, from a hub sending a few requests an hour. Authenticated reads count against the account's own limit instead. Trakt has no personal access token, so the grant comes from a one-time device login, `bun run trakt:login`, which drives `POST /admin/trakt/login` and `/admin/trakt/login/poll` so the Worker exchanges the approved code itself and the grant never leaves it. Trakt deprecated client secrets for PKCE, so the device and refresh calls send the client ID alone. `TRAKT_CLIENT_ID`, `TRAKT_USER`, and `TRAKT_REDIRECT_URI` are vars.
+
+The grant lives in D1's `trakt_tokens`, one row. Access tokens last a day, and an invocation refreshes once six hours or less remain, so a failing refresh has hours of hourly retries before the token in hand lapses. Trakt rotates the refresh token on every refresh, which shapes the rest:
+
+- The row is in D1 rather than KV. An eventually consistent read of a rotated token would present a spent refresh token, and only a new device login recovers from that.
+- A refresh writes only over the row it read. Of two concurrent refreshes, Trakt refuses the second's spent token with `invalid_grant`, and that invocation reads the row again, once at once and once after two seconds, to take the winner's token.
+- A refusal or failure before Trakt issues a grant leaves the token in hand current, so the invocation reads with it while it has time left. Once it lapses, the error says what to fix: a re-login for `invalid_grant`, the application's client ID and redirect URI for any other refusal.
+- Once Trakt issues a grant, the old refresh token is spent. The write retries, and a grant that still fails to store reads for that invocation only. The next refresh is refused, and its error names the re-login.
+
+A refresh repeats `TRAKT_REDIRECT_URI`, which must be registered on the Trakt application. A device-flow grant never redirects there. Trakt warns against the out-of-band URI, so it is an https one.
+
+The token resolves inside each kind's run, so a failed refresh is that run's outcome: `config` for a refusal, `rate_limited` with `resumeAt` for a 429 from the token endpoint. Its error carries `endpoint: "oauth"`, which keeps the token endpoint's body out of R2, where only data pages archive. With no grant stored, the hourly and nightly passes record `skip.missing_secret` and a backfill answers 503.
 
 #### Tables
 
@@ -317,7 +328,7 @@ The nightly lake cron re-reads the whole current year of history before it build
 
 #### Rate Limit
 
-Trakt documents 500 unauthenticated GET requests every five minutes per application, and its responses carry no header reporting what is left. There is no point budget to account against, so Logbook caps the requests one invocation sends at `RATE_CAP_TRAKT`, and a 429 ends the invocation with `resumeAt` read from `Retry-After`. Trakt runs record `cost` 0 in `sync_runs` so they stay out of GitHub's point ledger. `pages` counts their requests.
+Trakt documents 1,000 GET requests every five minutes, counted per user for authenticated calls. A 429 names the limit it applied in `X-Ratelimit`, which the run's error repeats, so a 429 without it came from a layer in front of Trakt. There is no point budget to account against, so Logbook caps the requests one invocation sends at `RATE_CAP_TRAKT`, and a 429 ends the invocation with `resumeAt` read from `Retry-After`. Trakt runs record `cost` 0 in `sync_runs` so they stay out of GitHub's point ledger. `pages` counts their requests.
 
 #### Backfill
 

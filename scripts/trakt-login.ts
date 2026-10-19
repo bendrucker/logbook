@@ -2,8 +2,7 @@
 // Links the Worker to a Trakt account through Trakt's device flow. The Worker
 // asks Trakt for a code, this prints it, and the account owner enters it at
 // Trakt's verification URL while this polls the Worker, which exchanges the
-// approved code and stores the grant. The client secret and the grant stay in
-// the Worker.
+// approved code and stores the grant, so the grant never leaves the Worker.
 
 import { z } from "zod";
 import { adminToken, fail, parseUrl } from "./admin-client";
@@ -46,9 +45,9 @@ try {
     }
     // oxlint-disable-next-line no-await-in-loop -- Trakt asks for one poll per interval
     await Bun.sleep(interval);
-    const url = `/admin/trakt/login/poll?device_code=${encodeURIComponent(code.device_code)}`;
+    const poll = call("/admin/trakt/login/poll", { device_code: code.device_code });
     // oxlint-disable-next-line no-await-in-loop -- each poll waits on the one before
-    const result = PollResult.parse(await call(url));
+    const result = PollResult.parse(await poll);
     if (result.status === "linked") {
       console.log(`Linked. The access token expires ${result.expiresAt} and refreshes itself.`);
       break;
@@ -63,11 +62,12 @@ try {
   fail(error instanceof Error ? error.message : String(error));
 }
 
-async function call(path: string): Promise<unknown> {
+async function call(path: string, payload?: Record<string, string>): Promise<unknown> {
   const url = new URL(path, base);
   const response = await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
   });
   const body = await response.text();
   if (!response.ok) {

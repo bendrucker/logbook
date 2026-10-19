@@ -33,7 +33,7 @@ const Grant = z.object({
   access_token: z.string().min(1),
   refresh_token: z.string().min(1),
   expires_in: z.number().int().positive(),
-  created_at: z.number().int().positive(),
+  created_at: z.number().int().positive().optional(),
 });
 
 // Trakt answers each waiting state of a device login with its own status.
@@ -75,8 +75,10 @@ try {
     }
   }
 
-  await store(grant);
-  const expiresAt = new Date((grant.created_at + grant.expires_in) * 1000).toISOString();
+  // `created_at` is Trakt's clock, as the monitor's own refresh reads it.
+  const issued = grant.created_at === undefined ? Date.now() : grant.created_at * 1000;
+  const expiresAt = new Date(issued + grant.expires_in * 1000).toISOString();
+  await store(grant, expiresAt);
   console.log(`Linked. The access token expires ${expiresAt} and the monitor refreshes it.`);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
@@ -96,8 +98,7 @@ async function post(pathname: string, payload: Record<string, string>): Promise<
 
 // Through a file rather than `--command`, so the tokens never sit in a process
 // listing. The file lives under the gitignored `tmp/` only as long as the call.
-async function store(grant: z.infer<typeof Grant>): Promise<void> {
-  const expiresAt = new Date((grant.created_at + grant.expires_in) * 1000).toISOString();
+async function store(grant: z.infer<typeof Grant>, expiresAt: string): Promise<void> {
   const values = [grant.access_token, grant.refresh_token, expiresAt, new Date().toISOString()]
     .map(quote)
     .join(", ");

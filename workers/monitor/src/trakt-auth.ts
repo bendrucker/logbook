@@ -49,6 +49,35 @@ export async function traktAccessToken(
     return stored.access_token;
   }
 
+  let parsed: z.infer<typeof grant>;
+  try {
+    parsed = await requestRefresh(env, stored, userAgent);
+  } catch (error) {
+    // Trakt issued nothing, so the token in hand is still the current one. It
+    // reads until it lapses, and the next run refreshes again.
+    if (remaining > 0) {
+      console.error({ event: "monitor.trakt.refresh_failed", error: String(error) });
+      return stored.access_token;
+    }
+    throw error;
+  }
+
+  // Trakt has spent the old refresh token, so this grant is the only one left.
+  // A grant that fails to store still reads this run, and the next refresh's
+  // refusal names the fix.
+  try {
+    await storeGrant(env.DB, parsed, now);
+  } catch (error) {
+    console.error({ event: "monitor.trakt.grant_unstored", error: String(error) });
+  }
+  return parsed.access_token;
+}
+
+async function requestRefresh(
+  env: TraktCredentials,
+  stored: StoredToken,
+  userAgent: string,
+): Promise<z.infer<typeof grant>> {
   const response = await fetch("https://api.trakt.tv/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/json", "user-agent": userAgent },
@@ -59,33 +88,45 @@ export async function traktAccessToken(
       grant_type: "refresh_token",
     }),
   });
+  const body = await response.text();
   if (response.status === 400 || response.status === 401) {
     throw new Error(
-      `Trakt refused the refresh token (${response.status}); run \`bun run monitor:trakt-login\``,
+      body.includes("invalid_grant")
+        ? `Trakt refused the refresh token (${response.status}); run \`bun run monitor:trakt-login\``
+        : `Trakt refused the token refresh (${response.status}: ${body.slice(0, 200)}); check TRAKT_CLIENT_ID and TRAKT_REDIRECT_URI against the Trakt application`,
     );
   }
   if (!response.ok) {
-    // The token in hand still reads until it lapses, and the next run retries.
-    if (remaining > 0) {
-      console.error({ event: "monitor.trakt.refresh_failed", status: response.status });
-      return stored.access_token;
-    }
     throw new Error(`Trakt token refresh answered ${response.status}`);
   }
+  return grant.parse(JSON.parse(body));
+}
 
-  const parsed = grant.parse(await response.json());
+const WRITE_ATTEMPTS = 3;
+
+async function storeGrant(db: D1Database, parsed: z.infer<typeof grant>, now: Date) {
   const issued = parsed.created_at === undefined ? now.getTime() : parsed.created_at * 1000;
-  await env.DB.prepare(
-    "UPDATE trakt_tokens SET access_token = ?1, refresh_token = ?2, expires_at = ?3, updated_at = ?4 WHERE id = 1",
-  )
+  const statement = db
+    .prepare(
+      "UPDATE trakt_tokens SET access_token = ?1, refresh_token = ?2, expires_at = ?3, updated_at = ?4 WHERE id = 1",
+    )
     .bind(
       parsed.access_token,
       parsed.refresh_token,
       new Date(issued + parsed.expires_in * 1000).toISOString(),
       now.toISOString(),
-    )
-    .run();
-  return parsed.access_token;
+    );
+  for (let attempt = 1; ; attempt++) {
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- a retry follows a failed write
+      await statement.run();
+      return;
+    } catch (error) {
+      if (attempt >= WRITE_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
 }
 
 function readToken(db: D1Database): Promise<StoredToken | null> {

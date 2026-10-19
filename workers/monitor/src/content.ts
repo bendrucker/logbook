@@ -31,16 +31,32 @@ export interface ContentEnv {
   INSTAPAPER_ACCESS_TOKEN?: string;
 }
 
+// A D1 failure reading the grant leaves Trakt out like a missing grant, so it
+// can't stop the run before the other sources and the lake are recorded.
+async function traktGrant(db: D1Database): Promise<true | string> {
+  try {
+    return (await traktLinked(db)) ? true : "no grant";
+  } catch (error) {
+    return `grant unreadable: ${String(error)}`;
+  }
+}
+
 // Sources without the credential they need are left out, and say so, rather
 // than reading as a lag of zero.
 export async function contentSources(env: ContentEnv): Promise<ContentSource[]> {
   const sources = [github(env.GITHUB_LOGIN, env.GITHUB_TOKEN)];
-  if (await traktLinked(env.DB)) {
+  const linked = await traktGrant(env.DB);
+  if (linked === true) {
+    // One resolution per run, shared by every request the probe sends.
+    let token: Promise<string> | null = null;
     sources.push(
-      trakt(env.TRAKT_USER, env.TRAKT_CLIENT_ID, async () => traktAccessToken(env, USER_AGENT)),
+      trakt(env.TRAKT_USER, env.TRAKT_CLIENT_ID, async () => {
+        token ??= traktAccessToken(env, USER_AGENT);
+        return token;
+      }),
     );
   } else {
-    console.log({ event: "monitor.content.skipped", source: "trakt", reason: "no grant" });
+    console.log({ event: "monitor.content.skipped", source: "trakt", reason: linked });
   }
   if (env.INSTAPAPER_ACCESS_TOKEN === undefined || env.INSTAPAPER_ACCESS_TOKEN === "") {
     console.log({ event: "monitor.content.skipped", source: "instapaper", reason: "no token" });

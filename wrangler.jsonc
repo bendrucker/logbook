@@ -39,8 +39,8 @@
     "RATE_CAP_CRON": 40,
     "RATE_CAP_BACKFILL": 150,
     // Trakt requests one invocation sends at most, cron or backfill. Trakt
-    // allows an application 500 GETs every five minutes and answers 429 past
-    // that, which stops the run until its Retry-After.
+    // allows an authenticated user 1,000 GETs every five minutes and answers
+    // 429 past that, which stops the run until its Retry-After.
     "RATE_CAP_TRAKT": 100,
     // Instapaper requests one invocation sends at most, cron or backfill.
     // Instapaper documents a rate limit without a number and answers 429 past

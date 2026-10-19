@@ -11,7 +11,7 @@ import {
   TraktValidationError,
   traktGet,
 } from "./client";
-import { TraktAuth } from "./auth";
+import { traktAuth } from "./auth";
 import { historyPage } from "./schema";
 
 const anything = z.array(z.unknown());
@@ -20,7 +20,7 @@ describe("traktGet", () => {
   it("reads as the account with the token the auth resolves", async () => {
     const { fetch, requests } = stubFetch(() => traktResponse([]));
     await linkTrakt(env.DB);
-    const auth = new TraktAuth(env);
+    const auth = (await traktAuth(env))!;
 
     await traktGet("client-id", "/users/bendrucker/history", {}, anything, { fetch, auth });
 

@@ -242,4 +242,54 @@ describe("contentSources", () => {
 
     expect(names).toEqual(["github", "trakt"]);
   });
+
+  it("refreshes once however many requests the probe sends", async () => {
+    // Due for a refresh against the real clock, with time left to fall back on.
+    const due = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await env.DB.prepare(
+      "INSERT INTO trakt_tokens VALUES (1, 'access', 'refresh', ?1, '2026-10-18T00:00:00.000Z')",
+    )
+      .bind(due)
+      .run();
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("down", { status: 503 }))
+      .mockResolvedValueOnce(
+        Response.json([{ watched_at: "2026-10-17T22:00:00.000Z" }], {
+          headers: { "x-pagination-item-count": "150" },
+        }),
+      )
+      .mockResolvedValueOnce(Response.json([{ watched_at: "2026-10-16T20:00:00.000Z" }]));
+    const probe = (await contentSources(base)).find(({ name }) => name === "trakt");
+
+    await probe?.oldestAfter(new Date("2026-10-16T00:00:00Z"));
+
+    expect(fetch.mock.calls.map((_, call) => requested(fetch, call).pathname)).toEqual([
+      "/oauth/token",
+      "/users/bendrucker/history",
+      "/users/bendrucker/history",
+    ]);
+  });
+
+  it("leaves Trakt out when the grant can't be read", async () => {
+    const names = (await contentSources({ ...base, DB: failingPrepare(env.DB) })).map(
+      ({ name }) => name,
+    );
+
+    expect(names).toEqual(["github"]);
+  });
 });
+
+function failingPrepare(db: D1Database): D1Database {
+  return new Proxy(db, {
+    get(target, key: keyof D1Database) {
+      if (key === "prepare") {
+        return () => {
+          throw new Error("D1 is down");
+        };
+      }
+      const value = target[key];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}

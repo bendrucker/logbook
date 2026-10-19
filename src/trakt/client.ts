@@ -11,25 +11,44 @@ const API_VERSION = "2";
 // pagination guide names as common.
 export const PAGE_LIMIT = 250;
 
+// Which Trakt endpoint answered: a data read, or the OAuth token endpoint a
+// read refreshes through first. Only a data read's bytes belong in raw storage
+// as a page.
+export type TraktEndpoint = "api" | "oauth";
+
 // Raw storage keeps a failing response's bytes, so every failure after the
 // bytes arrive carries them.
 export class TraktResponseError extends Error {
   readonly body: string;
   readonly status: number;
+  readonly endpoint: TraktEndpoint;
 
   // The name is a literal per subclass rather than the constructor's own, which
   // a minified build would rename.
-  constructor(name: string, message: string, status: number, body: string, options?: ErrorOptions) {
+  constructor(
+    name: string,
+    message: string,
+    status: number,
+    body: string,
+    options?: ErrorOptions & { endpoint?: TraktEndpoint },
+  ) {
     super(message, options);
     this.name = name;
     this.status = status;
     this.body = body;
+    this.endpoint = options?.endpoint ?? "api";
   }
 }
 
+function subject(endpoint: TraktEndpoint): string {
+  return endpoint === "oauth" ? "Trakt token refresh" : "Trakt";
+}
+
 export class TraktHttpError extends TraktResponseError {
-  constructor(status: number, body: string) {
-    super("TraktHttpError", `Trakt responded ${status}`, status, body);
+  constructor(status: number, body: string, endpoint: TraktEndpoint = "api") {
+    super("TraktHttpError", `${subject(endpoint)} responded ${status}`, status, body, {
+      endpoint,
+    });
   }
 }
 
@@ -39,12 +58,18 @@ export class TraktHttpError extends TraktResponseError {
 export class TraktRateLimited extends TraktResponseError {
   readonly retryAfterSeconds: number;
 
-  constructor(retryAfterSeconds: number, body: string, limit: string | null = null) {
+  constructor(
+    retryAfterSeconds: number,
+    body: string,
+    limit: string | null = null,
+    endpoint: TraktEndpoint = "api",
+  ) {
     super(
       "TraktRateLimited",
-      `Trakt rate limit (429, ${limit ?? "no X-Ratelimit"}), retry after ${retryAfterSeconds}s`,
+      `${subject(endpoint)} rate limit (429, ${limit ?? "no X-Ratelimit"}), retry after ${retryAfterSeconds}s`,
       429,
       body,
+      { endpoint },
     );
     this.retryAfterSeconds = retryAfterSeconds;
   }
@@ -142,14 +167,14 @@ export async function traktGet<T>(
   };
 }
 
-function retryAfter(headers: Headers): number {
+export function retryAfter(headers: Headers): number {
   const seconds = Number(headers.get("retry-after") ?? Number.NaN);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_RETRY_SECONDS;
 }
 
 const rateLimitHeader = z.object({ name: z.string() });
 
-function limitName(headers: Headers): string | null {
+export function limitName(headers: Headers): string | null {
   const value = headers.get("x-ratelimit");
   if (value === null) {
     return null;

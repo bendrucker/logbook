@@ -1,11 +1,11 @@
 import { frontierStatus } from "../sync/frontier";
 import type { TraktKind } from "../sync/kinds";
-import { MissingSecretError, type SyncResult } from "../sync/run";
+import type { SyncResult } from "../sync/run";
 import { recordSkip } from "../sync/runs";
 import { readWatermark } from "../sync/state";
 import { drainTraktHistory } from "./backfill";
 import { RequestCap } from "../request-cap";
-import { type TraktAuth, traktAuth } from "./auth";
+import { traktAuth } from "./auth";
 import type { TraktOptions } from "./client";
 import {
   syncHistoryWindow,
@@ -25,8 +25,9 @@ export interface TraktInvocationOptions extends Omit<TraktOptions, "requests"> {
 
 export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}): Promise<void> {
   const now = options.now ?? new Date();
-  const auth = await linked(env, options, now);
+  const auth = options.auth ?? (await traktAuth(env, { ...options, now }));
   if (auth === null) {
+    console.log({ event: "sync.skipped", kind: "trakt", reason: "skip.missing_secret" });
     await recordSkip(env.DB, "trakt-history", "skip.missing_secret", now.toISOString());
     await recordSkip(env.DB, "trakt-ratings", "skip.missing_secret", now.toISOString());
     return;
@@ -59,14 +60,20 @@ export async function syncTrakt(env: Env, options: TraktInvocationOptions = {}):
 // filter on `watched_at`. The nightly pass re-reads the current year to catch
 // the ones backdated within it. It leaves the watermark alone, so it never
 // declares an unbackfilled history synced.
+// Null when no device login has stored a grant, which records a skip.
 export async function rewalkTraktYear(
   env: Env,
   options: TraktInvocationOptions = {},
-): Promise<SyncResult> {
+): Promise<SyncResult | null> {
   const now = options.now ?? new Date();
+  const auth = options.auth ?? (await traktAuth(env, { ...options, now }));
+  if (auth === null) {
+    await recordSkip(env.DB, "trakt-history", "skip.missing_secret", now.toISOString());
+    return null;
+  }
   return syncHistoryWindow(env, yearWindow(now.getUTCFullYear(), now, false), {
     ...options,
-    auth: options.auth ?? (await traktAuth(env, { ...options, now })),
+    auth,
     now,
     requests: new RequestCap(env.RATE_CAP_TRAKT),
   });
@@ -93,26 +100,6 @@ async function syncHistory(
   }
   const since = new Date(Date.parse(watermark.window) - OVERLAP_MS).toISOString();
   return syncHistoryWindow(env, watchedWindow(since, options.now.toISOString()), options);
-}
-
-// Null when no device login has stored a grant, which no retry fixes.
-async function linked(
-  env: Env,
-  options: TraktInvocationOptions,
-  now: Date,
-): Promise<TraktAuth | null> {
-  if (options.auth !== undefined) {
-    return options.auth;
-  }
-  try {
-    return await traktAuth(env, { ...options, now });
-  } catch (error) {
-    if (!(error instanceof MissingSecretError)) {
-      throw error;
-    }
-    console.error({ event: "sync.skipped", kind: "trakt", reason: "skip.missing_secret" });
-    return null;
-  }
 }
 
 // Logs a kind's failure so the other kind still runs.

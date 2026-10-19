@@ -1,6 +1,12 @@
 import { z } from "zod";
-import { MissingSecretError } from "../sync/run";
-import { TraktHttpError, TraktResponseError, USER_AGENT } from "./client";
+import {
+  limitName,
+  retryAfter,
+  TraktHttpError,
+  TraktRateLimited,
+  TraktResponseError,
+  USER_AGENT,
+} from "./client";
 
 const ENDPOINT = "https://api.trakt.tv";
 
@@ -21,21 +27,26 @@ const tokenGrant = z.object({
 
 type TokenGrant = z.infer<typeof tokenGrant>;
 
-interface StoredToken {
+export interface StoredToken {
   access_token: string;
   refresh_token: string;
   expires_at: string;
 }
 
-// Trakt refused the refresh token, and no concurrent refresh replaced it. Only
-// a new device login recovers.
+// Trakt refused the refresh outright: a spent or revoked refresh token, or a
+// client ID or redirect URI the application doesn't match. Neither recovers on
+// a retry.
 export class TraktAuthError extends TraktResponseError {
   constructor(status: number, body: string) {
+    const revoked = oauthError(body) === "invalid_grant";
     super(
       "TraktAuthError",
-      `Trakt refused the refresh token (${status}); run \`bun run trakt:login\``,
+      revoked
+        ? `Trakt refused the refresh token (${status}); run \`bun run trakt:login\``
+        : `Trakt refused the token refresh (${status}: ${body.slice(0, 200)}); check TRAKT_CLIENT_ID and TRAKT_REDIRECT_URI against the Trakt application`,
       status,
       body,
+      { endpoint: "oauth" },
     );
   }
 }
@@ -44,68 +55,101 @@ export interface TraktAuthOptions {
   fetch?: typeof globalThis.fetch;
   endpoint?: string;
   now?: Date;
+  // How long a refresh refused as spent waits before reading the row again,
+  // for a concurrent refresh that rotated the token but hasn't stored it yet.
+  wait?: (ms: number) => Promise<void>;
 }
+
+// How long a concurrent refresh's write gets to land.
+const RACE_WAIT_MS = 2000;
+
+// Attempts at storing a grant Trakt already issued. Once Trakt answers a
+// refresh, the old refresh token is spent, so a grant that fails to store
+// leaves only a new device login.
+const WRITE_ATTEMPTS = 3;
 
 // Resolves the access token once per invocation, refreshing it first when it
 // is close to expiry. Every request the invocation sends shares the result.
 export class TraktAuth {
   readonly #env: Env;
+  readonly #stored: StoredToken;
   readonly #options: TraktAuthOptions;
   #token: Promise<string> | null = null;
 
-  constructor(env: Env, options: TraktAuthOptions = {}) {
+  constructor(env: Env, stored: StoredToken, options: TraktAuthOptions = {}) {
     this.#env = env;
+    this.#stored = stored;
     this.#options = options;
   }
 
   accessToken(): Promise<string> {
-    this.#token ??= resolve(this.#env, this.#options);
+    this.#token ??= resolve(this.#env, this.#stored, this.#options);
     return this.#token;
   }
 }
 
-// Throws before any request goes out when no device login has stored a grant,
-// so the hourly sync skips rather than failing each hour on a credential a
-// retry can't supply.
-export async function traktAuth(env: Env, options: TraktAuthOptions = {}): Promise<TraktAuth> {
-  if ((await readToken(env.DB)) === null) {
-    throw new MissingSecretError(NOT_LINKED);
-  }
-  return new TraktAuth(env, options);
+// Null when no device login has stored a grant, so a caller skips rather than
+// failing each hour on a credential a retry can't supply.
+export async function traktAuth(
+  env: Env,
+  options: TraktAuthOptions = {},
+): Promise<TraktAuth | null> {
+  const stored = await readToken(env.DB);
+  return stored === null ? null : new TraktAuth(env, stored, options);
 }
 
-const NOT_LINKED = "A Trakt login (`bun run trakt:login`)";
+export const NOT_LINKED = "A Trakt login (`bun run trakt:login`)";
 
-async function resolve(env: Env, options: TraktAuthOptions): Promise<string> {
-  const stored = await readToken(env.DB);
-  if (stored === null) {
-    throw new MissingSecretError(NOT_LINKED);
-  }
+async function resolve(env: Env, stored: StoredToken, options: TraktAuthOptions): Promise<string> {
   const now = options.now ?? new Date();
   const remaining = Date.parse(stored.expires_at) - now.getTime();
   if (remaining > REFRESH_AHEAD_MS) {
     return stored.access_token;
   }
 
+  let refreshed: Refreshed;
   try {
-    return await refresh(env, stored, options, now);
+    refreshed = await requestRefresh(env, stored, options);
   } catch (error) {
-    // A token with time left still reads, and the next invocation refreshes
-    // again. A refused refresh token is final, so it surfaces even then.
-    if (remaining > 0 && !(error instanceof TraktAuthError)) {
+    // Trakt issued nothing, so the token in hand is still the current one. It
+    // reads until it lapses, and the next invocation refreshes again.
+    if (remaining > 0) {
       console.error({ event: "trakt.refresh_failed", error: String(error) });
       return stored.access_token;
     }
     throw error;
   }
+  if ("current" in refreshed) {
+    return refreshed.current;
+  }
+
+  const { grant } = refreshed;
+  try {
+    if (!(await storeRefresh(env.DB, grant, now, stored.refresh_token))) {
+      // Another invocation stored its own refresh between this one's read and
+      // write. Its row is as good as this grant, and keeping it leaves one
+      // refresh token in play.
+      const current = await readToken(env.DB);
+      if (current !== null) {
+        return current.access_token;
+      }
+    }
+  } catch (error) {
+    // The new access token still reads, so this invocation goes on. The next
+    // refresh presents a spent token, and its refusal names the fix.
+    console.error({ event: "trakt.grant_unstored", error: String(error) });
+  }
+  return grant.access_token;
 }
 
-async function refresh(
+type Refreshed = { grant: TokenGrant } | { current: string };
+
+// Throws on any refusal, before Trakt has issued a grant.
+async function requestRefresh(
   env: Env,
   stored: StoredToken,
   options: TraktAuthOptions,
-  now: Date,
-): Promise<string> {
+): Promise<Refreshed> {
   const response = await post(options, "/oauth/token", {
     refresh_token: stored.refresh_token,
     client_id: env.TRAKT_CLIENT_ID,
@@ -116,31 +160,79 @@ async function refresh(
   });
   const body = await response.text();
 
+  if (response.status === 429) {
+    throw new TraktRateLimited(
+      retryAfter(response.headers),
+      body,
+      limitName(response.headers),
+      "oauth",
+    );
+  }
   if (response.status === 400 || response.status === 401) {
     // Trakt rotates the refresh token, so a concurrent invocation that
-    // refreshed first leaves this one holding a spent token and a fresh row.
-    const current = await readToken(env.DB);
-    if (current !== null && current.refresh_token !== stored.refresh_token) {
-      return current.access_token;
+    // refreshed first leaves this one holding a spent token. Its row may land
+    // a moment after Trakt refused this one.
+    if (oauthError(body) === "invalid_grant") {
+      const current = await rotatedSince(env.DB, stored, options);
+      if (current !== null) {
+        return { current: current.access_token };
+      }
     }
     throw new TraktAuthError(response.status, body);
   }
   if (!response.ok) {
-    throw new TraktHttpError(response.status, body);
+    throw new TraktHttpError(response.status, body, "oauth");
   }
+  return { grant: tokenGrant.parse(JSON.parse(body)) };
+}
 
-  const grant = tokenGrant.parse(JSON.parse(body));
-  const written = await writeToken(env.DB, grant, now, stored.refresh_token);
-  if (!written) {
-    // Another invocation stored its own refresh between this one's read and
-    // write. Its row is as good as this grant, and keeping it leaves one
-    // refresh token in play.
-    const current = await readToken(env.DB);
-    if (current !== null) {
-      return current.access_token;
+async function rotatedSince(
+  db: D1Database,
+  stored: StoredToken,
+  options: TraktAuthOptions,
+): Promise<StoredToken | null> {
+  const wait = options.wait ?? (async (ms: number) => scheduler.wait(ms));
+  for (const delay of [0, RACE_WAIT_MS]) {
+    if (delay > 0) {
+      // oxlint-disable-next-line no-await-in-loop -- the second read waits on the first
+      await wait(delay);
+    }
+    // oxlint-disable-next-line no-await-in-loop -- each read follows the wait before it
+    const current = await readToken(db);
+    if (current !== null && current.refresh_token !== stored.refresh_token) {
+      return current;
     }
   }
-  return grant.access_token;
+  return null;
+}
+
+async function storeRefresh(
+  db: D1Database,
+  grant: TokenGrant,
+  now: Date,
+  replacing: string,
+): Promise<boolean> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- a retry follows a failed write
+      return await writeToken(db, grant, now, replacing);
+    } catch (error) {
+      if (attempt >= WRITE_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
+}
+
+const oauthErrorBody = z.object({ error: z.string() });
+
+// Trakt's OAuth errors name themselves in an `error` field, as RFC 6749 has it.
+function oauthError(body: string): string | null {
+  try {
+    return oauthErrorBody.parse(JSON.parse(body)).error;
+  } catch {
+    return null;
+  }
 }
 
 export type DeviceCode = z.infer<typeof deviceCode>;

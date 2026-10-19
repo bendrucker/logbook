@@ -12,6 +12,7 @@ import {
 import { enqueue, frontierStatus } from "../sync/frontier";
 import { recentRuns } from "../sync/runs";
 import { advance, readWatermark } from "../sync/state";
+import { traktAuth } from "./auth";
 import { rewalkTraktYear, syncTrakt } from "./incremental";
 
 const NOW = new Date("2026-09-10T12:00:00.000Z");
@@ -49,6 +50,26 @@ describe("syncTrakt", () => {
     expect(await recentRuns(env.DB, "trakt-history", 1)).toMatchObject([
       { outcome: "skipped", reason: "skip.no_watermark" },
     ]);
+  });
+
+  it("fails a refused refresh as config and archives no page for it", async () => {
+    await env.DB.prepare("DELETE FROM trakt_tokens").run();
+    await linkTrakt(env.DB, "2026-09-10T11:00:00.000Z");
+    await advance(env.DB, "trakt-history", WATERMARK, WATERMARK);
+    const trakt = stubTrakt([() => Response.json({ error: "invalid_grant" }, { status: 401 })]);
+    const auth = await traktAuth(env, {
+      fetch: trakt.fetch,
+      now: NOW,
+      wait: () => Promise.resolve(),
+    });
+
+    await syncTrakt(env, { fetch: trakt.fetch, now: NOW, auth: auth ?? undefined });
+
+    expect(trakt.urls().map((url) => url.pathname)).toEqual(["/oauth/token"]);
+    expect(await recentRuns(env.DB, "trakt-history", 1)).toMatchObject([
+      { outcome: "failed", reason: "config" },
+    ]);
+    expect((await env.RAW.list()).objects).toEqual([]);
   });
 
   it("ends the invocation on a 429 rather than sending the next kind", async () => {
@@ -107,8 +128,19 @@ describe("rewalkTraktYear", () => {
 
     const run = await rewalkTraktYear(env, { fetch: trakt.fetch, now: NOW });
 
-    expect(run.error).toBeNull();
+    expect(run?.error).toBeNull();
     expect(trakt.urls()[0]?.searchParams.get("start_at")).toBe("2026-01-01T00:00:00.000Z");
     expect((await readWatermark(env.DB, "trakt-history"))?.window).toBe(WATERMARK);
+  });
+
+  it("records a skip rather than a run until a device login links the account", async () => {
+    await env.DB.prepare("DELETE FROM trakt_tokens").run();
+    const trakt = stubTrakt([]);
+
+    expect(await rewalkTraktYear(env, { fetch: trakt.fetch, now: NOW })).toBeNull();
+    expect(trakt.requests).toEqual([]);
+    expect(await recentRuns(env.DB, "trakt-history", 1)).toMatchObject([
+      { outcome: "skipped", reason: "skip.missing_secret" },
+    ]);
   });
 });

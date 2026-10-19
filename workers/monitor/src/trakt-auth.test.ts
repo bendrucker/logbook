@@ -66,10 +66,53 @@ describe("traktAccessToken", () => {
     await expect(traktAccessToken(credentials, "ua", NOW)).resolves.toBe("access");
   });
 
-  it("fails on a refused refresh token", async () => {
+  it("reads with the token in hand when the refresh token is refused with time left", async () => {
     await link("2026-10-18T14:00:00.000Z");
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 401 }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ error: "invalid_grant" }, { status: 401 }),
+    );
 
-    await expect(traktAccessToken(credentials, "ua", NOW)).rejects.toThrow("refused");
+    await expect(traktAccessToken(credentials, "ua", NOW)).resolves.toBe("access");
+  });
+
+  it("names a re-login once the refused token has lapsed", async () => {
+    await link("2026-10-18T11:00:00.000Z");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ error: "invalid_grant" }, { status: 401 }),
+    );
+
+    await expect(traktAccessToken(credentials, "ua", NOW)).rejects.toThrow("monitor:trakt-login");
+  });
+
+  it("names the application settings for any other refusal", async () => {
+    await link("2026-10-18T11:00:00.000Z");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ error: "invalid_client" }, { status: 400 }),
+    );
+
+    await expect(traktAccessToken(credentials, "ua", NOW)).rejects.toThrow("TRAKT_REDIRECT_URI");
+  });
+
+  it("reads with the new token when the issued grant fails to store", async () => {
+    await link("2026-10-18T14:00:00.000Z");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 86400 }),
+    );
+    const db = new Proxy(env.DB, {
+      get(target, key: keyof D1Database) {
+        if (key === "prepare") {
+          return (sql: string) => {
+            if (sql.startsWith("UPDATE")) {
+              throw new Error("D1 is down");
+            }
+            return target.prepare(sql);
+          };
+        }
+        const value = target[key];
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    await expect(traktAccessToken({ ...credentials, DB: db }, "ua", NOW)).resolves.toBe("access-2");
   });
 });

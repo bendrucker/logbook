@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { monthWindow } from "./github/windows";
 import { type Invocation, recentInvocations } from "./invocations";
 import { buildLake, type LakeBuild, readLatestBuild } from "./lake";
@@ -169,6 +170,8 @@ export async function handleAppleMusicFinish(request: Request, env: Env): Promis
   }
 }
 
+const pollRequest = z.object({ device_code: z.string().min(1) });
+
 // The first half of a Trakt device login. The exchange happens here, so the
 // grant goes straight into D1 and never leaves the Worker.
 export async function handleTraktLogin(request: Request, env: Env): Promise<Response> {
@@ -193,14 +196,26 @@ export async function handleTraktLoginPoll(request: Request, env: Env): Promise<
     return refused;
   }
 
-  const code = new URL(request.url).searchParams.get("device_code");
-  if (code === null || code === "") {
-    return Response.json({ error: "device_code is required" }, { status: 400 });
+  // In the body rather than the URL, which request logs keep. With no client
+  // secret, a device code and the public client ID are enough to claim the
+  // grant until it is used.
+  const parsed = pollRequest.safeParse(await jsonBody(request));
+  if (!parsed.success) {
+    return Response.json({ error: "a JSON body with device_code is required" }, { status: 400 });
   }
+  const code = parsed.data.device_code;
   try {
     return Response.json(await pollDeviceLogin(env, code));
   } catch (error) {
     return serverError(error);
+  }
+}
+
+async function jsonBody(request: Request): Promise<unknown> {
+  try {
+    return await request.json();
+  } catch {
+    return null;
   }
 }
 

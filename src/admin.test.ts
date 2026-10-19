@@ -289,8 +289,12 @@ describe("POST /admin/backfill", () => {
 });
 
 describe("POST /admin/trakt/login", () => {
-  function trakt(path: string, headers: HeadersInit = authorization): Promise<Response> {
-    return exports.default.fetch(`https://logbook.test${path}`, { method: "POST", headers });
+  function trakt(
+    path: string,
+    headers: HeadersInit = authorization,
+    body?: string,
+  ): Promise<Response> {
+    return exports.default.fetch(`https://logbook.test${path}`, { method: "POST", headers, body });
   }
 
   afterEach(() => {
@@ -329,7 +333,11 @@ describe("POST /admin/trakt/login", () => {
     const grant = { access_token: "a", refresh_token: "r", expires_in: 86400, created_at: 1 };
     vi.stubGlobal("fetch", stubFetch(() => Response.json(grant)).fetch);
 
-    const response = await trakt("/admin/trakt/login/poll?device_code=device");
+    const response = await trakt(
+      "/admin/trakt/login/poll",
+      authorization,
+      JSON.stringify({ device_code: "device" }),
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: "linked" });
