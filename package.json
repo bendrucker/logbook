@@ -8,6 +8,7 @@
     "backfill": "bun scripts/backfill.ts",
     "import:apple-music": "bun scripts/import-apple-music.ts",
     "trakt:login": "bun scripts/trakt-login.ts",
+    "monitor:trakt-login": "bun scripts/monitor-trakt-login.ts",
     "test": "vitest run && vitest run --config workers/monitor/vitest.config.ts",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

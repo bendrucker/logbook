@@ -13,7 +13,7 @@ export default {
       const now = new Date();
       const metrics = [
         ...(await collectLake(env.LAKE, now)),
-        ...(await collectContent(env.LAKE, contentSources(env), now)),
+        ...(await collectContent(env.LAKE, await contentSources(env), now)),
       ];
       await recordMetrics(env.DB, now, metrics);
       exportMetrics(env.METRICS, metrics);

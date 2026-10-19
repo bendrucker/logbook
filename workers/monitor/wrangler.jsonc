@@ -21,6 +21,8 @@
     // pipeline's own config names.
     "GITHUB_LOGIN": "bendrucker",
     "TRAKT_USER": "bendrucker",
+    // The monitor's own Trakt application, apart from the pipeline's, so a
+    // revoked grant in one can't blind the other. Its secret is a Worker secret.
     "TRAKT_CLIENT_ID": "nmJ1tcJ_TIpoxVhlhTcahD3851pQs2tUR1CCRxwJUaA",
     // What the monitor alerts on, kept apart from what it measures. A rule
     // opens once its last `for` samples of `metric` all cross `above` or

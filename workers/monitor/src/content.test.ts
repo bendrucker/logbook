@@ -1,9 +1,19 @@
 import { env } from "cloudflare:workers";
 import { parquetWriteBuffer } from "hyparquet-writer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { collectContent, type ContentSource, github, newestInLake, trakt } from "./content";
+import {
+  collectContent,
+  type ContentEnv,
+  type ContentSource,
+  contentSources,
+  github,
+  newestInLake,
+  trakt,
+} from "./content";
 
 const NOW = new Date("2026-10-18T12:00:00Z");
+
+const token = () => Promise.resolve("monitor-token");
 
 beforeEach(async () => {
   const listed = await env.LAKE.list();
@@ -125,7 +135,7 @@ describe("trakt", () => {
         ),
       );
 
-    const oldest = await trakt("bendrucker", "client").oldestAfter(
+    const oldest = await trakt("bendrucker", "client", token).oldestAfter(
       new Date("2026-10-16T00:00:00Z"),
     );
 
@@ -143,7 +153,7 @@ describe("trakt", () => {
       )
       .mockResolvedValueOnce(Response.json([{ watched_at: "2026-10-16T20:00:00.000Z" }]));
 
-    const oldest = await trakt("bendrucker", "client").oldestAfter(
+    const oldest = await trakt("bendrucker", "client", token).oldestAfter(
       new Date("2026-10-16T00:00:00Z"),
     );
 
@@ -161,7 +171,7 @@ describe("trakt", () => {
       );
     const wait = vi.fn<(ms: number) => Promise<void>>(() => Promise.resolve());
 
-    const oldest = await trakt("bendrucker", "client", wait).oldestAfter(
+    const oldest = await trakt("bendrucker", "client", token, wait).oldestAfter(
       new Date("2026-10-16T00:00:00Z"),
     );
 
@@ -175,10 +185,24 @@ describe("trakt", () => {
     );
     const wait = vi.fn<(ms: number) => Promise<void>>(() => Promise.resolve());
 
-    await expect(trakt("bendrucker", "client", wait).oldestAfter(new Date())).rejects.toThrow(
-      "429",
-    );
+    await expect(
+      trakt("bendrucker", "client", token, wait).oldestAfter(new Date()),
+    ).rejects.toThrow("429");
     expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("reads as the account on the first request and on the retry", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "1" } }))
+      .mockResolvedValueOnce(Response.json([], { headers: { "x-pagination-item-count": "0" } }));
+
+    await trakt("bendrucker", "client", token, () => Promise.resolve()).oldestAfter(new Date());
+
+    for (const [, init] of fetch.mock.calls) {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer monitor-token");
+    }
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("answers null when nothing is newer", async () => {
@@ -186,6 +210,47 @@ describe("trakt", () => {
       Response.json([], { headers: { "x-pagination-item-count": "0" } }),
     );
 
-    expect(await trakt("bendrucker", "client").oldestAfter(new Date())).toBeNull();
+    expect(await trakt("bendrucker", "client", token).oldestAfter(new Date())).toBeNull();
+  });
+});
+
+describe("contentSources", () => {
+  const base: ContentEnv = {
+    DB: env.DB,
+    GITHUB_LOGIN: "bendrucker",
+    TRAKT_USER: "bendrucker",
+    TRAKT_CLIENT_ID: "client",
+  };
+
+  beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM trakt_tokens").run();
+  });
+
+  it("leaves Trakt out until a device login has stored a grant", async () => {
+    const names = (await contentSources({ ...base, TRAKT_CLIENT_SECRET: "secret" })).map(
+      ({ name }) => name,
+    );
+
+    expect(names).toEqual(["github"]);
+  });
+
+  it("leaves Trakt out without the secret a refresh needs", async () => {
+    await env.DB.prepare(
+      "INSERT INTO trakt_tokens VALUES (1, 'access', 'refresh', '2099-01-01T00:00:00.000Z', '2026-10-18T00:00:00.000Z')",
+    ).run();
+
+    expect((await contentSources(base)).map(({ name }) => name)).toEqual(["github"]);
+  });
+
+  it("probes Trakt once both are in place", async () => {
+    await env.DB.prepare(
+      "INSERT INTO trakt_tokens VALUES (1, 'access', 'refresh', '2099-01-01T00:00:00.000Z', '2026-10-18T00:00:00.000Z')",
+    ).run();
+
+    const names = (await contentSources({ ...base, TRAKT_CLIENT_SECRET: "secret" })).map(
+      ({ name }) => name,
+    );
+
+    expect(names).toEqual(["github", "trakt"]);
   });
 });
