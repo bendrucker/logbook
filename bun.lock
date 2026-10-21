@@ -5,7 +5,7 @@
     "": {
       "name": "logbook",
       "dependencies": {
-        "hyparquet-writer": "^0.16.10",
+        "hyparquet-writer": "^0.16.12",
         "instapaper-api": "1.0.0",
         "temporal-polyfill": "^1.0.5",
         "zod": "^4.6.5",
@@ -372,7 +372,7 @@
 
     "hyparquet": ["hyparquet@1.31.2", "", {}, "sha512-dpVTCGkPPIdfDExa7YZGaJpuBTmLFDKGeZ6meHUj1mz/Q3qmaQHGLLqCyPBkQjfxrYNb08YTax682qeGO+zkVA=="],
 
-    "hyparquet-writer": ["hyparquet-writer@0.16.10", "", { "dependencies": { "hyparquet": "1.31.1" } }, "sha512-53fpiA57kdJ2V7X97/VSAzHr8rb8Z2cr126T1pTL9TapZNOP/wNJqFh+jc7dRwwg9TpVMYeRNDMb+r5oiLqwjg=="],
+    "hyparquet-writer": ["hyparquet-writer@0.16.12", "", { "dependencies": { "hyparquet": "1.31.4" } }, "sha512-tlFRfU1TdhWCjqxxQdi8DpxL+C41SU2ebSPDvT0FLT4jFVrVEnBc7pzyFkrXpTMnwk4J2vSo6lQnlXjWmQmw6A=="],
 
     "instapaper-api": ["instapaper-api@1.0.0", "", {}, "sha512-j42uRqifzLPXK/tdJj4fvwCCZLHcTbgxtfz69Pt2P4HvXyCajDt8i16WehU75oICe7d2CmybqeRL06ZGqBfMRQ=="],
 
@@ -484,7 +484,7 @@
 
     "@cspotcode/source-map-support/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
 
-    "hyparquet-writer/hyparquet": ["hyparquet@1.31.1", "", {}, "sha512-tF9580Xb+41+Eb+mH0av1k7m1PWl+PSKrX66Yd7UOZ760cwEXP9/enwHRMSCeVncaubRI8XPb3v580/ujYKK5w=="],
+    "hyparquet-writer/hyparquet": ["hyparquet@1.31.4", "", {}, "sha512-Qe37Nhu1lLvmnSL9bQuY/CN8suLDoNMPNhrTb6+ZXJDfiy1mHHRjkoVYIYPhf0krYpRdAxMMnuEWEHeSUCe40g=="],
 
     "miniflare/workerd": ["workerd@1.20261012.1", "", { "optionalDependencies": { "@cloudflare/workerd-darwin-64": "1.20261012.1", "@cloudflare/workerd-darwin-arm64": "1.20261012.1", "@cloudflare/workerd-linux-64": "1.20261012.1", "@cloudflare/workerd-linux-arm64": "1.20261012.1", "@cloudflare/workerd-windows-64": "1.20261012.1" }, "bin": { "workerd": "bin/workerd" } }, "sha512-tEHoMPsMga0seVjxfsR8Pd3f8IRqYwkq++dTUKI5Gdgj6zuSDluYwisydq+dn90SsIACwBquJUQ1nBpcOqaWTA=="],
 
