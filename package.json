@@ -17,7 +17,7 @@
     "wrangler": "wrangler"
   },
   "dependencies": {
-    "hyparquet-writer": "^0.16.12",
+    "hyparquet-writer": "^0.17.0",
     "instapaper-api": "1.0.0",
     "temporal-polyfill": "^1.0.6",
     "zod": "^4.6.7"
