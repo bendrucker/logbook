@@ -5,7 +5,7 @@
     "": {
       "name": "logbook",
       "dependencies": {
-        "hyparquet-writer": "^0.16.12",
+        "hyparquet-writer": "^0.17.0",
         "instapaper-api": "1.0.0",
         "temporal-polyfill": "^1.0.6",
         "zod": "^4.6.7",
@@ -372,7 +372,7 @@
 
     "hyparquet": ["hyparquet@1.31.4", "", {}, "sha512-Qe37Nhu1lLvmnSL9bQuY/CN8suLDoNMPNhrTb6+ZXJDfiy1mHHRjkoVYIYPhf0krYpRdAxMMnuEWEHeSUCe40g=="],
 
-    "hyparquet-writer": ["hyparquet-writer@0.16.12", "", { "dependencies": { "hyparquet": "1.31.4" } }, "sha512-tlFRfU1TdhWCjqxxQdi8DpxL+C41SU2ebSPDvT0FLT4jFVrVEnBc7pzyFkrXpTMnwk4J2vSo6lQnlXjWmQmw6A=="],
+    "hyparquet-writer": ["hyparquet-writer@0.17.0", "", { "dependencies": { "hyparquet": "1.31.5" } }, "sha512-GZ4QeopztjSli/Sz1dSOP/TrSKtwG2ydP2yuPMxeiZnho+PCXF7x+wx8OIVtpQn8rcv559IH1EJMHnTbv0sn+Q=="],
 
     "instapaper-api": ["instapaper-api@1.0.0", "", {}, "sha512-j42uRqifzLPXK/tdJj4fvwCCZLHcTbgxtfz69Pt2P4HvXyCajDt8i16WehU75oICe7d2CmybqeRL06ZGqBfMRQ=="],
 
@@ -485,6 +485,8 @@
     "@cloudflare/vitest-plugin/zod": ["zod@4.6.5", "", {}, "sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q=="],
 
     "@cspotcode/source-map-support/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
+
+    "hyparquet-writer/hyparquet": ["hyparquet@1.31.5", "", {}, "sha512-KPVfaxW8xOiO2/4fjeiBfFNEXhGVw9tfcb9ha2iNZdJ3J/yBjEwIeAnTyyuhllFFTb9YO9wg0DfRAOnm6KCvBg=="],
 
     "miniflare/workerd": ["workerd@1.20261019.1", "", { "optionalDependencies": { "@cloudflare/workerd-darwin-64": "1.20261019.1", "@cloudflare/workerd-darwin-arm64": "1.20261019.1", "@cloudflare/workerd-linux-64": "1.20261019.1", "@cloudflare/workerd-linux-arm64": "1.20261019.1", "@cloudflare/workerd-windows-64": "1.20261019.1" }, "bin": { "workerd": "bin/workerd" } }, "sha512-UUYRUq/7DmeCl11YriNbcVbjUZVLtt8uuCXFu+nz77hGFf8d4DEVXoCYtnA+MlBatE4+wxoj47DVqzK3xGBAiw=="],
 
